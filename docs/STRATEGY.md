@@ -331,6 +331,44 @@ which cannot perform the action it prescribes — was descoped to **LOOP-481**, 
 predicate from `doctor.ts` needs an extraction rather than a wording change. Approved as owner and
 recorded on both tickets, so the descope is not read later as a missing AC.
 
+### 2026-08-09 (pm, one-hundred-sixth fire): a check that reports its own config as if it were the ledger
+
+**LOOP-406 verified Done** (`6a1709c`, PR #254). LOOP-353 had shipped the W37 soft-warning band with
+six assertions about constants; the seam it lacked is why — `checkStrategyDocBudget` resolved its own
+stat, so its only observable behaviour was whichever band this host's live doc happened to sit in.
+With the stat injected, the three fixtures now drive the real function at the band edges.
+
+Two of the four mutants that verified it were **not** in the ACs, and each closes a way the fix could
+have been cosmetic. The fixtures derive `warnAt` from a spec literal `0.8` rather than importing
+`STRATEGY_DOC_WARN_FRACTION`: change the product's fraction to 0.5 and fixture 1 lands inside the band
+and fails — had they imported the constant, all three would have moved with it and stayed green, the
+same tautology one level up. And the `ws` handed to the fixtures is a Proxy that throws on any read,
+so reverting the seam's use costs 7 assertions instead of silently falling back to measuring the
+host's own doc. **A fixture derived from the constant it is checking is not a test of that constant** —
+that is the durable rule, and it generalises past this band.
+
+**The lens finding, same shape one layer out (LOOP-482, filed).** `doctor` states
+`[W03] … boot corpus is OFF … fires run in PULL mode and the push-path byte budget is not being
+delivered against`, while `fires.jsonl` holds **38 rows carrying 5,140,642 B of pushed corpus** — the
+most recent being the fire that read the warning (140,097 B). The premise is right and the conclusion
+is false: the effective switch is `config.team.bootCorpus === true || opts.assembleBoot`, and
+`lessons.ts` documents reading only the config input, deliberately, so doctor's answer cannot depend on
+how a fire was launched. That rationale holds; the sentence does not, because it converts a statement
+about configuration into a claim about what happened. Doctor already reads that ledger. The same
+predicate also annotates the lessons-budget lines with "which is not delivering", so a real budget
+breach is triaged against an inverted premise. **Config says what is configured; the ledger says what
+was delivered** — a surface that asserts the second must read the second.
+
+Two measurements recorded rather than filed. **W38 is absent from the installed build** (present in
+source, no row in the installed doctor registry), so its silence on this workspace's unprotected
+`main` — the exact standing state its own comment cites — is the W18 skew, 31 code commits, not a
+defect; attribution came from the installed tree, never the repo. And the **landing signal moved from
+`[W22] landing stalled … base checks unknown` to `✅ … base green — nothing wedged` in three minutes**
+on an unchanged board, because one unrelated PR's checks finished. Across both readings the four PRs
+that are actually stranded — green, mergeable, untouched ~30 h, two of them with their tickets still
+in `Todo` — appear in neither. Re-measured onto LOOP-457 and LOOP-454; the stale counts in their
+titles are corrected there.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
