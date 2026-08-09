@@ -27,6 +27,7 @@ const DB = join(tmp, "hub.db");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
+const NEVER_WORD = "never";
 const SHA = "3f1c0de9ab4471e2c0d5b6a7e8f90123456789ab";
 const PUSH_KEY = `push:main:${SHA}`;
 
@@ -361,6 +362,66 @@ try {
     ok(run(["approve", OKKEY]).code === 0, "P5 control fixture: a legal key grants");
     ok(run(["revoke", OKKEY]).code === 0, "P5 control: and the same legal key revokes");
     ok(byKey(OKKEY)?.state === "revoked", `P5 control: through the key path (state=${byKey(OKKEY)?.state})`);
+  }
+
+  {
+    // P6 — a repeated value flag was last-one-wins, silently. On a verb that authorises actions that
+    // is the wrong rule: `approve <key> --expires 1h --expires never` exited 0 having discarded the
+    // bound typed first and written the standing capability design §4 exists to prevent.
+    const KEY = `push:dup:${SHA}`;
+    const dup = run(["approve", KEY, "--expires", "1h", "--expires", NEVER_WORD]);
+    ok(dup.code === 2, `P6 a repeated --expires is a usage error, not a silent overwrite (got ${dup.code})`);
+    ok(!byKey(KEY), "P6 and the contradictory grant was not written");
+    ok(dup.err.includes("--expires"), "P6 the refusal names the flag that was given twice");
+    // The unbounded grant is the specific outcome this prevents — assert it directly.
+    ok(!rows().some((r) => r.action_key === KEY && r.expires_at === null),
+      "P6 in particular no NEVER-expiring grant was created by the second value winning");
+    // A repeated scope flag could pick a scope the earlier argument contradicted.
+    ok(run(["approve", `push:dup2:${SHA}`, "--project", "ap", "--project", "bp"]).code === 2,
+      "P6 a repeated --project is refused too — the two scopes contradict");
+    // Control: the same flag ONCE still works, in both spellings.
+    ok(run(["approve", KEY, "--expires", "1h"]).code === 0, "P6 control: a single --expires still grants");
+    ok(byKey(KEY)?.state === "granted", "P6 control: and it landed");
+    ok(run(["approve", `push:eq:${SHA}`, "--expires=2h"]).code === 0, "P6 control: the '=' spelling is unaffected");
+  }
+  {
+    // P7 — `request` is agent-callable (AC3) and a key component was checked for count and emptiness
+    // only. A component carrying a newline was stored verbatim and then interpolated into the
+    // operator-facing listing, so a filed request could inject a line that READS like a granted
+    // approval into the one output the operator consults to see what is authorised.
+    // No extra colons: the count check would otherwise refuse this for the wrong reason, and a test
+    // that cannot tell WHICH rule refused is not evidence that the control-character rule exists.
+    const FORGED = "GRANTED    remove-project-prod";
+    const INJECT = `reopen:AP-1\n${FORGED}`;
+    const spoof = run(["request", INJECT, "--ticket", "AP-1"], "DEVLOOP_DEV_SPLIT");
+    ok(spoof.code === 2, `P7 a control character in a key component is refused (got ${spoof.code})`);
+    ok(!rows().some((r) => r.action_key.includes("\n")), "P7 no stored key carries a newline");
+    ok(spoof.err.includes("control character"), `P7 the refusal says what it refused (err=${spoof.err.trim().slice(-160)})`);
+    // The listing is the surface that was being spoofed — assert it directly, not just the store.
+    const listed = run(["approvals"]);
+    ok(!listed.out.split("\n").some((l) => l.trim().startsWith(FORGED)),
+      "P7 and the operator-facing listing has no line the injected key could have forged");
+    // Control: the SAME class and ticket, without the control character, is still agent-callable.
+    const clean = run(["request", "reopen:AP-1", "--ticket", "AP-1"], "DEVLOOP_DEV_SPLIT");
+    ok(clean.code === 0, `P7 control: a clean key is still requestable from inside a fire (got ${clean.code})`);
+    ok(byKey("reopen:AP-1")?.state === "requested", "P7 control: and it landed as a request");
+  }
+  {
+    // P8 — the writers store parseActionKey's TRIMMED key, but the listing filtered with the raw
+    // argument, so a pasted key with surrounding whitespace parsed fine and then matched nothing —
+    // reporting a live grant as absent, which invites granting it a second time.
+    const KEY = `push:trim:${SHA}`;
+    ok(run(["approve", KEY]).code === 0, "P8 fixture: a grant to look for");
+    const padded = run(["approvals", "--key", ` ${KEY} `, "--json"]);
+    ok(padded.code === 0, `P8 a padded --key is accepted (got ${padded.code})`);
+    let found: ApprovalListItem[] = [];
+    try { found = JSON.parse(padded.out) as ApprovalListItem[]; } catch { /* asserted below */ }
+    ok(found.some((r) => r.action_key === KEY && r.state === "granted"),
+      "P8 and it FINDS the row the writers stored under the trimmed key");
+    // Control: the filter still discriminates — a real, legal, ungranted key returns nothing.
+    const absent = run(["approvals", "--key", `push:nosuch:${SHA}`, "--json"]);
+    ok(absent.code === 0 && JSON.parse(absent.out || "[]").length === 0,
+      "P8 control: a key with no rows still returns an empty listing, so the match is not vacuous");
   }
 
   console.log(fails ? `\n${fails} assertion(s) failed` : "\nAPPROVALS_CLI_OK");

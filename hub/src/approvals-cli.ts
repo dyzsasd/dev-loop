@@ -55,7 +55,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // one place, where it can be read against the CLI's published exit-code contract.
 const USAGE_ERRORS: ReadonlySet<ApprovalErrorCode> = new Set<ApprovalErrorCode>([
   "unknown-action-class", "missing-component", "extra-component", "empty-component",
-  "bad-expiry", "ambiguous-grant",
+  "control-character", "bad-expiry", "ambiguous-grant",
 ]);
 
 // ─── The key grammar, as help text (design §9 part 2, AC5) ────────────────────────────────────────
@@ -180,6 +180,14 @@ export function parseArgs(argv: readonly string[]): Parsed {
       continue;
     }
     if (!VALUE_FLAGS.has(name)) return { positional, flags, error: `unknown flag '--${name}'` };
+    // Last-one-wins is the wrong rule on a surface that authorises actions: `approve <key>
+    // --expires 1h --expires never` would exit 0 having quietly discarded the bound the caller
+    // typed first and written the standing capability §4 exists to prevent, and a repeated
+    // --project/--request would pick a scope or a record the earlier argument contradicted. A
+    // command that says two things does not get to have one of them chosen for it.
+    if (Object.hasOwn(flags, name)) {
+      return { positional, flags, error: `--${name} was given more than once — the two values contradict each other, so neither is assumed` };
+    }
     if (eq >= 0) { flags[name] = a.slice(eq + 1); continue; }
     const value = argv[i + 1];
     if (value === undefined) return { positional, flags, error: `--${name} needs a value` };
@@ -361,10 +369,14 @@ function listVerb(
     console.error(`dev-loop approvals: unknown --state '${state}' (${STATES.join(", ")})`);
     return 2;
   }
-  const key = str(flags, "key");
+  // The NORMALIZED key is what the writers store (parseActionKey trims), so the filter has to ask
+  // with the same string: a pasted key carrying a trailing space parsed fine here and then matched
+  // nothing, reporting a live approval as absent — which invites the operator to grant it a second time.
+  let key = str(flags, "key");
   if (key !== undefined) {
     const parsed = parseActionKey(key);
     if (!parsed.ok) { console.error(`dev-loop approvals: ${parsed.message}`); return 2; }
+    key = parsed.parsed.key;
   }
 
   let items: ApprovalListItem[];

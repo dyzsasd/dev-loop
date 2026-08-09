@@ -82,6 +82,7 @@ export type ApprovalErrorCode =
   | "missing-component"      // the class requires components the key did not supply
   | "extra-component"        // the key supplied more components than the class declares
   | "empty-component"        // a component was present but empty (`push::sha`)
+  | "control-character"      // a component carried a control/format character — it would render as a lie
   | "bad-expiry"             // --expires was neither a duration nor `never`
   | "ambiguous-grant"        // both a requestId and an actionKey — which key is being authorised?
   | "not-found"              // no approval row with that id
@@ -159,6 +160,23 @@ export function parseActionKey(key: string): ParseResult {
       ok: false,
       code: "empty-component",
       message: `key ${JSON.stringify(raw)} has an empty <${want[emptyAt]}> component`,
+    };
+  }
+  // A component is shape-checked for COUNT and emptiness above; nothing else constrains its bytes,
+  // and `request` is agent-callable by design (§ AC3). So a key component carrying a newline or a
+  // terminal escape would be stored verbatim and then interpolated into the operator-facing
+  // `approvals` listing — letting a filed request inject a line that reads like a granted approval
+  // into the very output the operator consults to see what is authorised. Refused at the parser
+  // rather than escaped at one renderer: escaping fixes the one consumer that remembers to escape,
+  // while the poisoned key stays in the store for every other reader.
+  const ctrlAt = values.findIndex((v) => /[\p{Cc}\p{Cf}]/u.test(v));
+  if (ctrlAt >= 0) {
+    return {
+      ok: false,
+      code: "control-character",
+      message:
+        `key ${JSON.stringify(raw)} has a control character in its <${want[ctrlAt]}> component — ` +
+        `an action key is displayed to the operator who acts on it, so it must be exactly what it looks like`,
     };
   }
   const components: Record<string, string> = {};
