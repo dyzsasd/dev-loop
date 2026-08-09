@@ -237,7 +237,9 @@ system cannot enforce, report, or recover.
   is broken on a liveness check, so a budget kill cannot freeze the queue. One stale policy
   (`REPO_LOCK_STALE_MS`, 15m) now binds every `repo-<ref>` contender — `pr merge`, `with-repo-lock`,
   `doc-land`, `worktree add`/`reap` — because staleness is judged by the CONTENDER, so a single
-  holdout on the old 30s default reopened the hole for everyone. Residual, filed not forgotten:
+  holdout on the old 30s default reopened the hole for everyone. **Since LOOP-448 this verb is the
+  only merge path the tier docs describe**; `merge-guard` stays the read-only diagnostic surface.
+  Residual, filed not forgotten:
   two registered refs sharing one GitHub remote still take different locks (LOOP-480; exposure here
   is zero, the registry has one entry).
 
@@ -385,6 +387,37 @@ on an unchanged board, because one unrelated PR's checks finished. Across both r
 that are actually stranded — green, mergeable, untouched ~30 h, two of them with their tickets still
 in `Todo` — appear in neither. Re-measured onto LOOP-457 and LOOP-454; the stale counts in their
 titles are corrected there.
+
+### 2026-08-09 (pm, one-hundred-tenth fire): the gate stopped being a step the docs asked for and became the only path they describe
+
+**LOOP-448 verified Done** (`fba3170`, PR #281) — the first §17 operator apply this section records,
+and the first PR landed by `dev-loop pr merge` itself. LOOP-444 had shipped the atomic verb; every
+dev tier's Step 0.5 and §12c still prescribed `merge-guard --strict --apply` **then** `gh pr merge`,
+so an agent following its instructions literally still took the skippable path — `62178e6` and
+`c3454b7` are the recorded cost of that gap. All three tier Step 0.5 blocks and both §12c targets
+now name the single verb; on the merged tree **no `merge-guard --strict --apply` merge-path
+prescription survives anywhere in `skills/` or `references/`**, and the deploy-PR bullet is
+deliberately untouched.
+
+**Three deltas shipped beyond the approved proposal, and each is a correction to the proposal rather
+than a re-spec of it** — the distinction that decides whether a review may change a ticket's content.
+Re-derived against `hub/src/pr-merge.ts`, not accepted from the handoff: (1) the proposal's suggested
+bullet kept an `every green AND MERGEABLE →` pre-filter while its own detail-1 said readiness runs
+inside the verb — the code settles the contradiction (`prMergeUnlocked` runs the guard even when
+readiness holds, `holds = [...readiness.holds, ...holdsFrom(guard)]`), and keeping the pre-filter
+would have made a tier skip the verb on exactly the conflicting and pending PRs whose objections need
+to land; (2) the proposal's exit list omitted `5`, which `PR_MERGE_EXIT` defines as
+`lockUnavailable`; (3) the gate paragraph still claimed **two** axes when `holdsFrom` emits a third,
+`ciFreshness`. **A proposal that contradicts itself is settled by the implementation, and a review
+that completes an incomplete spec is not scope creep** — the test is whether the delta contradicts
+the spec's stated intent or serves it.
+
+**The verb governed its own adoption.** It held the merge three times before clearing — red CI,
+unresolved review threads, then `check-never-reported` during a dispatch race. The third hold was a
+read-timing artifact whose printed remedy (push again) cancels the run the previous push started, on
+`cancel-in-progress: true`; filed as LOOP-485. Verification ran against the MERGED tree in a
+`git archive`, after the first pass measured the shared checkout one commit behind and read the
+pre-merge text as if it were shipped.
 
 ## Personas
 
