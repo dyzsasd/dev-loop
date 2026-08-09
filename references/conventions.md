@@ -42,7 +42,7 @@ path maps to it.)
 15. Test coverage — every Bug/Feature earns a regression test
 16. Security doctrine
 17. Self-evolution boundary — what the Reflect agent may change
-18. Backend — Linear, local, or the hub service
+18. Backend — Linear or the hub service
 19. Multiple repos
 20. PM knowledge base
 20a. Where the strategyDoc lives — form detection
@@ -479,7 +479,7 @@ context, not a work trigger; when none is configured, a §9a direction ask's dur
 is the intake ticket itself (the closing comment carries the decision + the filed child
 IDs — PM does not scaffold a doc unprompted). Backend-agnostic by construction: the
 directed-ticket carrier is the same §9a label contract (`Backlog` +
-`dev-loop`+`pm`+`needs-pm`) on linear, service, and local alike.
+`dev-loop`+`pm`+`needs-pm`) on linear and service alike.
 
 ## 6. Ticket templates
 
@@ -825,23 +825,23 @@ edge with an owner and an exit condition. No new state machine — three steps:
      ticket in the owning project (cross-project → a §9b team intake) — THAT ticket is
      the tracker; it flows through the normal loop.
    - `external-access` → only a human can clear it: tracker goes to the human park
-     (`Human-Blocked` on `service`; `blocked`+`needs-pm` park on linear/local) and PM
+     (`Human-Blocked` on `service`; `blocked`+`needs-pm` park on linear) and PM
      notifies the operator (§9 notify / `dev-loop notify`) — once (`notified`).
 2. **Block.** Link the parked ticket to its tracker with a REAL blocking edge, not
    `relatedTo`: on **linear**, `save_issue(id: <parked>, blockedBy: [<tracker>])`
-   (append-only; `removeBlockedBy` to clear). On **service/local** (no native relation),
+   (append-only; `removeBlockedBy` to clear). On **service** (no native relation),
    write a machine-parseable marker comment on the parked ticket —
    `Blocked-by: <tracker-id>` on its own line — the §18 per-backend encoding of the same
    edge. `relatedTo` remains for kinship; it is NEVER a blocking edge.
 3. **Auto-unpark.** Every PM fire (Sweep backstops it): query open `blocked` +
    `external-prereq` tickets; resolve each one's blockers (linear: the issue's
-   blockedBy relations; service/local: the `Blocked-by:` markers). **A ticket with ZERO
+   blockedBy relations; service: the `Blocked-by:` markers). **A ticket with ZERO
    blocker edges is NEVER an unpark candidate** — the empty set is vacuously "all
    resolved", but it just means step 1 hasn't run (or it IS a tracker): route it to
    step 1 / the digest instead. **≥1 blocker AND** ALL blockers
    `Done`/`Canceled` → unpark: remove `blocked` + `external-prereq` (+ kind), move back
    to `Todo`, drop `notified`, and **retire the edge** — linear: the SAME `save_issue`
-   passes `removeBlockedBy: [<each resolved tracker>]`; service/local (comments are
+   passes `removeBlockedBy: [<each resolved tracker>]`; service (comments are
    append-only): the unpark comment carries one machine-parseable line per resolved
    blocker — `Unblocked-by: <tracker-id>` — and edge resolution counts a `Blocked-by:
    <id>` marker as LIVE only when no later `Unblocked-by: <id>` exists. Without edge
@@ -875,13 +875,6 @@ On an `interface:"cli"` fire (§18) the same levers ride the read verbs — `dev
 --json [--fields summary] [--updated-since ISO] [--related-to ID] [--q TEXT] [--limit N]`
 is byte-identical to the `list_issues` op, and `dev-loop ticket <id> --json` is `get_issue`;
 your SKILL's cheat-sheet block carries the exact flag surface.
-
-**Local backend (§18): the same discipline, on files.** `list_issues` becomes a
-glob+parse+filter over the board's `tickets/*.md`; still filter to the narrow slice
-you need (by state/label/type) rather than parsing every file blindly, and `get_issue`
-a single file when that's all you need. The write hazards below — labels are
-REPLACE-style (re-pass the FULL set), and verify-after-write — apply equally to a
-frontmatter rewrite (re-read the file to confirm `state:`/`labels:` landed).
 
 ### Linear MCP write hazards (read before any `save_issue`)
 
@@ -959,8 +952,7 @@ lazily on first run.
 scratch belongs in the Linear ticket and its comments, which dedup (§8) and re-test read
 directly — never these files). If transient notes are kept, cap them to a small rolling
 window (last ~20 / ~14 days) and prune the tail on each write. **Write atomically** —
-serialize to a temp file in the **same directory**, then rename over the target (the same
-atomic-rename the local-board lock uses, §18) — so a partial/interrupted write can never
+serialize to a temp file in the **same directory**, then rename over the target — so a partial/interrupted write can never
 leave invalid JSON. (An unbounded append already grew `qa-state.json` past 330 KB, and a
 non-atomic write is the likely cause of the one `pm-state.json` corruption on record.)
 
@@ -1284,8 +1276,7 @@ do, honor it.* Keep it lean (supersede stale rules, don't accumulate) — a wron
 rule is worse than none.
 
 (Backend-agnostic: `lessons.md` is unaffected by the §18 backend dial — it is
-per-operator runtime state regardless of whether tickets live in Linear or a local
-board.)
+per-operator runtime state regardless of the configured backend.)
 
 **Local vs durable.** `lessons.md` is **local per-operator** machine state — never
 committed, never shared. Patterns that should hold for *every* operator of this
@@ -1428,12 +1419,12 @@ verifies, or relabels/re-routes (those are PM/QA/Dev/Sweep).
 
 ---
 
-## 18. Backend — Linear, local, or the hub service
+## 18. Backend — Linear or the hub service
 
 Everything above describes the loop coordinating through **Linear** (the MCP, the
 state machine §3, labels §4, claim §7, dedupe §8, blocked §9, querying §10). That
-substrate is one **backend**. The loop can equally coordinate through a **local file
-store**, or through the **local hub service** (an MCP system of record — see
+substrate is one **backend**. The loop can equally coordinate through the **hub service**
+(an MCP system of record — see
 `docs/HUB-ARCHITECTURE.md`) — with the *same* state machine, label semantics, and
 protocols; only the storage primitive changes. This section is the **single
 abstraction point**: every "ticket operation" each skill performs maps to one of these
@@ -2031,8 +2022,7 @@ everything below is the default `files` sink.
 Reports are **machine-local per-operator runtime state**, never committed (like
 `lessons.md` and the `*-state.json` files, §11/§14), and **independent of the §18 backend**
 (located by `reports.sink`, default `files` — §23). They live in the data dir,
-**namespaced per project and per agent** (paralleling the local board's `<project-key>/`
-home, §18):
+**namespaced per project and per agent**:
 
 ```
 ${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/
