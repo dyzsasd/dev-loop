@@ -228,24 +228,23 @@ in the operator's chat transcript is one the system cannot enforce, report, or r
   two-day window was scored under the pull regime.
 
 
-### 2026-08-08 (pm, ninety-first fire): the gate that cannot be skipped shipped, and the watcher that should have caught its absence exempts the case
+### 2026-08-09 (pm, ninety-second fire): the machine-global layer became sponsored work, and the intake path that filed it filed it malformed
 
-**`dev-loop pr merge <n>` is in the product (LOOP-444, `53077f0`).** The guard's three axes run inside
-the call and the squash is issued only when they clear; there is no argv that skips the gate. Verified by
-mutation on the merged tree, not by reading the diff: neutralising the hold return — compute the gate
-and ignore it, the pre-ticket behaviour — fails 59 assertions including "NO `gh pr merge` subprocess
-was issued", and collapsing the per-axis tokens to one "refused" fails exactly the 10 AC4 arms. **The
-gap it closes is still open in practice:** the three dev SKILLs and conventions §12c still prescribe
-guard-then-`gh pr merge` — LOOP-448, the operator's call.
+**Operator direction, recorded: retire `~/.dev-loop` entirely (LOOP-458 — groomed, promoted to Todo,
+senior, `Mode: design`, `sensitive`).** Measured on the operator's machine: a global npm install writes
+a macOS LaunchAgent, and at the next login `up-all` read the legacy registry, started three hub daemons
+belonging to a workspace no longer being run, and took port 8787 — the port this workspace's hub uses.
+Five invariants are in scope (an install never creates autostart; a migration verb for legacy-registry
+projects; removal of every home-dir read and write; CLI error copy; a docs sweep) plus one open question
+the design frames rather than waits on: where the `devplatform` project lands. `sensitive` was added at
+grooming rather than inherited — the work moves live state, lessons and reports, then deletes their home.
 
-**The landing watcher exempts the loop's only real landing failure.** `readLandingState` drops from
-the age-stall any PR that is mergeable on a green base (`landing.ts:540`) — **10 of the 11 open PRs**,
-measured; the sole exception is one `CONFLICTING` PR. Doctor printed `nothing wedged` while eight PRs
-sat green, mergeable and untouched for ~45 h; close that one PR and the fleet reads healthy at any age.
-The exemption encodes "the forge will land this", but the check runs only where `landing:"pr" &&
-autoMerge`, and `autoMerge` means *a fire may merge its own green PR* — there is no automatic lander
-on any repo it inspects. Filed **LOOP-457** (P1); it also corrects a premise stated inside
-LOOP-454.
+**The loop was down ~24.5 h** (ledger gap 2026-08-08T17:47Z → 08-09T18:17Z) from that same layer; the
+preceding pm fire was killed `budget-per-fire`. Detection of the outage is already LOOP-447, not re-filed.
+
+**Both operator-filed tickets of the day arrived with an incomplete label set** — LOOP-458 with no
+`dev-loop` marker and no owner, LOOP-459 with none at all. Both repaired; the board now has zero
+non-terminal rows missing either. Filed **LOOP-460** for the create path that accepted them.
 
 ## Personas
 
@@ -280,14 +279,17 @@ LOOP-454.
 
 ## Decisions (running log)
 
-- **2026-08-08 (pm, ninety-first fire) — a mechanism that must be INVOKED by instruction is not
-  enforcement until something invokes it.** LOOP-444 shipped a verb that cannot be split: the merge
-  gate is the precondition of the squash, in one call. It passes every AC, and the failure it exists
-  to prevent remains reachable, because the three dev SKILLs and conventions §12c still name the old
-  two-step. **The rule: count a control as live only from the point its CALLER changed — shipping the
-  control is the cheaper half.** The same fire found the mirror case: a health check whose exemption
-  encodes an environment assumption (`green + mergeable ⇒ the forge lands it`) must be re-read against
-  the environments it runs in — here that assumption is false on every one of them.
+- **2026-08-09 (pm, ninety-second fire) — where the taxonomy already determines the answer, a write
+  path should COMPLETE the input rather than refuse it.** The hub's create path derives a ticket's
+  `assignee` from its labels and leaves the labels as filed; 2 of 2 operator-filed tickets today arrived
+  without `dev-loop` and without an owner. One of the five queue arms can return such a row — `backlog`,
+  the only arm with no label predicate — and the §2-mandated `--label dev-loop` read cannot. A
+  create-time refusal was available and was rejected: it charges the person filing a bug report with
+  knowing the label taxonomy, while §4 already fixes the mapping (`Bug`→`qa`, `Feature`/`Improvement`→
+  `pm`). **The rule: validate by completing what the spec already determines, and reserve refusal for
+  what the spec leaves open.** LOOP-460. **Second call, same fire:** an open operator decision inside a
+  design ticket is framed by the design and answered at the gate; it does not park the ticket, and the
+  invariants independent of it are decomposed now.
 
 - **🧭 STANDING RULES IN FORCE (distilled 2026-07-31 from the archived arcs — this block replaces
   ~54 KB of provenance).**
