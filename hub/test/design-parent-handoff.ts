@@ -116,7 +116,7 @@ try {
   insertTicket(db, "p", "senior-dev", newFields({
     state: "Backlog", assignee: "junior-dev", labels: ["dev-loop", "junior-dev"],
     description: `Design: hubDoc:design/l360-linked\n\nrelatedTo ${linkedParentId}\n`,
-    related_to: JSON.stringify([linkedParentId]),
+    relatedTo: [linkedParentId],
   }), {});
   const linkedMove = updateTicketRow(db, "p", "senior-dev", linkedParentId, "In Progress",
     toInReview({ description: "Design doc: hubDoc:design/l360-linked (the module doc this parent owns)\n", labels: JSON.stringify(["dev-loop", "senior-dev"]) }));
