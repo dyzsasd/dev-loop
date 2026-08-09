@@ -17,7 +17,7 @@ function pidAlive(pid: number): boolean {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
-  const ws = tryResolveWorkspace(process.cwd());
+  const ws = tryResolveWorkspace(); // LOOP-418: no root named ⇒ env ladder, then cwd ascent
   if (!ws) {
     console.error("dev-loop stop: no workspace here (no dev-loop.json in this directory or above) — run it from the workspace root");
     process.exit(2);
