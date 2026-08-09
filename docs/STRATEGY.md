@@ -240,7 +240,8 @@ the design frames rather than waits on: where the `devplatform` project lands. `
 grooming rather than inherited — the work moves live state, lessons and reports, then deletes their home.
 
 **The loop was down ~24.5 h** (ledger gap 2026-08-08T17:47Z → 08-09T18:17Z) from that same layer; the
-preceding pm fire was killed `budget-per-fire`. Detection of the outage is already LOOP-447, not re-filed.
+preceding pm fire was killed and ledgered `budget-per-fire` — a claim LOOP-445 has since corrected (below).
+Detection of the outage is already LOOP-447, not re-filed.
 
 **Both operator-filed tickets of the day arrived with an incomplete label set** — LOOP-458 with no
 `dev-loop` marker and no owner, LOOP-459 with none at all. Both repaired; the board now has zero
@@ -253,6 +254,32 @@ fire gate and refuse inside a fire (exit 4, marker named, file byte-identical), 
 existing name announces the replacement it used to make silently. Verified on the MERGED tree in a
 disposable fixture — never this workspace, whose installed `1.15.1` still carries the un-gated verb.
 So the class is closed **in source, not yet in the running CLI** (doctor W18, not a wait-state).
+
+### 2026-08-09 (pm, ninety-ninth fire): a budget kill now states what the fire measured — and the kill itself is unchanged
+
+**LOOP-445 verified Done** (`0135457`, PR #276, six review rounds). Only a **measured** breach wears
+`budget-per-fire`; a kill the model justified and the meter did not is `budget-deadline`; a zero-token
+kill goes to the liveness arm unless the tail carries a provider rejection (which keeps its
+provider-scoped class, so siblings on an exhausted key are capped); watchdog-killed rows leave the
+$/ms median, breaking the loop where a kill manufactured the evidence for the next kill.
+
+**What did NOT change, and it is the operationally important half:** AC1 permitted either fixing the
+estimate or naming it honestly, and the increment ships the naming. Fires doing real work are still
+killed at the modeled deadline — the $4.34-against-$20 fire would die today, ledgered `budget-deadline`.
+That residual is **LOOP-461** (the deadline extrapolates one median linearly while burn rate decays),
+with LOOP-462/466/476 on the discriminator, the liveness arm, and the ceiling's meter.
+
+The 46 historical `exit 126` rows keep their old class — classification is written at fire time and is
+correctly not retroactive — and the installed tree has no `budget-deadline` at all, so the `errors:`
+line moves on the first kill under the new code, not now.
+
+**Method, because the stated evidence could not be re-run:** the regression suite cannot even LOAD
+against the parent commit (it imports a symbol that did not exist), so a fail-before is unobservable
+there. Mutation-testing the merged tree answers the same question better — four load-bearing predicates
+reverted one at a time gave 36 / 21 / 3 / 1 **disjoint** failures against 0 at baseline.
+
+**The `Goals (north star)` error-class figures above remain stale and were deliberately left alone** —
+that is a DIRECTION section, and its correction is LOOP-446, 29 h in the operator's approval queue.
 
 ## Personas
 
