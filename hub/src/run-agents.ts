@@ -1371,7 +1371,11 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       if (budgetKilled && errorClass !== "budget-per-fire") {
         // The contradiction, on the record: the model condemned this fire and the meter did not confirm it.
         const spent = usage?.costUsd ?? null;
-        log.write(`\n===== budget kill reclassified "${errorClass}": ceiling $${perFireCeilingUsd}, measured spend ${spent === null ? "unknown" : `$${spent.toFixed(2)}`}, tokens ${totalTokens ?? "unknown"} =====\n`);
+        // Same precision rule as the timer message above, and for a sharper reason: this record EXISTS to
+        // say the meter contradicted the model, so rendering a sub-cent measured spend as "$0.00" would
+        // state the contradiction in the one format that hides it — and it would disagree with the ledger
+        // row written from the same number.
+        log.write(`\n===== budget kill reclassified "${errorClass}": ceiling $${usdLabel(perFireCeilingUsd as number)}, measured spend ${spent === null ? "unknown" : `$${usdLabel(spent)}`}, tokens ${totalTokens ?? "unknown"} =====\n`);
       }
       if (interrupted) log.write(`\n===== interrupted: operator stop (SIGINT forwarded) — not charged to the agent =====\n`);
       const fireExtras = {
