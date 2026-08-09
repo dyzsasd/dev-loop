@@ -303,7 +303,7 @@ const TICKET_RE = ticketIdScanRe(); // the ONE canonical <PREFIX>-<n> id shape (
 const GH_REMOTE_RE = /github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/;
 
 // owner/repo from a git remote URL (ssh or https); null when it is not a GitHub remote.
-function ghRepoFromRemote(remote: string): string | null {
+export function ghRepoFromRemote(remote: string): string | null {
   const m = remote.trim().match(GH_REMOTE_RE);
   return m ? m[1]! : null;
 }

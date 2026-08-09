@@ -17,11 +17,17 @@
 // It deliberately does NOT do branch protection on the forge — conventions §12c explains why
 // required-check gating deadlocks the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs
 // (W38 names that posture). This is the in-product gate instead.
+import { realpathSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
+import { tmpdir } from "node:os";
 import { isMainEntry } from "./is-entry.ts";
 import type { ExecFn } from "./landing.ts";
 import { defaultGhExec } from "./landing.ts";
+import { acquireLock } from "./locks.ts";
+import { tryResolveWorkspace, wsLockPath } from "./workspace.ts";
 import {
   mergeGuard, unevaluatedHold, resolveRegistryCiFreshnessConfig, registryGhRepos, resolveGhRepo, skipClass,
+  ghRepoFromRemote,
   type MergeGuardResult, type SkipReason, type CiFreshnessConfigResolution,
 } from "./merge-guard.ts";
 
@@ -61,6 +67,12 @@ export interface PrMergeResult {
   // regression test asserts on: "no merge happened" must be checkable, not inferred.
   mergeArgv: string[] | null;
   mergeError: string | null;
+  // Set when the per-repo landing lock could not be taken, in which case NOTHING below it ran: no
+  // axis was read and no squash was attempted. It is deliberately not a `hold` — a hold names an
+  // objection somebody must answer (fix the ticket, resolve the thread, re-dispatch the workflow),
+  // and "another fire is landing in this repo" is none of those; it is a retry. Folding it into
+  // exit 1 would send a caller looking for an objection that was never written (LOOP-455 AC3).
+  lockUnavailable: string | null;
 }
 
 // This verb's exit contract. merge-guard's own numbering (0/1/2/3) is NOT re-used loosely: 3 keeps
@@ -73,6 +85,7 @@ export const PR_MERGE_EXIT = {
   usage: 2,        // bad invocation, incl. no/ambiguous repo resolution
   unevaluated: 3,  // --strict semantics: the gate checked nothing it could have checked
   mergeFailed: 4,  // axes clear, `gh pr merge` failed (forge error) — NOT an objection
+  lockUnavailable: 5, // the per-repo landing lock could not be taken — the gate never ran (LOOP-455)
 } as const;
 
 // The squash Step 0.5 issues today, plus the explicit `--repo`. The repo is explicit because this
@@ -211,7 +224,11 @@ function readinessHolds(
   return { holds, alreadyMerged: false, read: true, headSha };
 }
 
-export function prMerge(
+// The gate-and-squash body. PRIVATE on purpose: it reads the axes and issues the squash, and doing
+// that WITHOUT the per-repo lock is precisely the race LOOP-455 records. The exported entry point is
+// the async `prMerge` below, which cannot be called without taking the lock — the same reason
+// LOOP-444 made the guard the precondition of the squash rather than a step a caller performs first.
+function prMergeUnlocked(
   repoDir: string,
   opts: {
     pr: number | string;
@@ -233,7 +250,7 @@ export function prMerge(
   const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
   const base: PrMergeResult = {
     merged: false, alreadyMerged: false, holds: [], unevaluated: null,
-    ghRepo, guard: null, mergeArgv: null, mergeError: null,
+    ghRepo, guard: null, mergeArgv: null, mergeError: null, lockUnavailable: null,
   };
   if (!ghRepo) return base;
 
@@ -287,6 +304,101 @@ export function prMerge(
   }
 }
 
+// How long a contended call waits for the holder before giving up (AC3), and how long a lock may sit
+// before it is treated as abandoned (AC5).
+//
+// STALE_MS is 15 minutes and that is not padding. `acquireLock` treats a lock as stale on EITHER a
+// dead holder OR an age past staleMs, and the default 30s is far shorter than a slow gate-and-squash
+// (seven forge round-trips plus the merge) — a second fire would break a LIVE holder's lock and
+// re-create the exact interleaving this ticket closes. The dead-holder liveness check is what
+// actually reaps a crashed fire, and it fires IMMEDIATELY regardless of age, so a long staleMs costs
+// nothing in recovery time: a killed fire's lock (the ~50-minute budget kill is routine here) is
+// taken over on the next attempt, never waited out. staleMs only bounds a holder that is alive but
+// wedged, and 15 minutes is longer than any real landing.
+const LOCK_STALE_MS = 15 * 60_000;
+const LOCK_WAIT_MS = 120_000;
+
+// The lock this verb serializes on. It ALWAYS resolves to a path — there is no "could not work out
+// where to lock, so proceed unlocked" branch, because that branch would be the hole (AC5).
+//
+// Registered repo ⇒ `repo-<ref>`, byte-identical to what `dev-loop with-repo-lock <ref>` takes (§7).
+// Sharing the name is the point, not a coincidence: in `landing:"direct"` the merge-back sequence
+// pushes `defaultBranch` under that same lock, and a squash racing that push moves the same branch
+// from two writers. One name, one serialization.
+//
+// The fallbacks key on the GitHub repo instead, because that — not the local directory — is what two
+// racing fires actually contend for: two clones or two worktrees of one repo are different paths
+// landing into the same branch, and a path-keyed lock would let them straight through.
+export function prMergeLockPath(repoDir: string, ghRepo: string): string {
+  const slug = `repo-gh-${ghRepo.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+  const ws = tryResolveWorkspace(repoDir);
+  if (!ws) {
+    // No workspace: still lock, per-user and per-machine. Two fires always share a workspace, so this
+    // is the standalone-invocation case rather than the racing one — but "unlikely to be contended"
+    // is not a reason to skip the lock, and a skip here would be a fail-open nobody would see.
+    return join(tmpdir(), "dev-loop-locks", `${slug}.lock`);
+  }
+  let real: string;
+  try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
+  const entries = Object.entries(ws.file.repos ?? {}) as [string, { path?: string; remote?: string } | null][];
+  for (const [ref, e] of entries) {
+    if (!e?.path) continue;
+    const abs = resolvePath(ws.root, e.path);
+    let absReal = abs;
+    try { absReal = realpathSync(abs); } catch { /* keep abs */ }
+    if (absReal === real || abs === real) return wsLockPath(ws, `repo-${ref}`);
+  }
+  // The cwd is not a registered repo path (the workspace-root invocation this verb's --help
+  // advertises). Match on the remote instead — one entry only; two entries sharing a remote is the
+  // ambiguity `resolveRegistryCiFreshnessConfig` already refuses to guess through.
+  const byRemote = entries.filter(([, e]) => e?.remote && ghRepoFromRemote(e.remote) === ghRepo);
+  if (byRemote.length === 1) return wsLockPath(ws, `repo-${byRemote[0]![0]}`);
+  return wsLockPath(ws, slug);
+}
+
+// `dev-loop pr merge` — the axes AND the squash under ONE per-repo lock (LOOP-455).
+//
+// WHY THE LOCK WRAPS BOTH. LOOP-444 closed the gap inside one call; this closes the gap BETWEEN two.
+// Fires 1 and 2 gate PRs A and B concurrently, both reading CI freshness against the same base tip
+// `T`, both getting `fresh-green`. Fire 1 squashes A and `main` becomes `T+1`. Fire 2 is already past
+// its axes, so it squashes B — whose checks never ran against `T+1` and so never saw A's changes.
+// `--match-head-commit` does not cover it: it pins the PR HEAD, and the head never moved — the BASE
+// did. With the axes inside the lock, fire 2 cannot read freshness until fire 1 has finished
+// landing, so it reads `T+1`, sees B behind the tip, and HOLDS as `stale` instead of squashing.
+//
+// Deliberately NOT the cheaper fix of re-reading the tip just before the squash: that narrows the
+// window without closing it and would read as fixed while staying racy (the ticket says so outright).
+export async function prMerge(
+  repoDir: string,
+  opts: Parameters<typeof prMergeUnlocked>[1] & { lockPath?: string; lockWaitMs?: number },
+): Promise<PrMergeResult> {
+  const ghRepo = opts.ghRepo ?? resolveGhRepo(repoDir);
+  const base: PrMergeResult = {
+    merged: false, alreadyMerged: false, holds: [], unevaluated: null,
+    ghRepo, guard: null, mergeArgv: null, mergeError: null, lockUnavailable: null,
+  };
+  // No repo, nothing to serialize on and nothing to merge — the existing usage exit, unchanged.
+  if (!ghRepo) return base;
+
+  const lockPath = opts.lockPath ?? prMergeLockPath(repoDir, ghRepo);
+  let release: () => void;
+  try {
+    release = await acquireLock(lockPath, { totalMs: opts.lockWaitMs ?? LOCK_WAIT_MS, staleMs: LOCK_STALE_MS });
+  } catch (e) {
+    // FAIL CLOSED, and this is the deliberate §3.4 classification AC5 asks for rather than an
+    // inherited default. §3.4 fails OPEN for a forge outage on the reasoning that an outage must not
+    // become a merge freeze — the forge being unreachable is evidence about the FORGE, not about
+    // another writer. A lock we could not take is the opposite: the most likely reason is that
+    // another fire is landing in this repo right now, which is the precise condition under which
+    // merging is unsafe. So the two are not the same case and must not share a rule. A gate that
+    // could not lock has not gated, and it says so with its own exit code instead of squashing.
+    return { ...base, lockUnavailable: (e as Error).message };
+  }
+  try {
+    return prMergeUnlocked(repoDir, { ...opts, ghRepo });
+  } finally { release(); }
+}
+
 // ONE resolution for the whole verb: which GitHub repo this call addresses, and the CI-freshness
 // config OF THAT REPO.
 //
@@ -311,6 +423,10 @@ export function resolvePrMergeTarget(repoDir: string): {
 
 // The exit code for a result, so the CLI and any programmatic caller cannot disagree about it.
 export function prMergeExit(r: PrMergeResult): number {
+  // First, because a lock failure means NOTHING ran: no axis, no squash. Left to fall through it
+  // would land on `mergeFailed` (a resolved repo with no holds and no merge), reporting a forge
+  // error for a merge that was never attempted.
+  if (r.lockUnavailable) return PR_MERGE_EXIT.lockUnavailable;
   if (r.merged || r.alreadyMerged) return PR_MERGE_EXIT.merged;
   if (r.holds.length > 0) return PR_MERGE_EXIT.held;
   if (r.unevaluated) return PR_MERGE_EXIT.unevaluated;
@@ -320,13 +436,14 @@ export function prMergeExit(r: PrMergeResult): number {
 
 const HELP = `dev-loop pr merge <n> — gate and land a feature PR in ONE call (LOOP-444).
 
-Usage: dev-loop pr merge <n> [--repo <dir>] [--ticket <id>] [--no-apply] [--json]
+Usage: dev-loop pr merge <n> [--repo <dir>] [--ticket <id>] [--no-apply] [--lock-wait <dur>] [--json]
   <n>            PR number
   --repo <dir>   repo directory (default: cwd; the GitHub repo is also read from the workspace
                  repo registry when the cwd is not the target repo — two registered GitHub repos
                  are ambiguous and refused, never guessed)
   --ticket <id>  explicit ticket id for the board axis (default: the PR's dev-loop/<id> head)
   --no-apply     do not post the objection comment / route the ticket on a hold (read-only gate)
+  --lock-wait    how long to wait for another fire's landing to finish (default 120s)
   --json         emit the result as JSON
 
 This is \`merge-guard --strict --apply\` AND \`gh pr merge --squash --delete-branch\` as ONE
@@ -344,9 +461,21 @@ A hold names EVERY axis that objected, one line each with a machine token
 (board-not-merge-eligible | unresolved-review | check-never-reported | stale | red), because the
 remedies differ and two axes can hold the same PR at once.
 
+The axes AND the squash run under ONE per-repo lock this verb takes itself (the same lock
+\`dev-loop with-repo-lock <ref>\` uses), so two concurrent fires cannot interleave. Without it both
+read CI freshness against the same base tip, the first squashes, and the second lands a PR whose
+checks never ran against the new tip — the head pin cannot catch that, since it is the BASE that
+moved. Waiting, then re-reading the axes, is what turns the second call into a \`stale\` hold.
+
+If the lock is held, this waits \`--lock-wait\` (default 120s) and then exits 5 WITHOUT merging —
+never a silent pass. Exit 5 is a retry, not an objection: nothing is written to the ticket, because
+"another fire is landing" is not something anyone must answer. A lock left by a crashed fire is
+broken automatically (its holder is checked for liveness), so a killed fire cannot freeze the queue.
+
 Exit codes: 0 merged (or already merged — idempotent) · 1 HELD by the gate · 2 usage/repo
   unresolved · 3 the gate could not evaluate any axis it could have (merge-guard's exit 3, same
-  meaning) · 4 the gate cleared and \`gh pr merge\` itself failed (a forge error, not an objection).
+  meaning) · 4 the gate cleared and \`gh pr merge\` itself failed (a forge error, not an objection)
+  · 5 the per-repo landing lock could not be taken, so the gate never ran — re-run.
 \`dev-loop merge-guard\`'s own exit contract is unchanged — this adds a caller.`;
 
 if (isMainEntry(import.meta.url)) {
@@ -362,11 +491,19 @@ if (isMainEntry(import.meta.url)) {
   let ticketId: string | undefined;
   let apply = true;
   let asJson = false;
+  let lockWaitMs: number | undefined;
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--repo") repo = argv[++i] ?? "";
     else if (a === "--ticket") ticketId = argv[++i];
     else if (a === "--no-apply") apply = false;
+    else if (a === "--lock-wait") {
+      const v = argv[++i] ?? "";
+      const m = v.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);   // the `with-repo-lock --wait` grammar
+      if (!m) { console.error(`dev-loop pr merge: invalid --lock-wait duration '${v}'`); process.exit(PR_MERGE_EXIT.usage); }
+      const u = m[2] ?? "s";
+      lockWaitMs = Math.round(Number(m[1]) * (u === "ms" ? 1 : u === "s" ? 1000 : u === "m" ? 60000 : 3600000));
+    }
     else if (a === "--json") asJson = true;
     else if (a === "--help" || a === "-h") { console.log(HELP); process.exit(0); }
     else if (!a.startsWith("-") && pr === undefined) pr = a;
@@ -383,8 +520,9 @@ if (isMainEntry(import.meta.url)) {
   const cfCfg = cfRes.kind === "resolved" ? cfRes.config : null;
   let result: PrMergeResult;
   try {
-    result = prMerge(repo, {
+    result = await prMerge(repo, {
       pr, apply,
+      ...(lockWaitMs !== undefined ? { lockWaitMs } : {}),
       ...(resolvedRepo ? { ghRepo: resolvedRepo } : {}),
       ...(ticketId !== undefined ? { ticketId } : {}),
       ...(cfRes.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
@@ -403,6 +541,11 @@ if (isMainEntry(import.meta.url)) {
   } else if (!result.ghRepo) {
     const candidates = registryGhRepos(repo);
     console.error(`pr merge: could not resolve the GitHub repo from '${repo}' or the workspace repo registry${candidates.length > 1 ? ` (registry has ${candidates.length}: ${candidates.join(", ")} — pass --repo <dir> to disambiguate)` : ""}`);
+  } else if (result.lockUnavailable) {
+    // Named as a retry, not an objection: there is nothing on the ticket to read, because no axis
+    // ran and nothing was written. Saying "HELD" here would send a caller hunting for a comment.
+    console.error(`pr merge: ⛔ another fire is landing in ${result.ghRepo} — PR #${pr} was NOT merged and the gate never ran (${result.lockUnavailable})`);
+    console.error("  Nothing was written to the ticket. Re-run this verb once the other landing finishes; it will gate the PR against the tip that fire leaves behind.");
   } else if (result.holds.length > 0) {
     console.error(`pr merge: ⛔ HELD — PR #${pr} was NOT merged (${result.holds.length} objection${result.holds.length > 1 ? "s" : ""}):`);
     for (const h of result.holds) console.error(`  [${h.token}] ${h.axis}: ${h.detail}`);
