@@ -114,6 +114,27 @@ ok(classifyFireError(0, false, "") === null, "unchanged: exit 0 is never a failu
   // not wedged, so nothing about it is in question: the deadline is why it ended.
   ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, PRODUCTIVE) === "budget-deadline",
     "PR#276 round 3: a kill that DID consume tokens is still the deadline's — a tail pattern does not hijack it");
+  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 3, totalTokens: null }) === "budget-deadline",
+    "PR#276 round 3: measured SPEND alone is enough work to keep the kill on the deadline arm");
+
+  // ── Round 4 — UNKNOWN usage is an absence too, and the killed lane is where it actually lives ────
+  //
+  // Round 3 keyed the tail consultation on `totalTokens === 0`. But the adapters degrade a killed or
+  // truncated payload to NULL, not to zero — so on the very lane this ticket is about, the rejection
+  // case arrives as `{spentUsd: null, totalTokens: null}` and sailed straight past the new arm into
+  // "budget-deadline", taking the provider breaker with it. Zero and unknown are both "no measured
+  // work"; only a POSITIVE number is evidence the fire did any.
+  const UNPARSEABLE = { ceilingUsd: 20, spentUsd: null, totalTokens: null };
+  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, UNPARSEABLE) === "rate-limit",
+    "PR#276 round 4: a killed fire with an UNPARSEABLE payload and a 429 tail is rate-limit, not budget-deadline");
+  ok(classifyFireError(126, false, "invalid api key\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 0, totalTokens: null }) === "auth",
+    "PR#276 round 4: …and with spend measured at zero but tokens unknown, the tail still decides");
+  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED) === "rate-limit",
+    "PR#276 round 4: no usage evidence AT ALL leaves the tail as the only fact there is");
+  // The other direction: an unknown with nothing in the tail stays an unknown. AC1 — never a breach,
+  // and never a wedge either (zero is measured; null is not).
+  ok(classifyFireError(126, false, "", false, false, KILLED, UNPARSEABLE) === "budget-deadline",
+    "PR#276 round 4: an unknown payload with an empty tail is still budget-deadline — unknown is not a wedge (AC1)");
   // AC6 must survive the new arm: a measured breach is a fact, and no tail string outranks it.
   ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 20.01, totalTokens: 9_000_000 }) === "budget-per-fire",
     "PR#276 round 3: a MEASURED breach still classifies budget-per-fire whatever its tail says (AC6 survives)");

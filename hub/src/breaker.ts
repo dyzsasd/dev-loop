@@ -49,6 +49,13 @@ function wedged(e?: BudgetKillEvidence): boolean {
   if (typeof e?.spentUsd === "number" && e.spentUsd > 0) return false;
   return e?.totalTokens === 0;
 }
+// Did the fire measurably DO anything? Only a positive number answers yes. Zero and unknown are both
+// "no evidence of work" and must be treated alike here: a killed fire's payload is routinely absent or
+// truncated, so reading null as "it must have been working" would be this ticket's own error — an
+// absence read as an observation — one arm further down.
+function workMeasured(e?: BudgetKillEvidence): boolean {
+  return (typeof e?.spentUsd === "number" && e.spentUsd > 0) || (typeof e?.totalTokens === "number" && e.totalTokens > 0);
+}
 // A breach is claimable only when the spend was MEASURED and reached the ceiling. Unknown spend is not
 // a breach: it is an unknown, and the modeled class says so.
 function measuredBreach(e?: BudgetKillEvidence): boolean {
@@ -57,21 +64,27 @@ function measuredBreach(e?: BudgetKillEvidence): boolean {
 
 export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false, evidence?: BudgetKillEvidence): string | null {
   if (budgetKilled) {
-    // LOOP-445 AC2 — zero tokens outranks the budget arm.
-    if (wedged(evidence)) {
-      // ...but zero tokens only INFERS "never reached the provider"; it does not observe it. A provider
-      // REJECTION — 429, an expired key, a session cap — is answered before a single token is billed, so
-      // it presents with exactly the wedged fire's numbers while meaning the opposite. Positive evidence
-      // in the tail therefore refutes the inference. Getting this wrong is not cosmetic: "stalled" is not
-      // in PROVIDER_SCOPED_CLASSES, so a misfiled rejection accumulates only against the one agent that
-      // saw it, and every sibling agent on the same exhausted key keeps firing at full cadence into the
-      // outage the breaker exists to stop.
-      return tailErrorClass(tail) ?? "stalled";
-    }
+    // A MEASURED breach is a fact about the fire, so it outranks every inference below.
     // LOOP-445 AC1 — ships option (b): the kill still happens on the modeled deadline, but only a
     // MEASURED breach may wear "budget-per-fire". "budget-deadline" names a kill the model justified
     // and the meter did not, which is what a $4.34 fire against a $20 ceiling actually was.
-    return measuredBreach(evidence) ? "budget-per-fire" : "budget-deadline";
+    if (measuredBreach(evidence)) return "budget-per-fire";
+    // Below here nothing about the fire is measured, so the class is being chosen from an ABSENCE —
+    // and one thing fills that absence with a fact: the tail. A provider REJECTION (429, an expired
+    // key, a session cap) is answered before a single token is billed, so it arrives looking exactly
+    // like a fire that did nothing, meaning the opposite. Consult it before naming the kill after
+    // whichever timer fired. This is not cosmetic: neither "stalled" nor "budget-deadline" is in
+    // PROVIDER_SCOPED_CLASSES, so a misfiled rejection accumulates only against the one agent that
+    // saw it while every sibling on the same exhausted key keeps firing at full cadence into the
+    // outage the breaker exists to stop.
+    if (!workMeasured(evidence)) {
+      const rejection = tailErrorClass(tail);
+      if (rejection) return rejection;
+    }
+    // LOOP-445 AC2 — zero tokens outranks the budget arm: with no rejection to explain them, zero
+    // MEASURED tokens is a wedge. Unknown tokens is not — an unknown stays an unknown (AC1).
+    if (wedged(evidence)) return "stalled";
+    return "budget-deadline";
   }
   if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
   if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
