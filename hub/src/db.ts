@@ -235,6 +235,35 @@ CREATE TABLE IF NOT EXISTS removed_projects (
   ticket_count INTEGER NOT NULL,-- how much was destroyed; the number that makes a resurrection alarming
   verb         TEXT NOT NULL    -- 'remove-project' | 'repair --reap'
 );
+
+-- LOOP-391 (design approvals "C1"): typed human authorization the system can CONSULT — the third
+-- question a destructive verb asks, after "did you mean this target?" (isolationVerdict) and "may a
+-- FIRE do this at all?" (activeFireMarker). See hub/src/approvals.ts for the key grammar and the
+-- state derivation; this is only the shape.
+--
+-- state is deliberately NOT a column. Design §6: it is derived on read from the timestamps below,
+-- against the caller's own clock, so no sweeper exists and a stale row cannot read as granted. A
+-- stored state would be exactly the standing capability the key grammar exists to prevent.
+--
+-- project_id is NULLABLE (design §3: NULL for a workspace-scoped action) and carries no FK for the
+-- same reason removed_projects does not: a row must outlive the project record it names.
+-- Retro-added via IF NOT EXISTS with no user_version bump (the removed_projects precedent above).
+CREATE TABLE IF NOT EXISTS approvals (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT,            -- NULL = workspace-scoped
+  action_key    TEXT NOT NULL,   -- the end state this authorises — approvals.ts ACTION_CLASSES
+  requested_by  TEXT,            -- the agent that asked; NULL when the operator granted unprompted
+  requested_at  TEXT,
+  ticket_id     TEXT,            -- the ticket the request is attached to
+  grantor       TEXT,            -- who authorised it — always a human/operator identity
+  granted_at    TEXT,
+  expires_at    TEXT,            -- absolute ISO; NULL ONLY for an explicit --expires never (§6)
+  revoked_by    TEXT,
+  revoked_at    TEXT,
+  discharged_at TEXT,            -- the end state was reached (§5)
+  note          TEXT             -- the human's own words, e.g. the chat message that granted it
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_key ON approvals(action_key);
 `;
 
 // ─── Schema migrations (PRAGMA user_version) ─────────────────────────────────
