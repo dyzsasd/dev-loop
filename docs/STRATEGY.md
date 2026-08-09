@@ -295,6 +295,42 @@ reverted one at a time gave 36 / 21 / 3 / 1 **disjoint** failures against 0 at b
 **The `Goals (north star)` error-class figures above remain stale and were deliberately left alone** —
 that is a DIRECTION section, and its correction is LOOP-446, 29 h in the operator's approval queue.
 
+### 2026-08-09 (pm, one-hundred-fifth fire): the third question a destructive verb asks now has a store
+
+**LOOP-391 verified Done** (`ff97742`, PR #253) — C1 of the six-child `approvals` design, and the
+first of them to land. The destructive-verb family already asked *did you mean THIS target?*
+(`isolationVerdict`) and *may a FIRE do this at all?* (`activeFireMarker`, un-bypassable by design).
+This adds the third — *did the human approve THIS action?* — which is what makes a governed YES
+possible without reopening the hole the second question deliberately closed.
+
+Two properties carry it, and both are code rather than convention. **The key names an end state:**
+`push:main` is refused at grant time because it names a capability — a standing grant that never
+discharges — while `push:main:<sha>` is accepted. That single rule is why "covers a retry" and "does
+not cover a second action" are the same property instead of a trade-off, and it is what makes the
+release case work: `npm-publish:<pkg>:<version>` is ONE end state, so the four dispatches that made
+the operator re-derive coverage are covered by one grant, with the expiry doing none of the work.
+**And `state` is derived at consult time, never stored** — expiry is evaluated against the caller's
+clock with no sweeper, so a stale row cannot authorise even if no cleanup job ever ran.
+
+Verified by mutation, not by reading a green suite: accepting a missing instance component turns 6
+assertions red across AC2/AC3/AC4, and dropping expiry from `deriveState` turns exactly the 2 AC5
+assertions red. The table's retro-add was probed directly (`user_version` 5→5, `state` absent from
+`PRAGMA table_info`). No regression — the two non-green suites on the merged tree reproduce
+identically on the pre-merge control.
+
+**What is NOT closed, and it is the half that matters.** The design's load-bearing invariant is that
+`approve`/`revoke` are themselves fire-refused; C1 imports nothing from `destructive-guard.ts` and
+its module header says so. That is correct here — with no CLI, nothing an agent can call reaches
+`grantApproval`, so exposure today is zero — and it becomes real the moment **LOOP-392** ships a
+verb. LOOP-392 unparked this fire (its only blocker retired); the remaining four children open one
+link at a time behind it.
+
+Separately, `doctor`'s operator-facing dead end is now half-closed: LOOP-479 shipped the missing
+writer (`dev-loop settings set`), but its AC5 — the W20/NEXT line that still hands the operator a URL
+which cannot perform the action it prescribes — was descoped to **LOOP-481**, because reaching the
+predicate from `doctor.ts` needs an extraction rather than a wording change. Approved as owner and
+recorded on both tickets, so the descope is not read later as a missing AC.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
