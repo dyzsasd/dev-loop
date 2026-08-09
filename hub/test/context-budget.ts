@@ -42,7 +42,7 @@ ok(conv.anchors.size >= 38, `conventions.md yields the full anchor map (${conv.a
 for (const a of ["0", "0a", "2", "9c", "20a", "21a", "21b", "27"]) ok(conv.anchors.has(a), `anchor §${a} parsed`);
 // Progressive disclosure (docs/design/conventions-progressive-disclosure.md): every pointer stub's
 // reference file exists and is non-empty — a stub naming a missing file is a silent protocol hole.
-for (const f of ["notify.md", "investigation-protocol.md", "backend-service.md", "backend-local.md",
+for (const f of ["notify.md", "investigation-protocol.md", "backend-service.md",
   "reports-linear-sink.md", "ticket-templates.md", "first-run-setup.md", "report-rollups.md"]) {
   const path = join(root, "references", f);
   ok(existsSync(path) && statSync(path).size > 200, `references/${f} exists and is non-empty (stub target)`);

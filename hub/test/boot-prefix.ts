@@ -65,11 +65,9 @@ if (a) ok(a.text.includes("- pm rule") && !a.text.includes("- qa rule"), "assemb
 
 // ── 4. backend contract selection ─────────────────────────────────────────────────────────────────
 const svc = assembleBootCorpus(root, dataDir, "pm", "proj1", "service");
-const loc = assembleBootCorpus(root, dataDir, "pm", "proj1", "local");
 const lin = assembleBootCorpus(root, dataDir, "pm", "proj1", "linear");
 ok(!!svc && svc.text.includes("### references/backend-service.md"), "service backend embeds backend-service.md");
-ok(!!loc && loc.text.includes("### references/backend-local.md"), "local backend embeds backend-local.md");
-ok(!!lin && !lin.text.includes("### references/backend-service.md") && !lin.text.includes("### references/backend-local.md"),
+ok(!!lin && !lin.text.includes("### references/backend-service.md"),
   "linear backend embeds no contract file (the MCP is the native substrate)");
 
 // ── 4b. config-aware selection (captured-context review 2026-07-20) ──────────────────────────────

@@ -72,14 +72,14 @@ export const BUDGETS: Record<string, Budget> = {
  * the prune with the boot corpus, so this bounds what a fire actually receives).
  */
 export const CONVENTIONS_BUDGETS: Record<string, number> = {
-  "pm":            129 * 1024,  // actual 131,441 —   655 B headroom
+  "pm":            127 * 1024,  // actual 129,797 —   251 B headroom (re-measured 2026-08-10, LOOP-465)
   "qa":            121 * 1024,  // actual 123,587 —   317 B
   "senior-dev":    109 * 1024,  // actual 111,086 —   530 B
   "junior-dev":    107 * 1024,  // actual 109,402 —   166 B
-  "sweep":         116 * 1024,  // actual 118,050 —   734 B
+  "sweep":         114 * 1024,  // actual 116,724 —    12 B
   "reflect":        81 * 1024,  // actual  82,447 —   497 B
-  "ops":           101 * 1024,  // actual 102,693 —   731 B
-  "architect":      79 * 1024,  // actual  79,895 — 1,001 B
+  "ops":            99 * 1024,  // actual 101,326 —    50 B
+  "architect":      77 * 1024,  // actual  78,486 —   362 B
   "communication":  64 * 1024,  // actual  65,502 —    34 B
 };
 

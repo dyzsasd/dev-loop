@@ -2,16 +2,15 @@
 
 The single source of truth for the **PM / QA / Dev / Sweep / Reflect / Ops / Architect /
 Communication** agents that run an autonomous software-development loop coordinated
-through ticket state on the configured backend (**Linear**, local file board, or `service` hub).
+through ticket state on the configured backend (**Linear** or the `service` hub).
 All agent skills load this file. If a rule here conflicts with a skill's
 body, this file wins — keeping the agents interoperable is the whole point. (The five inward
 agents form the build loop; the outward agents — Ops/Architect/Communication — are
 defined in §21.)
 
-For new 1.x workspaces, `linear` and `service` are the current operator-facing backends. The
-`local` file board remains documented here because older configs and compatibility paths still map
-to it, but new operator docs should steer no-cloud users to `service` when they want a web UI,
-metrics, or per-agent identity.
+For 1.x workspaces, `linear` and `service` are the two backends. (The `local` file board was
+retired: `team-config.ts` refuses it at E02, so no workspace loads with it and no compatibility
+path maps to it.)
 
 ## Table of contents
 
@@ -106,8 +105,8 @@ Defined ONCE here — each SKILL's BOOT line carries a one-line pointer (cite §
    read-only fallback); resolve your project (explicit `DEVLOOP_PROJECT` wins,
    else cwd, §19).
 3. **Resolve the backend** (§18): `backend` absent ⇒ `"linear"` (the Linear MCP);
-   `"local"` ⇒ the machine-local file board; `"service"` ⇒ the hub
-   (`dev-loop-hub` MCP — per-agent identity, `list_events`, hub docs). All three
+   `"service"` ⇒ the hub
+   (`dev-loop-hub` MCP — per-agent identity, `list_events`, hub docs). Both
    route the SAME ticket operations; only the transport differs — then read the
    matching `references/backend-<backend>.md` (§18; `linear` needs no file) before your
    first board operation.
@@ -214,12 +213,6 @@ this. Separately, `init` MAY perform **read-only**, firewall-scoped
 report/reconcile; that read is distinct from the gated write-import and disturbs
 nothing.
 
-**In `local` mode the board *directory* is the firewall** (§18): a dedicated,
-machine-local ticket store with no human backlog in it, so the human-backlog axis of
-isolation is structural rather than label-enforced. Tickets still carry `dev-loop` and queries still scope to
-it for parity, but "scope by `project`" means "operate only within this project's
-board dir" — and a glob must never escape it (the cross-project axis still applies).
-
 ---
 
 ## 3. Linear state machine
@@ -229,11 +222,9 @@ Your Linear team has these workflow states (Linear's defaults; use the **name** 
 `Done`, `Canceled`, `Duplicate` — plus, on the **`service` backend (§18)**,
 `Human-Blocked` (a parking state for an unresolvable human-only block, §9).
 There is **no "Processing" state** ("Processing" maps to `In Progress`). "Blocked"
-behaviour is **per-backend**: on `linear`/`local` it stays a **label** (§9), not a
+behaviour is **per-backend**: on `linear` it stays a **label** (§9), not a
 state; on `service` an unresolvable human-only block becomes the real **`Human-Blocked`
-state** (below + §9). These state names are authoritative in both backends — in `local`
-mode (§18) the state lives in the ticket file's frontmatter `state:` field (a field
-rewrite, not a folder move), using these exact names.
+state** (below + §9). These state names are authoritative in both backends.
 
 | State | Meaning | Who moves it here |
 |---|---|---|
@@ -305,7 +296,7 @@ running daemon adopts the new default on restart only — `dev-loop hub stop && 
 ensure`; see `references/config-schema.md` "Hub daemon notifier settings" and
 `docs/DAEMON.md` "Background notifiers"). The
 operator (or PM, once unblocked out-of-band) moves it back to **`Todo`**. Dev never
-picks it up (it isn't `Todo`). On `linear`/`local` (no daemon; adding a state is costly)
+picks it up (it isn't `Todo`). On `linear` (no daemon; adding a state is costly)
 the label-based park (§9) remains; `blockedStateName` config names the real state where
 a backend has one.
 
@@ -382,7 +373,7 @@ label AND the dev-tier label). They exist **only** in a project that runs the tw
 (§21a / launcher panes); a **legacy single-dev project carries neither** — the sole `dev` agent
 picks the whole §5 queue, exactly as today. On the `service` backend the dev tier may instead ride
 the ticket's `assignee` field (the actor `senior-dev`/`junior-dev`); the label is the carrier on
-`linear`/`local`, where the shared identity / a per-fire claim token can't distinguish the tier
+`linear`, where the shared identity / a per-fire claim token can't distinguish the tier
 (§18, per-backend encoding). The labels are provisioned on **all** backends so one code path serves
 both (harmless extra labels on `service`).
 
@@ -429,7 +420,7 @@ partitioned by dev tier: **junior-dev** picks only its own tickets (`junior-dev`
 **senior-dev** picks only its own (`senior-dev` assignee/label) — each ranks *its slice* by this
 exact order (junior: urgent bug → … → improvement, among junior-assigned tickets; senior: its
 design + escalation tickets). The per-backend filter (assignee on `service`, label on
-`linear`/`local`) is defined in §18. The §9 `blocked`-exclusion still applies to both. A staged
+`linear`) is defined in §18. The §9 `blocked`-exclusion still applies to both. A staged
 design **child** sits in `Backlog` (not `Todo`) until the design gate promotes it, so it is outside
 every pick set until then (§21a).
 
@@ -702,7 +693,7 @@ Dev's pick query (§5) must exclude `blocked` tickets.
 > `webhook` is the one-way DEFAULT (write-only incoming-webhook URL, any backend); `bot` is the
 > opt-in `service`-only superset (provider bot app, richer posting). Emitter by backend: on
 > `service` the daemon is the single emitter (trigger = the `Human-Blocked` state); on
-> `linear`/`local` PM emits on the label park. All opt-in; absent ⇒ no pinging.
+> `linear` PM emits on the label park. All opt-in; absent ⇒ no pinging.
 
 When a ticket is **left human-parked for the operator** — `blocked` + `needs-pm` with
 `Bail-shape: external-prereq` (a real credential / money / legal / security prerequisite,
@@ -780,7 +771,7 @@ operator is pinged out-of-band: on `service` the **daemon** auto-reminds on the
 `Human-Blocked` state (cadence `humanBlockedReminderHours` — default 24h once a comms
 channel is configured, explicit `0` opts out, off without comms; resolved at daemon boot,
 so a running daemon adopts the default on restart only — §3, config-schema.md "Hub daemon
-notifier settings"); on `linear`/`local` (no
+notifier settings"); on `linear` (no
 daemon) **PM** emits the §9 `notify` webhook once. This — a `Backlog` intake to PM, not a discussion
 board — is how operator direction enters the loop.
 
@@ -1188,7 +1179,7 @@ sufficient: the verb squashes only when the guard's axes clear — a **human's**
 person's objection), a ticket **not merge-eligible** on the board (already `In Review`, `Canceled`,
 or `Duplicate`), and CI freshness (green computed against a base behind the tip). Axes **degrade
 silently to a pass** when their evidence is unreachable (no `gh`, forge
-unreachable, no hub DB on `linear`/`local`). An axis OBJECTION is posted to the ticket once
+unreachable, no hub DB on `linear`). An axis OBJECTION is posted to the ticket once
 (idempotent); readiness and CI-pending/unknown holds refuse the squash but write nothing — re-run,
 don't wait. `dev-loop merge-guard` stays the read-only/diagnostic
 surface (`--json`; `--strict`/`--apply` unchanged) — for inspecting a hold, not the merge path.
@@ -1222,7 +1213,7 @@ agent, immediately before ANY deploy step:
 - **`"manual"` ⇒ HARD BAIL — never a prompt.** Do NOT run the deploy. The ship stops at
   the pre-deploy step (commit/push per config still stand); block the ticket for the
   **operator** — `Human-Blocked` on `service`, the `blocked`+`needs-pm`+`external-prereq`
-  park on `linear`/`local` (§9) — with a comment naming the env and the ceiling
+  park on `linear` (§9) — with a comment naming the env and the ceiling
   (`deployPolicy.<env>="manual"` forbids auto-deploy; E06). A ceiling violation is a
   config contradiction only the operator can resolve (raise the ceiling or fix the
   repo's deploy shape); it is never resolved by an interactive mid-fire prompt (§12a).
@@ -1233,7 +1224,7 @@ agent, immediately before ANY deploy step:
 ## 13. First-run setup
 
 > Moved: the idempotent first-live-run checklist (workflow labels, project, strategyDoc /
-> testEnv / deploy confirmation, runtime files, the `local`-backend board scaffold) lives in
+> testEnv / deploy confirmation, runtime files) lives in
 > **`references/first-run-setup.md`** — read it on a FIRST live run against a workspace
 > (the signal: workflow labels or the `<workspace>/.dev-loop/<project-key>/` runtime files
 > missing on a live fire).
@@ -1450,16 +1441,16 @@ backends, defined once here. Each SKILL's BOOT carries just one line — "all ti
 operations go through the configured backend (§18)" — instead of re-stating every job
 in backend terms.
 
-**Default is `linear`.** `backend` absent ⇒ `"linear"`; `local` and `service` are strictly opt-in via per-project config
+**Default is `linear`.** `backend` absent ⇒ `"linear"`; `service` is strictly opt-in via per-project config
 (§11) and bootstrapped by `dev-loop team init` + `/dev-loop:add-project`. Every rule elsewhere in this document is
 backend-agnostic — this section is the only place they diverge.
 
 ### Backend parity — the work plane, the surface plane, and switching
 
-The **work plane is identical** across `linear`/`local`/`service` (states, transitions,
+The **work plane is identical** across `linear`/`service` (states, transitions,
 pick/claim/dedupe/blocked, labels, reports); the **surface plane deliberately diverges**
 (per-agent identity / web UI / versioned docs are `service`-only; the Linear app is
-`linear`-only; `local` is the zero-cloud floor). Choosing a backend and switching one
+`linear`-only). Choosing a backend and switching one
 later (a data migration, not a config edit) are operator decisions —
 `docs/ARCHITECTURE.md` §Backends carries the comparison; agents never choose or switch.
 The one cross-backend notification floor: the §9 one-way operator webhook.
@@ -1468,9 +1459,7 @@ The one cross-backend notification floor: the §9 one-way operator webhook.
 ticket for a human-only block is **real-state-if-present-else-label**: on `service` it is the real
 **`Human-Blocked` state** (daemon-reminded); on `linear` it is the `blocked`+`needs-pm`
 label park **unless** the operator added a real Blocked column and set `blockedStateName` (then a
-real state); on `local` it is **label-only, full stop** — `Human-Blocked` is **not** a
-local-usable frontmatter state (the §3 local state set is the seven classic names) and
-`blockedStateName` cannot resolve to it, so there is no daemon and no state-reminder there. The
+real state). The
 **abstract behavior is invariant** ("the ticket leaves Dev's pick set until the human resolves it,
 then resumes to `Todo`"); only the mechanism + the reminder differ.
 
@@ -1480,8 +1469,6 @@ board operation of the fire**:
 - `service` ⇒ **`references/backend-service.md`** — the agent contract: ops + cheat-sheet
   invocation surface, exit codes, identity/attribution, project scope, write semantics,
   hub docs + the `design` doc-kind.
-- `local` ⇒ **`references/backend-local.md`** — board layout, ticket file format, the
-  Linear-MCP→file operation mapping, ID allocation, locks/claim, the §2 firewall in local mode.
 - `linear` ⇒ no extra file: the Linear MCP is the native substrate described throughout this
   document (§3/§4/§7/§8/§9/§10 apply as written).
 
@@ -1496,11 +1483,9 @@ The carrier differs by backend because Linear is one shared identity:
 - **`linear`** — a **`senior-dev` / `junior-dev` label** in the ticket's label set (the shared Linear
   identity means `assignee` can't distinguish the tier; the label does). Each dev scopes its pick
   query by its own label + `project` (REPLACE-style full-set discipline on every write, §10 #1).
-- **`local`** — the same `senior-dev` / `junior-dev` string in the ticket file's `labels:[]`
-  frontmatter (label-as-routing parity with `repo:<name>`, §19); the local glob filters `labels[]`.
 
 The §4 `senior-dev`/`junior-dev` labels are provisioned on **all** backends for one code path
-(harmless extras on `service`, the routing carrier on `linear`/`local`). A **legacy single-dev
+(harmless extras on `service`, the routing carrier on `linear`). A **legacy single-dev
 project carries no dev-tier encoding** — the sole `dev` agent picks the whole queue, unchanged.
 
 ---
@@ -1685,8 +1670,7 @@ Detect the form ONCE per fire (precedence in this order) and use it consistently
 both reading and updating:
 - **Linear document** — `strategyDoc` is an object `{ "linearDocument": "<id|slug|url>" }`,
   or a string containing `linear.app/.../document/`. Read with `get_document`; update with
-  `save_document`. No git/file access. (Requires a Linear-connected backend — init rejects
-  `{linearDocument}` under `backend:"local"`, §18.)
+  `save_document`. No git/file access. (Requires a Linear-connected backend, §18.)
 - **Hub document** (`backend:"service"` only, §18) — `strategyDoc` is `{ "hubDoc": "<kind>" }`
   (e.g. `{ "hubDoc": "strategy" }`), or `hub.docs:true`. Read with `doc.get({ kind })` — an
   `unpublished:true` result means **no version has ever been published**, so `doc.get`
@@ -1726,7 +1710,7 @@ landing — so PM's write policy splits **by section**:
   a block exits non-zero and is reported, never forced). The verb asserts the pushed range
   touches **only** the strategy doc + its archive — this is a docs path, never a licence to
   push code, and DIRECTION sections still route via §9a regardless. Senior's repo-file design
-  docs (`docs/design/<slug>.md` on `linear`/`local`) land the same way; on `service` they are
+  docs (`docs/design/<slug>.md` on `linear`) land the same way; on `service` they are
   hub `design` docs and never touch git.
 - **Direction sections — propose first.** `Vision`, `Goals (north star)`, `Non-goals` —
   plus any `Appetite` / `No-gos` headings a doc carries: changing WHAT the product pursues
@@ -1869,20 +1853,20 @@ and **cites the strategy/roadmap item it serves** (traceability: strategy → ro
 → code).
 - **Granularity = LIVING per-module doc** — one per module, **updated as the module evolves** (not
   one-per-feature, not write-once). History lives in the hub doc versioning (`service`) or git
-  (`linear`/`local`), so the doc stays current rather than accreting changelog noise.
+  (`linear`), so the doc stays current rather than accreting changelog noise.
 - **Retire, don't delete (D6 retention).** When a module is removed or its design is superseded,
   senior-dev ARCHIVES its design doc: on `service`, `dev-loop doc archive --slug <module>` (the
   `doc.archive` op — DESIGN docs only, the singleton kinds refuse; reversible via `--restore`). An
   archived doc leaves the `/docs` index (`?archived=1` shows it), the drafts-pending chip, and the
   daemon notifiers, but the doc + its full version history stay readable forever — never deleted,
-  never re-ingested per fire. On `linear`/`local`, move the repo file to `docs/design/archive/`
+  never re-ingested per fire. On `linear`, move the repo file to `docs/design/archive/`
   with a one-line commit. A superseding design doc should name what it replaced.
 - **Small features get NO separate doc** — the design lives in the parent + child ticket specs.
 - **senior-dev writes/commits it AUTONOMOUSLY** — like PM commits the `strategyDoc` (§20). It is
   **NOT** a §17 governing file (SKILL/conventions/code) and is **NOT** operator-publish-gated; the
   gate is the design **parent ticket** reaching `In Review` (PM verifies). Home per backend (§18):
   `service` = the hub **`design`** doc-kind (`doc.save`/`doc.get`, read latest version — not publish-
-  gated); `linear`/`local` = a committed repo file `docs/design/<slug>.md` in the doc-home repo (§19).
+  gated); `linear` = a committed repo file `docs/design/<slug>.md` in the doc-home repo (§19).
 
 ### senior-dev design-and-delegate flow (the normal complex path)
 1. **Pick** a senior-assigned **design** ticket (its mode is design — §"two modes" below).
@@ -1896,7 +1880,7 @@ and **cites the strategy/roadmap item it serves** (traceability: strategy → ro
    survives the parent closing, exactly as §9a W3 intake); with crisp, testable ACs (each child = one
    verified increment). The `Design:` pointer is one of:
    - `Design: hubDoc:design/<slug>` — `service` (the hub `design` doc for module `<slug>`)
-   - `Design: docs/design/<slug>.md` — `linear` / `local` (the committed repo design file)
+   - `Design: docs/design/<slug>.md` — `linear` (the committed repo design file)
    - `Design: parent <parent-id>` — a small / ticket-spec design (the parent ticket *is* the design)
 5. **Back-link the parent** in one write — `relatedTo:[<child1>,<child2>,…]` + a comment listing the
    child IDs (`Designed into: <id>, <id>` — mirroring §9a's `Groomed into:`).
@@ -1910,7 +1894,7 @@ and **cites the strategy/roadmap item it serves** (traceability: strategy → ro
   designs PM verifies directly. **The sign-off carrier is the existing §9a Human-Blocked machinery,
   never a report line:** PM parks the design PARENT — `Human-Blocked` assigned to the operator on
   `service` (the §9a daemon reminder carries the nudge), the `blocked`+`needs-pm`+`external-prereq`
-  park on `linear`/`local` (§9) — with a comment naming the design doc + the child IDs. Approval =
+  park on `linear` (§9) — with a comment naming the design doc + the child IDs. Approval =
   the operator's approval comment (or the operator moving the parent back themselves); PM's next
   fire sees it (the §9 re-scan of parked tickets) and runs the normal pass path below. A rejection
   comment = a failed review (§3 close + follow-up).
@@ -1944,7 +1928,7 @@ failure**, escalate (the §3 close+follow-up, routed to senior):
 4. **If the senior direct-code ALSO fails verify** → `Bail-shape: fix-exhausted` → **`Human-Blocked`**
    (operator): the loop has exhausted its automated tiers (junior, then senior), so the **verifier**
    parks it
-   (`Human-Blocked` on `service`, the `blocked`+`needs-pm`+`external-prereq` park on `linear`/`local`,
+   (`Human-Blocked` on `service`, the `blocked`+`needs-pm`+`external-prereq` park on `linear`,
    §9). A QA-owned Bug escalates identically — **the verifier files the senior follow-up**: PM
    files it for a Feature/Improvement it verified (Job A), and **QA files it for a Bug it verified**
    (when QA Cancels the failed junior Bug it immediately files the `senior-dev` direct-code follow-up
@@ -1998,7 +1982,7 @@ Same one rule:
   over-routing to the expensive tier is the costlier mistake. "When borderline, junior."
 
 The TODO must **explicitly name the dev tier** (the per-backend encoding, §18: the `assignee` actor on
-`service`, the `senior-dev`/`junior-dev` label on `linear`/`local`). A split-dev ticket with **no**
+`service`, the `senior-dev`/`junior-dev` label on `linear`). A split-dev ticket with **no**
 dev-tier assignment is invisible to both dev pick-queries — a Sweep-flagged gap, like a missing
 `pm`/`qa` owner label. (In a **legacy** project PM adds no dev-tier marker — today's filing.)
 
@@ -2303,7 +2287,7 @@ default-off) routes report bodies + the 点评 channel to rolling Linear Documen
 cloud/remote operator — it trades away a §16 defense-in-depth layer, so **prefer files
 whenever the operator's machine is reachable**. The sink is **decoupled from the §18
 backend**: `reports.sink` absent ⇒ `"files"` (§22 byte-for-byte, either backend unchanged);
-a `linear` backend does NOT auto-route reports, a `local` backend MAY still opt in.
+a `linear` backend does NOT auto-route reports.
 The moment `reports.sink` resolves to `"linear"` — init provisioning it, a report-writer's
 §22 write step, PM's 点评 scan — read **`references/reports-linear-sink.md`**: the
 rolling-Document primitive, the comment-provenance guards (an agent's ONLY write to a
