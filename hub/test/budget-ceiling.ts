@@ -159,12 +159,61 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
     "AC4: the kill reason names the perFireUsd ceiling (a sub-cent ceiling is NOT printed as $0.00)");
   ok(!/fire exceeded/.test(killed.out) && !/looks WEDGED/.test(killed.out),
     "AC4: the reason is DISTINCT — neither the wall-timeout ('fire exceeded') nor the stall wording");
-  ok(killRow.errorClass === "budget-per-fire",
-    `AC4: the ledger row records errorClass "budget-per-fire" (got ${JSON.stringify(killRow.errorClass)})`);
+  // LOOP-445 — this stub emits plain text, so no usage is parseable and the fire's spend is UNKNOWN. A kill
+  // on an unknown spend is a MODELED kill: "budget-deadline". It used to read "budget-per-fire", which
+  // asserted a breach the run never measured. The measured-breach path is asserted below and is what keeps
+  // LOOP-230's protection pinned.
+  ok(killRow.errorClass === "budget-deadline",
+    `LOOP-445: an unmeasurable kill is "budget-deadline", not a claimed breach (got ${JSON.stringify(killRow.errorClass)})`);
   ok(killRow.timedOut === false && killRow.exitCode === 126,
     `AC4: the row is not a timeout — timedOut false + exit 126, never 124 (got ${JSON.stringify({ timedOut: killRow.timedOut, exitCode: killRow.exitCode })})`);
   ok(typeof killRow.durationMs === "number" && (killRow.durationMs as number) < 30_000,
     "AC4: the row carries the (short) durationMs a killed fire always records — the estimate's own input");
+  // LOOP-445 AC4 — the kill reason carries the fire's OWN spend beside the model that condemned it.
+  ok(/spend at kill:/.test(killed.out),
+    "LOOP-445 AC4: the kill reason states the fire's spend at kill time, not only the ceiling/rate/deadline");
+
+  // ── LOOP-445 AC6 — the REAL budget path is not disarmed: a fire whose MEASURED spend crosses the
+  // ceiling is still killed and still classified "budget-per-fire". Same 2s deadline; the only change is
+  // that this stub emits a claude-shaped result payload, so the spend is measurable at finalize.
+  // (`printf` then sleep: the whole buffer is one JSON object, which is what claudeAdapter.parse reads.)
+  const claudeStub = (costUsd: number, tokens: number, name: string): string => {
+    const bin = join(tmp, name);
+    const payload = JSON.stringify({
+      type: "result", subtype: "success", is_error: false, result: "done", num_turns: 3,
+      total_cost_usd: costUsd,
+      usage: { input_tokens: tokens, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    }).replace(/'/g, "'\\''");
+    writeFileSync(bin, `#!/bin/sh\nprintf '%s' '${payload}'\nsleep 60\n`); chmodSync(bin, 0o755);
+    return bin;
+  };
+  seed(pricedProfileRow);
+  const overBin = claudeStub(0.5, 1234, "over-claude.sh"); // $0.50 measured against the $0.002 ceiling
+  const overRun = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: overBin });
+  const overRow = lastRow();
+  ok(overRow.exitCode === 126 && /budget perFireUsd/.test(overRun.out),
+    `AC6: a fire over the ceiling is still KILLED by the budget watchdog (got exit ${JSON.stringify(overRow.exitCode)})`);
+  ok(overRow.errorClass === "budget-per-fire",
+    `AC6: and it is still classified "budget-per-fire" — LOOP-230 is not disarmed (got ${JSON.stringify(overRow.errorClass)})`);
+
+  // ── LOOP-445 AC1 (end-to-end) — the same kill, with the spend MEASURED UNDER the ceiling, must not
+  // claim a breach. This is the $4.34-against-$20 shape that motivated the ticket, in miniature.
+  seed(pricedProfileRow);
+  const underBin = claudeStub(0.0001, 1234, "under-claude.sh"); // $0.0001 measured against the $0.002 ceiling
+  runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: underBin });
+  const underRow = lastRow();
+  ok(underRow.exitCode === 126 && underRow.errorClass === "budget-deadline",
+    `AC1: a kill at 5% of the ceiling is "budget-deadline", never a claimed breach (got ${JSON.stringify({ exitCode: underRow.exitCode, errorClass: underRow.errorClass })})`);
+
+  // ── LOOP-445 AC2 (end-to-end) — a fire that reached the provider and spent NOTHING is wedged, and the
+  // liveness arm names it even though the budget deadline is what tripped. On this lane the stall watchdog
+  // is disarmed (effectiveStallMs = 0 for claude), so before this ticket nothing could ever classify it.
+  seed(pricedProfileRow);
+  const wedgedBin = claudeStub(0, 0, "wedged-claude.sh"); // 0 tokens, $0 — the 12 pm rows of 2026-08-07/08
+  runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: wedgedBin });
+  const wedgedRow = lastRow();
+  ok(wedgedRow.errorClass === "stalled",
+    `AC2: a 0-token fire killed by the budget deadline is classified "stalled" (got ${JSON.stringify(wedgedRow.errorClass)})`);
 
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

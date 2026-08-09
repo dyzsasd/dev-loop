@@ -262,12 +262,14 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
   return total;
 }
 
+const WATCHDOG_KILL_EXITS = new Set([124, 125, 126]); // 124 wall-timeout · 125 stalled/retry-loop · 126 perFireUsd (LOOP-445)
 // ─── ratePerMsFor (LOOP-230) — per-profile $/ms for the in-flight perFireUsd watchdog ─────────────────────
 // The perFireUsd watchdog (run-agents.ts, budget-ceiling Child 4) has no mid-flight cost signal — cost is
 // known only post-hoc — so it kills at a wall-clock deadline: perFireUsd / ratePerMs. This returns that rate
 // for ONE fire's (codingAgent, model): the median costUsd/durationMs over the window's priced same-profile
 // rows — the SAME derivation rollingSpendUsd applies per row — falling back to FALLBACK_RATE_PER_MS when the
 // profile has no priced history yet. NEVER returns 0 (a 0 rate ⇒ an infinite deadline ⇒ no enforcement at all).
+// LOOP-445 — killed rows are excluded from the median below; these are the exit codes that mark one.
 export function ratePerMsFor(rows: FireRow[], codingAgent: string | null | undefined, model: string | null | undefined, windowMs: number, nowMs: number): number {
   const cutoff = nowMs - windowMs;
   const key = `${codingAgent ?? ""}/${model ?? ""}`;
@@ -276,6 +278,16 @@ export function ratePerMsFor(rows: FireRow[], codingAgent: string | null | undef
     const t = Date.parse(r.ts);
     if (t < cutoff || t > nowMs) continue;                            // LOOP-314: closed era, both bounds
     if (`${r.codingAgent ?? ""}/${r.model ?? ""}` !== key) continue;
+    // LOOP-445 AC3 — a watchdog-killed fire is a TRUNCATED sample, never a rate. Both of its inputs are
+    // wrong for this purpose: the cost is whatever had been billed when the axe fell (a lower bound, and
+    // exactly $0 for a fire that never reached the provider), and the duration is when the watchdog fired
+    // rather than how long the work took. Feeding that quotient back in is the loop the ticket names — the
+    // kill manufactures the evidence that justifies the next kill. Measured on this workspace's ledger the
+    // poison was 33 zero-cost rows out of 146 for claude/claude-opus-5; they did not flip the median
+    // (6.985e-6 → 7.364e-6 $/ms once excluded), so the loop had not yet closed here — but the shape is a
+    // ratchet: it needs only the killed rows to reach half the window to pin the whole profile at $0 and
+    // hand every fire the conservative fallback.
+    if (r.exitCode != null && WATCHDOG_KILL_EXITS.has(r.exitCode)) continue;
     if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
       rates.push(r.usage.costUsd / r.durationMs);
   }

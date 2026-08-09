@@ -1270,8 +1270,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       budgetTimer = setTimeout(() => {
         if (timedOut || stalled) return; // a wall/stall kill is already in flight — don't double-fire
         budgetKilled = true;
-        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}) — SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr): SIGTERM =====\n`);
+        // LOOP-445 AC4 — state the fire's OWN spend beside the model that condemned it. The message used to
+        // carry the ceiling, the rate and the deadline: every number except the one that would have shown
+        // the contradiction. Whether it is observable depends on the lane — opencode streams its usage
+        // events, claude's `--output-format json` buffers until exit — so this reports "not yet observable"
+        // rather than implying $0, which is the very conflation the ticket is about.
+        const spentNow = ((): number | null => { try { return usageAdapter?.parse(fullStdout)?.costUsd ?? null; } catch { return null; } })();
+        const spentLabel = spentNow === null ? "not yet observable on this lane" : `$${spentNow.toFixed(2)}`;
+        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGTERM (SIGKILL in 10s)`);
+        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGTERM =====\n`);
         killGroup("SIGTERM");
         killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
         killTimer.unref?.();
@@ -1348,7 +1355,20 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         try { const parsed = usageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
         try { turns = usageAdapter.turns?.(fullStdout) ?? null; } catch { turns = null; }
       }
-      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop, budgetKilled); // P0-1b taxonomy (+ liveness "stalled"/"retry-loop" + LOOP-230 "budget-per-fire")
+      // LOOP-445 — the budget arm is classified from what the fire MEASURABLY did, not from which timer
+      // fired. `usage` above is the same parse the ledger row carries, so the class and the numbers a
+      // reader checks it against can never disagree. Tokens are summed across every bucket and stay null
+      // when usage was never parsed — null is "unknown", 0 is "reached the provider and did nothing".
+      const totalTokens = usage
+        ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+        : null;
+      const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop, budgetKilled, // P0-1b taxonomy (+ liveness "stalled"/"retry-loop" + LOOP-230/LOOP-445 budget arm)
+        { ceilingUsd: perFireCeilingUsd, spentUsd: usage?.costUsd ?? null, totalTokens });
+      if (budgetKilled && errorClass !== "budget-per-fire") {
+        // The contradiction, on the record: the model condemned this fire and the meter did not confirm it.
+        const spent = usage?.costUsd ?? null;
+        log.write(`\n===== budget kill reclassified "${errorClass}": ceiling $${perFireCeilingUsd}, measured spend ${spent === null ? "unknown" : `$${spent.toFixed(2)}`}, tokens ${totalTokens ?? "unknown"} =====\n`);
+      }
       if (interrupted) log.write(`\n===== interrupted: operator stop (SIGINT forwarded) — not charged to the agent =====\n`);
       const fireExtras = {
         ...(suspectError ? { suspectError: true } : {}),
