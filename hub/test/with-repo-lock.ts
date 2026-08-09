@@ -10,7 +10,7 @@
 //
 // It is asserted end-to-end through the real CLI, not by comparing constants: a same-value check
 // on two imports would pass with the argument still per-caller, which is the shape of the bug.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync, rmSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -73,6 +73,28 @@ const r2 = spawnSync(process.execPath, [CLI, "mine", "--wait", "1s", "--", "sh",
 });
 ok(r2.status === 0 && existsSync(free) && !existsSync(lockPath),
   `LOOP-455/control: an UNCONTENDED call still runs its command and releases the lock (exit ${r2.status}, ran=${existsSync(free)}, lock left=${existsSync(lockPath)})`);
+
+// ── The policy is only shared if EVERY contender uses it ────────────────────────────────────────
+// The arms above drive ONE contender. But staleness is judged by whoever arrives, so a single module
+// still taking a `repo-<ref>` path through the unpolicied primitives reopens the hole for everyone —
+// `doc-land` and the worktree add/remove sequences lock the same paths, and with `withLock`'s 30s
+// default either could break a live `pr merge` holder mid-squash. That is an invariant over the
+// module set, not over one call, so it is asserted as one: any module that builds a `repo-` lock path
+// must reach it through `acquireRepoLock` / `withRepoLockPath`.
+const SRC = join(HERE, "..", "src");
+const buildsRepoLock = (src: string): boolean => /wsLockPath\([^)]*`repo-/.test(src);
+const found = readdirSync(SRC).filter((f) => f.endsWith(".ts") && buildsRepoLock(readFileSync(join(SRC, f), "utf8"))).sort();
+// Pinned so the scan cannot pass by finding nothing — a predicate that silently stops matching its
+// own motivating modules is the failure this list exists to catch.
+for (const expected of ["doc-land.ts", "pr-merge.ts", "with-repo-lock.ts", "worktree.ts"]) {
+  ok(found.includes(expected), `LOOP-455: the repo-lock scan still sees ${expected} (found: ${found.join(", ") || "none"})`);
+}
+for (const f of found) {
+  const m = /\b(withLock|acquireLock)\s*\(/.exec(readFileSync(join(SRC, f), "utf8"));
+  ok(!m, m
+    ? `LOOP-455: ${f} builds a repo-<ref> lock path but takes it with a bare ${m[1]}(, which carries the 30s default and breaks live holders — use acquireRepoLock/withRepoLockPath`
+    : `LOOP-455: ${f} reaches its repo-<ref> lock only through the shared policy`);
+}
 
 rmSync(ROOT, { recursive: true, force: true });
 console.log(fails ? `${fails} CHECK(S) FAILED` : "with-repo-lock: all checks passed");

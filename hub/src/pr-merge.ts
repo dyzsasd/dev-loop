@@ -17,8 +17,8 @@
 // It deliberately does NOT do branch protection on the forge — conventions §12c explains why
 // required-check gating deadlocks the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs
 // (W38 names that posture). This is the in-product gate instead.
-import { realpathSync, readFileSync } from "node:fs";
-import { join, resolve as resolvePath, sep } from "node:path";
+import { realpathSync, readFileSync, existsSync } from "node:fs";
+import { join, dirname, resolve as resolvePath, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { isMainEntry } from "./is-entry.ts";
 import type { ExecFn } from "./landing.ts";
@@ -333,6 +333,35 @@ const LOCK_WAIT_MS = 120_000;
 // is a directory (readFileSync → EISDIR → null). The path is matched structurally, so a SUBMODULE's
 // gitdir (`<super>/.git/modules/<name>`) does not answer — a submodule is not a worktree of its
 // superproject and must not borrow its lock.
+const canonPath = (p: string): string => { try { return realpathSync(p); } catch { return resolvePath(p); } };
+
+// The git root that ENCLOSES `dir` — the nearest ancestor with a `.git` entry — or null. Walking up is
+// load-bearing, not defensive: `pr merge` runs from wherever the fire happens to be (the worktree
+// root, `hub/`, any package subdirectory), and a lock whose NAME depends on the cwd is not a lock.
+function gitRootOf(dir: string): string | null {
+  let cur = resolvePath(dir);
+  for (;;) {
+    if (existsSync(join(cur, ".git"))) return cur;
+    const up = dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+}
+
+// Every path that identifies the same registered repo as `dir`: `dir` itself, the git root enclosing
+// it, and — when that root is a linked worktree — the base clone that owns it.
+function repoRootsOf(dir: string): string[] {
+  const roots: string[] = [];
+  const push = (p: string): void => { const c = canonPath(p); if (!roots.includes(c)) roots.push(c); };
+  push(dir);
+  const root = gitRootOf(dir);
+  if (!root) return roots;
+  push(root);
+  const base = baseCloneOf(root);
+  if (base) push(base);
+  return roots;
+}
+
 function baseCloneOf(dir: string): string | null {
   let raw: string;
   try { raw = readFileSync(join(dir, ".git"), "utf8"); } catch { return null; }
@@ -356,14 +385,13 @@ export function prMergeLockPath(repoDir: string, ghRepo: string): string {
     // is not a reason to skip the lock, and a skip here would be a fail-open nobody would see.
     return join(tmpdir(), "dev-loop-locks", `${slug}.lock`);
   }
-  const canon = (p: string): string => { try { return realpathSync(p); } catch { return resolvePath(p); } };
   // A ticket worktree is not the base clone, and landing FROM one is the normal dev-tier invocation
-  // (§7 makes the worktree mandatory for both split tiers, in every landing mode). Its path never
-  // equals a registered `path`, so without this the ref match falls through to the remote match —
-  // which needs the OPTIONAL `remote` — and then to `repo-gh-<owner-repo>`, a name
-  // `with-repo-lock <ref>` never takes. Two names is not serialization. So a worktree resolves to
-  // the clone that owns it, and a registry entry without a `remote` is still matched by path.
-  const selves = [canon(repoDir), baseCloneOf(repoDir)].filter((p): p is string => p !== null);
+  // (§7 makes the worktree mandatory for both split tiers, in every landing mode). Neither a worktree
+  // nor a package subdirectory equals a registered `path`, so without this the ref match falls through
+  // to the remote match — which needs the OPTIONAL `remote` — and then to `repo-gh-<owner-repo>`, a
+  // name `with-repo-lock <ref>` never takes. Two names is not serialization. So the cwd is resolved to
+  // the repo that owns it, and a registry entry without a `remote` is still matched by path.
+  const selves = repoRootsOf(repoDir);
   const entries = Object.entries(ws.file.repos ?? {}) as [string, { path?: string; remote?: string } | null][];
   for (const [ref, e] of entries) {
     if (!e?.path) continue;

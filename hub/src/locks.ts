@@ -65,8 +65,20 @@ export const REPO_LOCK_STALE_MS = 15 * 60_000;
 
 // Acquire the shared repo lock. `staleMs` is deliberately NOT a parameter: a per-caller stale policy
 // is the defect above, so the only way to take this lock is on the one policy every contender uses.
+//
+// EVERY caller that takes a `repo-<ref>` path goes through this pair — `pr merge`, `with-repo-lock`,
+// `doc-land`, and the worktree add/remove sequences. One holdout is enough to reopen the hole: the
+// policy is enforced by the contender, so a single `withLock` on a `repo-<ref>` path with the 30s
+// default can still break everyone else's live lock.
 export function acquireRepoLock(lockPath: string, opts: { totalMs?: number } = {}): Promise<() => void> {
   return acquireLock(lockPath, { totalMs: opts.totalMs, staleMs: REPO_LOCK_STALE_MS });
+}
+
+// `withLock` for the shared repo lock — same relationship as `withLock` to `acquireLock`, and the
+// same missing `staleMs`.
+export async function withRepoLockPath<T>(lockPath: string, opts: { totalMs?: number }, fn: () => Promise<T>): Promise<T> {
+  const release = await acquireRepoLock(lockPath, opts);
+  try { return await fn(); } finally { release(); }
 }
 
 // Run `fn` while holding `lockPath`; always releases, even on throw.

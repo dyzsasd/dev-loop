@@ -733,6 +733,19 @@ try {
         ok(viaWorktree === prMergeLockPath(clone, GHREPO) &&
            viaWorktree.endsWith(join(".dev-loop", "locks", "repo-mine.lock")),
           `LOOP-455/AC1: landing from a ticket worktree of a remote-less registry entry takes the ref's own lock, not a second name (got ${viaWorktree})`);
+        // …and from a SUBDIRECTORY of that worktree. `pr merge` runs from wherever the fire happens
+        // to be, so a name that only answers at the worktree root is a name that changes with the
+        // cwd — and a lock whose name changes with the cwd is not a lock.
+        const inner = join(wt, "hub", "src");
+        mkdirSync(inner, { recursive: true });
+        ok(prMergeLockPath(inner, GHREPO) === viaWorktree,
+          `LOOP-455/AC1: a subdirectory of the worktree resolves to the same lock as its root (got ${prMergeLockPath(inner, GHREPO)})`);
+        // Same for a package subdirectory of the base clone itself — `hub/` is where this repo's
+        // commands are actually run from.
+        const pkg = join(clone, "hub");
+        mkdirSync(pkg, { recursive: true });
+        ok(prMergeLockPath(pkg, GHREPO) === viaWorktree,
+          `LOOP-455/AC1: a package subdirectory of the clone resolves to the same lock (got ${prMergeLockPath(pkg, GHREPO)})`);
         // The structural match is on `.git/worktrees/`, so a SUBMODULE does not borrow its
         // superproject's lock — it is a different repo that happens to nest.
         const sub = join(wsw, "checkout", "vendor", "sub");
