@@ -34,12 +34,6 @@ export interface DesignParentTicket {
 // asks a different question — "may this state be MOVED OUT OF" — and answers it without `Duplicate`.)
 export const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
 
-/** Candidates whose work is still open, or — when none are — the input unchanged. */
-function preferLive(ids: readonly string[], stateOf: Map<string, string>): readonly string[] {
-  const live = ids.filter((id) => !TERMINAL_STATES.has(stateOf.get(id) ?? ""));
-  return live.length ? live : ids;
-}
-
 // A `Design:` pointer binds ONLY as a bare line whose first non-whitespace token is the keyword —
 // the same rule `Blocked-by:`/`Unblocked-by:` follow (blocked-by.ts, asserted in its own suite), and
 // the rule the sweep SKILL was corrected to state (LOOP-343). A ticket that merely QUOTES the marker
@@ -59,17 +53,30 @@ export function designPointerOf(description: string): string | null {
  *   • `Design: hubDoc:design/<slug>`   — names the DOC; the parent is resolved through the doc slug
  *   • `Design: docs/design/<slug>.md`  — same, repo-file spelling
  *
- * For the two doc forms the parent is the open ticket carrying the SAME pointer with a `Mode: design`
- * body — i.e. the design ticket the children were staged under. That is a reverse link like the
+ * For the two doc forms the parent is the ticket the board RECORDS as owning that slug: the one
+ * linked to every child of the slug through `relatedTo`. That is a reverse link like the
  * `parent <id>` case, just keyed on the slug instead of on an id.
  *
- * The doc-slug route is an INFERENCE — it reads ownership of a design out of a ticket naming that
- * design in prose — so it is bounded on three sides (LOOP-372). Measured on this board before those
- * bounds, it returned 19 parents of which 5 were design tickets; nine were ordinary Bugs and
- * Improvements that merely mentioned a doc, and three of those nine were design CHILDREN inverted
- * into the parent role. `isDesignParent` is not a display predicate — it decides pm/qa queue
- * routing, the LOOP-345 close gate, and the LOOP-360 zero-commit handoff exemption — so an
- * over-match hands ordinary code tickets an authorization they were never meant to have.
+ * The doc-slug route used to be an INFERENCE — it read ownership of a design out of a ticket naming
+ * that design in prose — and LOOP-372 bounded it on three sides rather than removing it. LOOP-379
+ * removes it: the body scan is DELETED, not filtered, and the derivation is now §21a's mandatory
+ * back-link. The residual the bounds could not reach was a live misroute, not a theoretical one —
+ * LOOP-420 cited `hubDoc:design/project-config-projection` once, mid-prose, while explaining its own
+ * root cause, and became the only design parent the queue believed existed on this board: it
+ * surfaced in `pm.verify` and was excluded from `qa.verify`, leaving a merged increment invisible to
+ * its own verifier. Its true owner, LOOP-399, names its doc nowhere and no prose route could reach
+ * it. `isDesignParent` is not a display predicate — it decides pm/qa queue routing, the LOOP-345
+ * close gate, and the LOOP-360 zero-commit handoff exemption — so an over-match hands ordinary code
+ * tickets an authorization they were never meant to have, and an under-match hides real work.
+ *
+ * Why a link and not better prose (PM ruling, 2026-08-06, scored on the live 407-row board): a
+ * position rule cannot separate a citation from a declaration — LOOP-420's citation sits at the head
+ * of a line, the same position as the fixture that must resolve — and retiring the route entirely
+ * removes LOOP-344's rescue of invisible parents with it. The back-link is a recorded fact rather
+ * than a reading: the child→parent link is mandatory (conventions.md §21a) and the parent's
+ * back-link is written in the same operation that spawns the children. Measured, this drops exactly
+ * one ticket across 407 rows and that ticket is the false positive, while resolving all four slugs
+ * that have open children to their correct owners.
  *
  * BOUND 4 — the row set is the WHOLE BOARD, and it is not a parameter (LOOP-378). Every link this
  * function walks is board-wide: a child in `Todo` resolves a parent that may be `Done`, and a slug's
@@ -87,9 +94,31 @@ export function designPointerOf(description: string): string | null {
  * predicate derives from.
  */
 export function designParentIds(db: DatabaseSync, projectId: string): Set<string> {
-  const board = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as DesignParentTicket[];
+  return resolveDesignParents(db, projectId).parents;
+}
+
+/**
+ * The ticket that owns doc slug `slug`, or null. The SAME derivation `designParentIds` uses —
+ * exported so a caller that has a slug and wants its owner never re-derives one (LOOP-379).
+ * ticketwrite.ts's `sensitive` inheritance did re-derive it, by scanning candidate bodies for the
+ * slug text; under the back-link rule an owner need not name its own doc anywhere (LOOP-399 does
+ * not), so that scan would have found nobody and the label would have stopped being inherited by
+ * exactly the doc-pointer children LOOP-296 exists to protect.
+ */
+export function designOwnerOfSlug(db: DatabaseSync, projectId: string, slug: string): string | null {
+  return resolveDesignParents(db, projectId).ownerBySlug.get(slug) ?? null;
+}
+
+interface DesignParentRow extends DesignParentTicket { related_to?: string }
+
+function resolveDesignParents(
+  db: DatabaseSync,
+  projectId: string,
+): { parents: Set<string>; ownerBySlug: Map<string, string> } {
+  const board = db.prepare("SELECT id, description, related_to FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as DesignParentRow[];
   const out = new Set<string>();
+  const ownerBySlug = new Map<string, string>();
   const onBoard = new Set(board.map((t) => t.id));
   const slugToChildren = new Map<string, string[]>();
 
@@ -106,77 +135,73 @@ export function designParentIds(db: DatabaseSync, projectId: string): Set<string
     if (slug) slugToChildren.set(slug, [...(slugToChildren.get(slug) ?? []), t.id]);
   }
 
-  // Resolve each doc slug to the ticket that OWNS that design: the one whose BODY names the same
-  // slug and which is not itself a child of it.
+  // Resolve each doc slug to the ticket the board RECORDS as owning it: the one linked to EVERY
+  // child of that slug through `relatedTo`, in either direction. §21a writes both sides — the child
+  // carries `relatedTo:[<parent>]` at filing (mandatory, so it survives the parent closing) and the
+  // parent back-links every child in one write — so ownership is read out of the link the process is
+  // required to record, never out of a sentence.
   //
-  // Crucially this does NOT require a `Mode: design` body. That was my first implementation and it
-  // failed its own fixture: the whole point of LOOP-344 is that these parents are invisible, and the
-  // reason they are invisible is that they carry neither `Mode: design` NOR a `parent <id>` reverse
-  // link — only a `qa` label inherited from their type. Requiring the marker would have "fixed" only
-  // the parents that were already being routed correctly. So the marker RANKS candidates below; it
-  // never gates them.
+  // EVERY child, not any: a ticket that merely neighbours a design is commonly related to one of its
+  // children. LOOP-420 is `relatedTo` LOOP-409 alone while the slug's children are LOOP-408/409/410,
+  // and that is precisely the ticket this route used to return.
   if (slugToChildren.size) {
-    const bodyOf = new Map(board.map((t) => [t.id, t.description ?? ""]));
-    const candidates = new Map<string, string[]>();
-    for (const t of board) {
-      const body = t.description ?? "";
-      // BOUND 2 — a ticket that DECLARES a non-design mode is not a design parent, whatever its
-      // prose mentions. §21a defines exactly two modes and `Mode: direct-code` is the ticket saying
-      // it is code work; that is a stronger statement about the ticket than any sentence in it.
-      if (declaresNonDesignMode(body)) continue;
-      const ownPtr = designPointerOf(body);
-      for (const slug of docSlugsOfBody(body)) {
-        if (!slugToChildren.has(slug)) continue;
-        // A CHILD of this slug is not its parent — it points AT the doc rather than owning it.
-        // Asserted on the LINE, not on whether the line parses: a pointer the pointer-side rule
-        // rejects still says "I am a child of this doc", and reading the same line two ways is what
-        // put LOOP-278/279/323 in the parent role.
-        if (ownPtr && pointerNames(ownPtr, slug)) continue;
-        candidates.set(slug, [...(candidates.get(slug) ?? []), t.id]);
-      }
-    }
-    const stateOf = new Map(board.map((t) => [t.id, t.state ?? ""]));
-    for (const [, cands] of candidates) {
-      // Rank, then require a UNIQUE winner. `Mode: design` is the one candidate-ranking signal that
-      // is a declaration rather than a mention.
-      const marked = cands.filter((id) => isDesignModeBody(bodyOf.get(id) ?? ""));
-      // BOUND 3a — among DECLARED designs, a live one outranks one whose work is over. §21a's
-      // design doc is a LIVING per-module document, so a module designed twice has two parents
-      // naming one slug BY CONSTRUCTION — the earlier one `Done`, the current one open. Ranking on
-      // the declaration alone made that normal lifecycle contested, and BOUND 3 then resolved the
-      // slug to NOBODY: the current parent lost its design-parent authorization on its second
-      // increment, so §21a's close gate stopped firing on it and its staged children stopped being
-      // gate-protected. Once the row set became the whole board (BOUND 4) that stopped being
-      // avoidable by narrowing the input, which is why the tie-break lives here instead.
+    const linked = relatedToAdjacency(board, onBoard);
+    for (const [slug, children] of slugToChildren) {
+      const childSet = new Set(children);
+      const owners = board.filter((t) =>
+        // A CHILD of this slug is not its own parent — it points AT the doc rather than owning it.
+        !childSet.has(t.id)
+        // BOUND 2 — a ticket that DECLARES a non-design mode is not a design parent, whatever its
+        // links. §21a defines exactly two modes and `Mode: direct-code` is the ticket saying it is
+        // code work; that is a stronger statement about the ticket than any link into it.
+        && !declaresNonDesignMode(t.description ?? "")
+        && children.every((c) => linked.get(t.id)?.has(c)));
+      // BOUND 3 (LOOP-372, retained unchanged) — two tickets qualifying for one slug is an ambiguous
+      // link and there is nothing left to break the tie with. Resolve it to NOBODY: returning both
+      // would grant the gate to a ticket that is certainly wrong, and picking one by id order would
+      // decide an authorization question by an accident of numbering.
       //
-      // The two keys are ORDERED and the order is not interchangeable: the DECLARATION is primary
-      // and liveness only breaks ties inside it. Lifting liveness above the declaration — ranking
-      // `cands` by state first, as PR #270's review proposed — would let a live ordinary ticket win
-      // a slug purely because the other candidate is terminal: LOOP-372's over-match, re-entering
-      // through the ranking. This file's own LOOP-378 fixture (two undeclared mentions, one of them
-      // terminal) pins that shape to NOBODY, so the two orderings are not both satisfiable.
-      //
-      // KNOWN RESIDUAL, asserted in the suite rather than left to be rediscovered (PR #270 review;
-      // owned by LOOP-379): a live parent that declares NO mode loses its slug to an older declared
-      // one. To this function it is indistinguishable from a bystander that cites the doc in prose,
-      // and the two MUST rank alike or the paragraph above stops being true. The fix for an
-      // invisible parent is the declaration; the fix for the inference is a signal that separates
-      // owning a design from citing one — §21a's mandatory child `relatedTo` back-link is the
-      // candidate, and choosing it is a spec call, not something to settle inside a tie-break.
-      const winners = marked.length ? preferLive(marked, stateOf) : cands;
-      // BOUND 3 — two tickets naming one slug is an ambiguous link, and the inference has nothing
-      // left to break the tie with. Resolve it to NOBODY: returning both would grant the gate to a
-      // ticket that is certainly wrong, and picking one by id order would decide an authorization
-      // question by an accident of numbering.
-      if (winners.length === 1) out.add(winners[0]);
+      // LOOP-372's BOUND 3a (rank declared designs, prefer the live one) is GONE, because its input
+      // can no longer arise: it broke ties among tickets that NAMED a slug, and naming is no longer
+      // how a candidate is found. A module designed twice — the lifecycle 3a existed for — now has
+      // each design linked to its own children only, so neither covers the union and the slug
+      // resolves to nobody rather than to the elder declaration. That is AC2 of LOOP-379 as ruled,
+      // and it is stated here because it is a behaviour change no AC asserts.
+      if (owners.length === 1) { out.add(owners[0].id); ownerBySlug.set(slug, owners[0].id); }
     }
   }
-  return out;
+  return { parents: out, ownerBySlug };
 }
 
-/** A `Design:` line NAMES this slug — whether or not the pointer form parses. */
-function pointerNames(pointer: string, slug: string): boolean {
-  return docSlugOf(pointer) === slug || docSlugsOfBody(pointer).has(slug);
+/**
+ * `relatedTo` as an UNDIRECTED adjacency. §18 makes the field append-only and the two sides are
+ * written by different actors at different times, so a link recorded on one end only is the normal
+ * case, not a corruption — reading it in one direction would make ownership depend on which write
+ * happened to land.
+ */
+function relatedToAdjacency(board: readonly DesignParentRow[], onBoard: ReadonlySet<string>): Map<string, Set<string>> {
+  const adj = new Map<string, Set<string>>();
+  const join = (a: string, b: string) => {
+    const set = adj.get(a) ?? new Set<string>();
+    set.add(b);
+    adj.set(a, set);
+  };
+  for (const t of board) {
+    let related: unknown;
+    // A malformed cell is one ticket's links lost, never the whole derivation: the column is JSON
+    // text and this predicate gates authorization for the entire board.
+    try { related = JSON.parse(t.related_to ?? "[]"); } catch { continue; }
+    if (!Array.isArray(related)) continue;
+    for (const other of related) {
+      // BOUND 1 (retained) — an id must name a ticket on THIS board. An unchecked id put `LOOP-2`,
+      // which exists nowhere here, into an authorization set; a set of ids nobody can hold is a set
+      // nobody can audit.
+      if (typeof other !== "string" || !onBoard.has(other)) continue;
+      join(t.id, other);
+      join(other, t.id);
+    }
+  }
+  return adj;
 }
 
 // §21a's mode marker, read as a bare line like every other marker in this file. `isDesignModeBody`
@@ -194,9 +219,10 @@ function declaresNonDesignMode(description: string): boolean {
   return !!m && !/^design/i.test(m[1]);
 }
 
-// ONE slug-token rule, shared by the pointer side (docSlugOf) and the body side (docSlugsOfBody) —
-// so the two can never resolve different slugs from the same doc name. That divergence IS LOOP-344's
-// defect, and keeping the rule in two places is how it came back (LOOP-361).
+// ONE slug-token rule. It had two consumers — the pointer side (docSlugOf) and a body side — and the
+// two resolving different slugs from the same doc name IS LOOP-344's defect; keeping the rule in two
+// places is how it came back (LOOP-361). LOOP-379 deleted the body side, so the rule now has a single
+// consumer; it is kept as one named constant because both pointer spellings still share it.
 //
 // Two properties have to hold at once, and each of the obvious one-liners holds only one of them:
 //   • `.` is legal INSIDE a slug — `v1.2-module` must survive whole — so `.` cannot leave the class.
@@ -255,24 +281,11 @@ export function docSlugOf(pointer: string): string | null {
   return file ? stripMdSuffix(file[1]) : null;
 }
 
-// A design PARENT's own body may name its doc anywhere (the slug line, a `doc:` reference), not as a
-// `Design:` pointer — that pointer is the CHILD's marker. Scan for the same slug shapes in the body,
-// through the same SLUG_TOKEN rule the pointer side uses.
-//
-// EVERY occurrence, not the first: a body naming two docs used to resolve only the earlier one, so a
-// ticket could not be seen naming the slug it was being weighed for — and the tie-break above needs
-// to see every ticket that names a slug in order to know the link is contested at all.
-const BODY_SLUG_RE = new RegExp(`(?:hubDoc:design/|docs/design/)(${SLUG_TOKEN})`, "gi");
-
-function docSlugsOfBody(description: string): Set<string> {
-  const out = new Set<string>();
-  // `matchAll` clones the regex but SEEDS the clone with this one's `lastIndex`, so a global regex
-  // shared at module scope carries state between calls the moment anything `exec`s it. Reset rather
-  // than rely on nothing ever doing so.
-  BODY_SLUG_RE.lastIndex = 0;
-  for (const m of (description ?? "").matchAll(BODY_SLUG_RE)) out.add(stripMdSuffix(m[1]));
-  return out;
-}
+// LOOP-379 — there was a BODY_SLUG_RE / docSlugsOfBody pair here that scanned a ticket's prose for
+// a doc slug, and it was how a design's owner used to be found. It is deleted rather than bounded a
+// fourth time: ownership is now read from `relatedTo` (see designParentIds). Nothing in this module
+// reads a description for a slug any more except the CHILD side's `Design:` pointer, which is a
+// marker the child writes about itself. Restoring a body scan here re-opens LOOP-420.
 
 export function isDesignModeBody(description: string): boolean {
   return (description ?? "").trimStart().startsWith("Mode: design");

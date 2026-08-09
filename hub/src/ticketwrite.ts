@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
-import { designParentIds, isDesignParent, designPointerOf, docSlugOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
+import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 import { handoffGateRejection } from "./handoff-gate.ts";
 import { acCompletenessRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
@@ -315,16 +315,23 @@ function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, d
     const rows = db.prepare("SELECT id, description, labels FROM tickets WHERE project_id=?")
       .all(projectId) as unknown as Array<{ id: string; description: string; labels: string }>;
     // The direct form names the parent; the two doc forms name the DOC, so the parent is the ticket
-    // that owns that slug. designParentIds already resolves all three — reuse it rather than
-    // re-deriving, which is how the LOOP-344 inversion happened in the first place.
+    // that owns that slug. The predicate resolves both — reuse it rather than re-deriving, which is
+    // how the LOOP-344 inversion happened in the first place.
     // The rows above carry `labels` for the lookup below; the predicate fetches its own board-wide
     // set (LOOP-378) rather than borrowing this one, which is what kept the four call sites honest.
-    const parentIds = designParentIds(db, projectId);
+    //
+    // LOOP-379: this used to pick the owner out of `designParentIds` by asking which candidate's
+    // DESCRIPTION contained the slug. That was a second, private copy of the derivation, and the
+    // back-link rule falsifies it — an owner need not name its own doc anywhere (LOOP-399 does not),
+    // so the scan would have matched nobody and a doc-pointer child of a `sensitive` design would
+    // have silently stopped inheriting the label. That is LOOP-290's shape, which LOOP-296 exists to
+    // prevent. Ask the module that owns the derivation instead.
     const direct = /^parent\s+(\S+)/i.exec(ptr);
     const slug = direct ? null : docSlugOf(ptr);
+    const ownerId = slug === null ? null : designOwnerOfSlug(db, projectId, slug);
     const parent = direct
       ? rows.find((r) => r.id === direct[1])
-      : rows.find((r) => parentIds.has(r.id) && slug !== null && (r.description ?? "").includes(slug));
+      : (ownerId === null ? undefined : rows.find((r) => r.id === ownerId));
     if (!parent) return labels;
     let parentLabels: string[] = [];
     try { parentLabels = JSON.parse(parent.labels) as string[]; } catch { return labels; }
