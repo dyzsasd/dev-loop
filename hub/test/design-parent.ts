@@ -25,9 +25,13 @@ try {
   ensureSeed(db, "dp", "DesignParent", "DP");
   const pid = findProject(db, "dp")!;
 
-  const mk = (id: string, desc: string, state: string, labels: string[]) =>
-    db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,'t',?,'Bug',?,2,?,'[]','pm','t','t')")
-      .run(id, pid, desc, state, JSON.stringify(labels));
+  // LOOP-379 — `related` is the §21a back-link, and it is now what makes a doc-slug parent resolve.
+  // Every fixture below that must come back as a parent carries it; the ones that must NOT are left
+  // without it, which is the whole of the new rule. A forward reference is fine: the derivation reads
+  // the column at query time, by which point every row exists.
+  const mk = (id: string, desc: string, state: string, labels: string[], related: string[] = []) =>
+    db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,'t',?,'Bug',?,2,?,?,'pm','t','t')")
+      .run(id, pid, desc, state, JSON.stringify(labels), JSON.stringify(related));
   const queue = (actor: string): { verify: Array<{ id: string }> } =>
     (agentOp("queue", db, pid, "dp", actor, {}) as OpResult).body as { verify: Array<{ id: string }> };
   const inVerify = (actor: string, id: string) => queue(actor).verify.some((t) => t.id === id);
@@ -47,10 +51,10 @@ try {
   mk("DP-P1", "a design parent", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
   mk("DP-C1", "Design: parent DP-P1\n\nchild", "Todo", ["dev-loop"]);
 
-  mk("DP-P2", "the module design\n\nhubDoc:design/widget-engine is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-P2", "the module design\n\nhubDoc:design/widget-engine is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["DP-C2"]);
   mk("DP-C2", "Design: hubDoc:design/widget-engine\n\nchild", "Todo", ["dev-loop"]);
 
-  mk("DP-P3", "the other design\n\ndocs/design/gadget-core.md is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-P3", "the other design\n\ndocs/design/gadget-core.md is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["DP-C3"]);
   mk("DP-C3", "Design: docs/design/gadget-core.md\n\nchild", "Todo", ["dev-loop"]);
 
   for (const p of ["DP-P1", "DP-P2", "DP-P3"]) {
@@ -81,11 +85,11 @@ try {
   // The three shapes are asserted TOGETHER because each one alone is passable by a wrong fix: the
   // end-of-sentence case alone is satisfied by stripping trailing dots, which then eats the dot in
   // `v1.2-module`; the dotted case alone is satisfied by doing nothing at all.
-  mk("DP-P6a", "Design doc: hubDoc:design/alpha-mod (the module doc)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-P6a", "Design doc: hubDoc:design/alpha-mod (the module doc)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["DP-C6a"]);
   mk("DP-C6a", "Design: hubDoc:design/alpha-mod\n\nchild", "Todo", ["dev-loop"]);
-  mk("DP-P6b", "The design lives at hubDoc:design/beta-mod.", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-P6b", "The design lives at hubDoc:design/beta-mod.", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["DP-C6b"]);
   mk("DP-C6b", "Design: hubDoc:design/beta-mod\n\nchild", "Todo", ["dev-loop"]);
-  mk("DP-P6c", "The dotted design is hubDoc:design/v1.2-module (in full)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+  mk("DP-P6c", "The dotted design is hubDoc:design/v1.2-module (in full)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["DP-C6c"]);
   mk("DP-C6c", "Design: hubDoc:design/v1.2-module\n\nchild", "Todo", ["dev-loop"]);
   for (const [p, shape] of [
     ["DP-P6a", "mid-sentence"], ["DP-P6b", "at the end of a sentence"], ["DP-P6c", "with a dot INSIDE the slug"],
@@ -202,7 +206,7 @@ try {
 
     // The DOC-pointer forms inherit too — otherwise two of §21a's three forms would stay exposed,
     // which is the same shape LOOP-344 fixed one layer up.
-    mk("DP-S2", "the doc-pointer design\n\nhubDoc:design/secure-thing is the doc", "In Review", ["dev-loop", "Bug", "qa", "sensitive"]);
+    mk("DP-S2", "the doc-pointer design\n\nhubDoc:design/secure-thing is the doc", "In Review", ["dev-loop", "Bug", "qa", "sensitive"], ["DP-S2C"]);
     mk("DP-S2C", "Design: hubDoc:design/secure-thing\n\nexisting child so the parent resolves", "Todo", ["dev-loop"]);
     const docChild = create("doc-child", "Design: hubDoc:design/secure-thing\n\nimplements it", ["dev-loop"], "junior-dev");
     ok(docChild.labels.includes("sensitive"),
@@ -223,7 +227,7 @@ try {
 
     // The three-ticket fixture from the ticket: an owner, a child, and a bystander that merely
     // quotes the doc in a sentence. Before the fix all THREE came back as parents.
-    mk("L372-P", "Mode: design\n\nDesign doc: hubDoc:design/quota-engine (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L372-P", "Mode: design\n\nDesign doc: hubDoc:design/quota-engine (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L372-C"]);
     mk("L372-C", "Design: hubDoc:design/quota-engine\n\nbuild it", "Todo", ["dev-loop"]);
     mk("L372-U", "## Root cause\n\nThe regression traces to hubDoc:design/quota-engine, which the\nprevious fire cited while explaining the failure.", "In Review", ["dev-loop", "Bug", "qa"]);
     {
@@ -279,7 +283,7 @@ try {
     // slug whose ONLY child is wrapped: if the form did not bind, the slug would have no children
     // and its owner would resolve to nobody.
     mk("L372-WO-C", "Design: `hubDoc:design/wrapped-only`\n\nthe only child, wrapped", "Todo", ["dev-loop"]);
-    mk("L372-WO-P", "the wrapped doc's owner\n\nhubDoc:design/wrapped-only is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L372-WO-P", "the wrapped doc's owner\n\nhubDoc:design/wrapped-only is the doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L372-WO-C"]);
     ok(parents().has("L372-WO-P"),
       "LOOP-372: a wrapped pointer BINDS as a child, so its doc's owner resolves through the reverse link");
 
@@ -294,7 +298,7 @@ try {
     // must never be one the other throws out. Asserted on a marker `isDesignModeBody` accepts by
     // prefix, which is exactly where the two rules can drift apart.
     mk("L372-MODEX-C", "Design: hubDoc:design/prefix-mod\n\nbuild it", "Todo", ["dev-loop"]);
-    mk("L372-MODEX", "Mode: design-and-delegate\n\nDesign doc: hubDoc:design/prefix-mod (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L372-MODEX", "Mode: design-and-delegate\n\nDesign doc: hubDoc:design/prefix-mod (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L372-MODEX-C"]);
     ok(parents().has("L372-MODEX"),
       "LOOP-372: a body `isDesignModeBody` accepts is never thrown out by the non-design-mode disqualifier");
 
@@ -312,7 +316,7 @@ try {
     // …but a `Mode: design` declaration among them settles it, deterministically and without
     // REQUIRING the marker (which would un-fix LOOP-344 — see DP-P2/DP-P6b above, still green).
     mk("L372-RANK-C", "Design: hubDoc:design/audit-trail\n\nbuild it", "Todo", ["dev-loop"]);
-    mk("L372-RANK-P", "Mode: design\n\nDesign doc: hubDoc:design/audit-trail (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L372-RANK-P", "Mode: design\n\nDesign doc: hubDoc:design/audit-trail (v1)", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L372-RANK-C"]);
     mk("L372-RANK-U", "the fix is written back into hubDoc:design/audit-trail §8", "In Review", ["dev-loop", "Bug", "qa"]);
     {
       const p = parents();
@@ -340,6 +344,58 @@ try {
       "LOOP-372: …while a `parent <id>` that DOES name a real ticket still resolves (the check bounds the route, it does not remove it)");
   }
 
+  // ── LOOP-379: ownership is the §21a back-link, and prose is not read at all ───────────────────
+  // The four arms assert TOGETHER, because each alone is passable by a wrong fix: (a) alone by
+  // deleting the doc-slug route altogether, (b) alone by returning every related ticket, (c) alone by
+  // keeping the old ranking, (d) alone by any of them.
+  {
+    const parents = (): Set<string> => designParentIds(db, pid);
+
+    // (a) LOOP-420's exact shape, id and citation included — the live misroute this ticket exists to
+    // end. It cites the slug once, mid-prose, while explaining its own root cause, and is relatedTo
+    // ONE of the doc's three children. Before this it was the only design parent this board believed
+    // existed: it surfaced in pm.verify and was excluded from qa.verify, so a merged increment sat
+    // In Review invisible to its own verifier.
+    mk("LOOP-408", "Design: hubDoc:design/project-config-projection\n\nvocabulary + writer surface", "Todo", ["dev-loop"]);
+    mk("LOOP-409", "Design: hubDoc:design/project-config-projection\n\nthe reconciler", "Todo", ["dev-loop"]);
+    mk("LOOP-410", "Design: hubDoc:design/project-config-projection\n\nthe doctor warning", "Todo", ["dev-loop"]);
+    mk("LOOP-420", "## Root cause\n\nThe projection described in `hubDoc:design/project-config-projection` is\nwritten at seed time only.", "In Review", ["dev-loop", "Bug", "qa"], ["LOOP-409"]);
+    // (b) LOOP-399's shape: it names the doc NOWHERE and is relatedTo every child. No prose route
+    // could ever reach it, which is why the slug had no owner at all.
+    mk("LOOP-399", "the projection design", "Done", ["dev-loop", "Improvement", "pm", "senior-dev"], ["LOOP-408", "LOOP-409", "LOOP-410"]);
+    {
+      const p = parents();
+      ok(!p.has("LOOP-420"),
+        "LOOP-379 (a): a ticket that CITES a slug in prose and is relatedTo only some of its children is not its parent");
+      ok(p.has("LOOP-399"),
+        "LOOP-379 (b): …and the ticket that names the slug NOWHERE but back-links every child IS its parent");
+      ok(inVerify("qa", "LOOP-420") && !inVerify("pm", "LOOP-420"),
+        "LOOP-379 (a): …so the citing Bug keeps its own qa verifier — the misroute that hid a merged increment");
+    }
+    // (c) BOUND 3, retained unchanged: two tickets linked to every child resolve to NOBODY. Picking
+    // one by id order would settle an authorization question by an accident of numbering.
+    mk("L379-TIE-C", "Design: hubDoc:design/tie-mod\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L379-TIE-1", "one owner", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L379-TIE-C"]);
+    mk("L379-TIE-2", "the other owner", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L379-TIE-C"]);
+    {
+      const p = parents();
+      ok(!p.has("L379-TIE-1") && !p.has("L379-TIE-2"),
+        "LOOP-379 (c): two tickets linked to every child of one slug resolve to NEITHER — never silently both");
+    }
+    // (d) `Mode: design` still makes a ticket a design parent through isDesignParent with no
+    // back-links at all. The marker route is independent of the slug route and this change does not
+    // touch it — LOOP-344's rescue of invisible parents survives.
+    mk("L379-MARKED", "Mode: design\n\nno children staged yet, no links anywhere", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    ok(isDesignParent({ id: "L379-MARKED", description: "Mode: design\n\nno children staged yet, no links anywhere" }, parents()),
+      "LOOP-379 (d): a `Mode: design` ticket is still a design parent with no back-links at all");
+    // The deletion itself, asserted where it can be seen: a body naming a slug contributes NOTHING.
+    // This arm fails if BODY_SLUG_RE is restored.
+    mk("L379-PROSE-C", "Design: hubDoc:design/prose-mod\n\nbuild it", "Todo", ["dev-loop"]);
+    mk("L379-PROSE-P", "Design doc: hubDoc:design/prose-mod (the module doc) — named exactly as DP-P6a names its own", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    ok(!parents().has("L379-PROSE-P"),
+      "LOOP-379: a body that names a slug and links to none of its children is not its parent — the body scan is gone, not bounded");
+  }
+
   // ── LOOP-378: the two layers agree, because the predicate owns its row set ────────────────────
   // The predicate used to take its rows as an ARGUMENT, and the callers disagreed: opQueue passed
   // non-terminal rows, the three ticketwrite gates passed all of them. Every link the derivation
@@ -359,8 +415,8 @@ try {
   // wrong rows — which is the entire defect — so this drives opQueue's routing and the real
   // In Review → Done write path, and checks they say the SAME thing.
   {
-    mk("L378-DONE", "the ration design\n\nhubDoc:design/ration-engine is the doc", "Done", ["dev-loop", "Bug", "qa", "senior-dev"]);
-    mk("L378-OPEN", "also names hubDoc:design/ration-engine while explaining the fix", "In Review", ["dev-loop", "Bug", "qa"]);
+    mk("L378-DONE", "the ration design\n\nhubDoc:design/ration-engine is the doc", "Done", ["dev-loop", "Bug", "qa", "senior-dev"], ["L378-CHILD"]);
+    mk("L378-OPEN", "also names hubDoc:design/ration-engine while explaining the fix", "In Review", ["dev-loop", "Bug", "qa"], ["L378-CHILD"]);
     mk("L378-CHILD", "Design: hubDoc:design/ration-engine\n\nbuild it", "Todo", ["dev-loop"]);
 
     // Layer 1 — the queue. The contest is visible board-wide, so L378-OPEN is NOT a design parent
@@ -408,7 +464,10 @@ try {
         .body as { id: string; labels: string[]; assignee: string | null };
 
     mk("L378B-OLD", "Mode: design\n\nthe first cut of hubDoc:design/harvest-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
-    mk("L378B-NEW", "Mode: design\n\nthe second cut of hubDoc:design/harvest-core", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    // LOOP-379: what makes the LIVE cut the owner is no longer that it outranks the Done one — it is
+    // that it carries §21a's back-link to the doc's child and the finished cut does not. The
+    // assertions below are unchanged; only the signal they rest on is.
+    mk("L378B-NEW", "Mode: design\n\nthe second cut of hubDoc:design/harvest-core", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"], ["L378B-CHILD"]);
     mk("L378B-CHILD", "Design: hubDoc:design/harvest-core\n\nan existing child, so the slug resolves at all", "Todo", ["dev-loop"]);
 
     const parents = designParentIds(db, pid);
@@ -427,32 +486,35 @@ try {
     // must not win it just because the other candidate is terminal — that would be LOOP-372's
     // over-match re-entering through the ranking, and it is the same shape the L378-OPEN arm above
     // pins from the other side.
-    mk("L378B-DONEOWNER", "Mode: design\n\nthe design of hubDoc:design/mill-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    mk("L378B-DONEOWNER", "Mode: design\n\nthe design of hubDoc:design/mill-core", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"], ["L378B-MCHILD"]);
     mk("L378B-MENTION", "an ordinary fix that mentions hubDoc:design/mill-core in passing", "In Review", ["dev-loop", "Bug", "qa"]);
     mk("L378B-MCHILD", "Design: hubDoc:design/mill-core\n\nbuild it", "Todo", ["dev-loop"]);
     const p2 = designParentIds(db, pid);
     ok(!p2.has("L378B-MENTION"),
-      "LOOP-378 BOUND 3a: a live MENTION does not win the slug over a Done DECLARATION — the tier ranks inside declarations, never across them");
+      "LOOP-378 BOUND 3a: a live MENTION does not win the slug over a Done owner — LOOP-379: because a mention is no longer a candidate at all, not because it ranks lower");
     ok(!inVerify("pm", "L378B-MENTION") && inVerify("qa", "L378B-MENTION"),
       "LOOP-378 BOUND 3a: …so it stays an ordinary qa-owned Bug on both layers");
 
-    // The RESIDUAL of that scoping, pinned so it can only change deliberately (PR #270 review;
-    // LOOP-379 owns the spec call). A genuine second design filed WITHOUT the `Mode: design` line
-    // ranks exactly as the bystander above does — nothing in either body tells the two apart — so
-    // the older declared parent keeps the slug. The consequence is real and is the price of the
-    // ordering: this ticket is routed to qa and its children inherit the OLD parent's labels.
-    // Asserting it here makes LOOP-379's eventual back-link signal a visible test change rather
-    // than a quiet re-ranking, and would have caught it being "fixed" by inverting the two keys.
+    // ── LOOP-379 — the residual above, DISCHARGED, and these two assertions are INVERTED ─────────
+    // This fixture was pinned by LOOP-378 to make the fix visible rather than quiet, and it named the
+    // reason its answer would change: "LOOP-379 owns the signal that would separate an owner from a
+    // citer." That signal is now the §21a back-link, so the same three rows resolve the other way.
+    //
+    // A genuine second design filed WITHOUT the `Mode: design` line used to rank exactly as a
+    // bystander did — nothing in either BODY tells the two apart — so the older declared parent kept
+    // the slug and the live successor's children inherited the wrong parent's labels. Nothing in
+    // either body tells them apart today either; the difference is that ownership is no longer read
+    // out of a body. The successor staged the child, so it carries the link, so it owns the doc.
     mk("L378B-DECLARED-OLD", "Mode: design\n\nthe first cut of hubDoc:design/kiln-core", "Done", ["dev-loop", "Bug", "qa", "senior-dev"]);
-    mk("L378B-UNDECLARED-NEW", "the second cut of hubDoc:design/kiln-core, filed without the mode line", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L378B-UNDECLARED-NEW", "the second cut of hubDoc:design/kiln-core, filed without the mode line", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L378B-KCHILD"]);
     mk("L378B-KCHILD", "Design: hubDoc:design/kiln-core\n\nbuild it", "Todo", ["dev-loop"]);
     const p3 = designParentIds(db, pid);
-    ok(!p3.has("L378B-UNDECLARED-NEW"),
-      "LOOP-378 BOUND 3a residual: a live UNDECLARED successor ranks as a mention, so it does not take the slug — LOOP-379 owns the signal that would separate an owner from a citer");
-    ok(p3.has("L378B-DECLARED-OLD"),
-      "LOOP-378 BOUND 3a residual: …and the slug stays resolved to the declared owner rather than going contested — the declaration is the only ownership signal the ranking can see");
-    ok(!inVerify("pm", "L378B-UNDECLARED-NEW") && inVerify("qa", "L378B-UNDECLARED-NEW"),
-      "LOOP-378 BOUND 3a residual: …and both layers agree on that answer — the divergence LOOP-378 closes is gone even where the answer is the unhappy one");
+    ok(p3.has("L378B-UNDECLARED-NEW"),
+      "LOOP-379: a live UNDECLARED successor that back-links the child it staged DOES take the slug — the link is the signal the declaration could not be");
+    ok(!p3.has("L378B-DECLARED-OLD"),
+      "LOOP-379: …and the finished first cut, which links to none of the doc's current children, does not keep it");
+    ok(inVerify("pm", "L378B-UNDECLARED-NEW") && !inVerify("qa", "L378B-UNDECLARED-NEW"),
+      "LOOP-379: …and both layers agree on the NEW answer — a real design parent reaches its own verifier without having to declare a marker");
   }
 
   db.close();
