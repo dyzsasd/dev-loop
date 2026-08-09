@@ -188,6 +188,15 @@ export function parseArgs(argv: readonly string[]): Parsed {
     if (Object.hasOwn(flags, name)) {
       return { positional, flags, error: `--${name} was given more than once — the two values contradict each other, so neither is assumed` };
     }
+    // Control characters are refused for EVERY value flag, not just the ones that reach a renderer
+    // today. `--ticket` is agent-supplied and interpolated into the operator-facing listing exactly
+    // as the action key is, so fixing the key alone left the same forged-line vector open through a
+    // different field — and `--note` is one renderer away from the same thing. No value flag here
+    // (a ticket id, a project key, a duration, a uuid, a note) legitimately contains one.
+    const raw = eq >= 0 ? a.slice(eq + 1) : argv[i + 1];
+    if (typeof raw === "string" && /[\p{Cc}\p{Cf}]/u.test(raw)) {
+      return { positional, flags, error: `--${name} contains a control character — these values are shown to the operator who acts on them, so they must be exactly what they look like` };
+    }
     if (eq >= 0) { flags[name] = a.slice(eq + 1); continue; }
     const value = argv[i + 1];
     if (value === undefined) return { positional, flags, error: `--${name} needs a value` };
