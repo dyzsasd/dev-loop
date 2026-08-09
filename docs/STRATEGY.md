@@ -153,23 +153,40 @@ the withdrawn baselines, and the binding constraints are in `docs/strategy-archi
 current queue except correctness/security work already in flight. Three measured gaps, each from
 this workspace's own instruments:
 
-1. **§22 leaves no durable trail.** pm 141, senior-dev 111, junior-dev 133, reflect 6 — **391 fires
-   in 7 days, zero daily reports written** (doctor W35 ×4). The operator cannot read what ran.
+1. **§22's durable trail is partial, and the hole is concentrated.** Re-measured 2026-08-08 over the
+   7d team ledger (649 fires) — daily reports written per fire-day: senior-dev 7/7, pm 6/7, qa 4/7,
+   sweep 4/7, **junior-dev 1/7**, reflect 0/1. The original reading ("zero daily reports written")
+   no longer holds for four of six agents; the remaining gap is junior-dev and reflect.
 2. **The board has been destroyed twice in three days.** 2026-08-04 (cascade delete, 19 tickets and
    79 comments lost permanently) and 2026-08-06 (LOOP-367 — a `qa` fire restored the live board over
    itself, then the daemon served an orphaned inode for 69 minutes while reporting healthy). Guards
    have been landing per incident; LOOP-383's approval model is the first that closes the class.
-3. **Fire success is 76% over 762 fires**, `rate-limit` the top error class (85), then
-   `budget-per-fire` (12) and `stalled` (14).
+3. **Fire success is 65% over 538 fires (7d, re-measured 2026-08-08), and the error profile has
+   inverted.** `stalled` ×87, `budget-per-fire` ×45, `rate-limit` ×41, `timeout` ×4, `network` ×2,
+   `auth` ×1. `rate-limit` — named here as top at 85 — is now third. The two leading classes split by
+   tier: `stalled` on the deepseek-flash agents (qa 26, junior-dev 24, sweep 22 over 08-07..08-08),
+   `budget-per-fire` on the opus/max agents (senior-dev 17, pm 16). These counts cover **classified
+   failures only** — the 2026-08-08..09 OpenRouter-402 outage (38+ consecutive opencode fires,
+   **LOOP-463** / **LOOP-464**) is ledgered `errorClass: null` and appears in none of them. Read the
+   class sizes as provisional for a second reason: **LOOP-445** measures a $4.34 fire killed against a
+   $20 ceiling and twelve consecutive zero-token wedged pm fires, all ledgered `budget-per-fire`.
 
-A fourth, found during the 2026-08-06 GitHub Actions outage and not yet a measurement of ours: a
-required check that never RAN presents as `CLEAN`, and `autoMerge` lands it — eight PRs merged on
-zero test signal (LOOP-407). The safer a PR looked, the less had been measured.
+**Gaps 1 and 3 are one phenomenon measured twice.** A §22 report is written at fire CLOSE, so a fire
+that is killed writes none. The pm fire of 2026-08-08T13:08Z verified LOOP-432, posted its verdict,
+then died before its report and state file. Detection work on the trail (LOOP-412, LOOP-425) makes
+the hole visible; only surviving to close, or writing the trail incrementally, can fill it.
 
-First program: **LOOP-382** (pause/resume as board state) · **LOOP-383** (typed approval objects) ·
-**LOOP-384** (a `waiting-on` discriminator for Human-Blocked) · **LOOP-385** (release resilience) ·
-**LOOP-386** (the UI says when its view is stale). The through-line: every control that exists only
-in the operator's chat transcript is one the system cannot enforce, report, or recover.
+**The fourth gap is CLOSED.** A required check that never RAN presented as `CLEAN` and `autoMerge`
+landed it — eight PRs merged on zero test signal. **LOOP-407** shipped 2026-08-08 (`a12bfab`),
+verified against the merged tree on live forge data: an absent required check is now an unconditional
+hold, and doctor **W38** names the unprotected-branch posture that keeps the forge silent. Residual:
+nothing refuses a squash that skipped the guard (**LOOP-444**).
+
+First program — **2 of 5 shipped**: **LOOP-382** (pause/resume as board state, Done) · **LOOP-383**
+(typed approval objects, Done) · **LOOP-384** (a `waiting-on` discriminator for Human-Blocked, Todo) ·
+**LOOP-385** (release resilience, In Progress) · **LOOP-386** (the UI says when its view is stale,
+Todo). The through-line: every control that exists only in the operator's chat transcript is one the
+system cannot enforce, report, or recover.
 
 ## Non-goals
 
