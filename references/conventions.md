@@ -1158,10 +1158,10 @@ First `git -C <repo> worktree prune` (§7). Then:
 - **Feature PRs (when `git.autoMerge:true`):** `gh pr list --search "head:dev-loop/ is:open"` —
   for each open PR:
   - `dev-loop pr merge <pr>` — readiness (pending/conflicting/draft/mergeability-unknown)
-    and the guard's axes all run INSIDE the verb; do not pre-filter on green or mergeable (a
-    conflicting PR still gets its objections recorded on the first run). It squashes only when the
-    axes clear, deleting the feature branch. On exit 0 → `git worktree remove --force` the ticket's
-    worktree, move the ticket `In Progress → In Review`. Exit 1 = HELD, not merged — each objecting
+    and the guard's axes all run INSIDE the verb; do not pre-filter on green or mergeable. It
+    squashes only when the axes clear, deleting the feature branch. On exit 0 →
+    `git worktree remove --force` the ticket's worktree, move the ticket
+    `In Progress → In Review`. Exit 1 = HELD, not merged — each objecting
     guard axis is already on the ticket; a readiness-only hold writes nothing (re-run once the
     forge settles). Exit 5 = landing lock busy — a retry, not an objection. 2 usage · 3 nothing
     evaluable · 4 gate clear but the squash failed. The FAILED / DIRTY / Pending bullets
@@ -1188,8 +1188,9 @@ sufficient: the verb squashes only when the guard's axes clear — a **human's**
 person's objection), a ticket **not merge-eligible** on the board (already `In Review`, `Canceled`,
 or `Duplicate`), and CI freshness (green computed against a base behind the tip). Axes **degrade
 silently to a pass** when their evidence is unreachable (no `gh`, forge
-unreachable, no hub DB on `linear`/`local`) — the gate blocks only on a real objection, and a hold
-posts it to the ticket once (idempotent). `dev-loop merge-guard` stays the read-only/diagnostic
+unreachable, no hub DB on `linear`/`local`). An axis OBJECTION is posted to the ticket once
+(idempotent); readiness and CI-pending/unknown holds refuse the squash but write nothing — re-run,
+don't wait for routing. `dev-loop merge-guard` stays the read-only/diagnostic
 surface (`--json`; `--strict`/`--apply` unchanged) — for inspecting a hold, not the merge path.
 
 Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
