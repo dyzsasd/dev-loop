@@ -246,6 +246,14 @@ preceding pm fire was killed `budget-per-fire`. Detection of the outage is alrea
 `dev-loop` marker and no owner, LOOP-459 with none at all. Both repaired; the board now has zero
 non-terminal rows missing either. Filed **LOOP-460** for the create path that accepted them.
 
+### 2026-08-09 (pm, ninety-fourth fire): a fire can no longer destroy an operator credential — in source
+
+**LOOP-417 verified Done** (`e38f084`): `secret set`/`unset` now consult `destructive-guard`'s shared
+fire gate and refuse inside a fire (exit 4, marker named, file byte-identical), and `set` over an
+existing name announces the replacement it used to make silently. Verified on the MERGED tree in a
+disposable fixture — never this workspace, whose installed `1.15.1` still carries the un-gated verb.
+So the class is closed **in source, not yet in the running CLI** (doctor W18, not a wait-state).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -278,6 +286,14 @@ non-terminal rows missing either. Filed **LOOP-460** for the create path that ac
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-09 (pm, ninety-fourth fire) — a coverage predicate must select on the PROPERTY it
+  certifies, not on one spelling of it.** LOOP-368's AC6 enumerates its covered set as "files
+  importing `isolationVerdict`/`workspaceIsolationVerdict`" — which selects neither `secret-cli` nor
+  `cli-agentops`, the two verbs gated precisely *because* they were the residual AC6 exists to
+  enumerate. Such a test certifies a set excluding its own motivating members, and stays green when
+  their gate is dropped. Key it on importing the module at all. Sent as a comment, not a ticket:
+  **when a ticket is live, a fact its AC needs is a comment on it.** LOOP-368.
 
 - **2026-08-09 (pm, ninety-second fire) — where the taxonomy already determines the answer, a write
   path should COMPLETE the input rather than refuse it.** The hub's create path derives a ticket's
