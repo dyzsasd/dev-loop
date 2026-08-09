@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolveWorkspace, wsWorktree, wsLockPath, wsHubDb } from "./workspace.ts";
 import { effectiveRepo, type Workspace } from "./team-config.ts";
-import { withLock } from "./locks.ts";
+import { withRepoLockPath } from "./locks.ts";
 import { openDb } from "./db.ts";
 import { isMainEntry } from "./is-entry.ts";
 
@@ -41,7 +41,7 @@ async function worktreeAdd(argv: string[]): Promise<number> {
   const worktreePath = wsWorktree(ws, id, resolvedRef);
   const lockPath = wsLockPath(ws, `repo-${resolvedRef}`);
 
-  await withLock(lockPath, {}, async () => {
+  await withRepoLockPath(lockPath, {}, async () => {
     let base: string;
     if (repo.remote) {
       const fetch = git(repoDir, ["fetch", "origin", defaultBranch]);
@@ -209,7 +209,7 @@ export async function worktreeReap(
   }
 
   const reaped: ReapEntry[] = [];
-  await withLock(lockPath, {}, async () => {
+  await withRepoLockPath(lockPath, {}, async () => {
     for (const e of toReap) {
       // 1. Remove the worktree checkout — NEVER `--force` by default. A terminal-ticket worktree may
       //    still hold uncommitted work, and a silent `remove --force` is exactly what makes that loss
