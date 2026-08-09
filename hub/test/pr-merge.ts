@@ -710,6 +710,36 @@ try {
         const viaRemote = prMergeLockPath(wsr, GHREPO);
         ok(viaRemote === viaPath,
           `LOOP-455/AC1: the same repo resolves to the SAME lock from the workspace root (got ${viaRemote} vs ${viaPath})`);
+
+        // …and from the TICKET WORKTREE, with the registry entry's OPTIONAL `remote` absent. Those
+        // are the two conditions under which the ref match used to fall through — the worktree path
+        // equals no registered `path`, and with no `remote` there is nothing left to match on — so
+        // the name became `repo-gh-<owner-repo>` while `with-repo-lock <ref>` kept taking
+        // `repo-<ref>`. Two names is not serialization, and §7 makes the worktree the NORMAL place a
+        // dev tier lands from, so this is the common invocation rather than an exotic one.
+        const wsw = join(ROOT, "ws455w");
+        const clone = join(wsw, "checkout");
+        const gitdir = join(clone, ".git", "worktrees", "LOOP-455");
+        const wt = join(wsw, "wt", "LOOP-455");
+        mkdirSync(gitdir, { recursive: true });
+        mkdirSync(wt, { recursive: true });
+        writeFileSync(join(wsw, "dev-loop.json"), JSON.stringify({
+          schemaVersion: 2, team: { key: "t455w", backend: "service" },
+          repos: { mine: { path: "checkout" } },   // no `remote` — the field is optional
+          projects: {},
+        }));
+        writeFileSync(join(wt, ".git"), `gitdir: ${gitdir}\n`);
+        const viaWorktree = prMergeLockPath(wt, GHREPO);
+        ok(viaWorktree === prMergeLockPath(clone, GHREPO) &&
+           viaWorktree.endsWith(join(".dev-loop", "locks", "repo-mine.lock")),
+          `LOOP-455/AC1: landing from a ticket worktree of a remote-less registry entry takes the ref's own lock, not a second name (got ${viaWorktree})`);
+        // The structural match is on `.git/worktrees/`, so a SUBMODULE does not borrow its
+        // superproject's lock — it is a different repo that happens to nest.
+        const sub = join(wsw, "checkout", "vendor", "sub");
+        mkdirSync(sub, { recursive: true });
+        writeFileSync(join(sub, ".git"), `gitdir: ${join(clone, ".git", "modules", "sub")}\n`);
+        ok(prMergeLockPath(sub, GHREPO).endsWith(join(".dev-loop", "locks", `repo-gh-${GHREPO.replace("/", "-")}.lock`)),
+          `LOOP-455/AC1: a submodule is not a worktree — it does not resolve to the superproject's ref lock (got ${prMergeLockPath(sub, GHREPO)})`);
       } finally {
         for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
       }

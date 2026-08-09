@@ -17,13 +17,13 @@
 // It deliberately does NOT do branch protection on the forge — conventions §12c explains why
 // required-check gating deadlocks the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs
 // (W38 names that posture). This is the in-product gate instead.
-import { realpathSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { realpathSync, readFileSync } from "node:fs";
+import { join, resolve as resolvePath, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { isMainEntry } from "./is-entry.ts";
 import type { ExecFn } from "./landing.ts";
 import { defaultGhExec } from "./landing.ts";
-import { acquireLock } from "./locks.ts";
+import { acquireRepoLock } from "./locks.ts";
 import { tryResolveWorkspace, wsLockPath } from "./workspace.ts";
 import {
   mergeGuard, unevaluatedHold, resolveRegistryCiFreshnessConfig, registryGhRepos, resolveGhRepo, skipClass,
@@ -304,18 +304,13 @@ function prMergeUnlocked(
   }
 }
 
-// How long a contended call waits for the holder before giving up (AC3), and how long a lock may sit
-// before it is treated as abandoned (AC5).
-//
-// STALE_MS is 15 minutes and that is not padding. `acquireLock` treats a lock as stale on EITHER a
-// dead holder OR an age past staleMs, and the default 30s is far shorter than a slow gate-and-squash
-// (seven forge round-trips plus the merge) — a second fire would break a LIVE holder's lock and
-// re-create the exact interleaving this ticket closes. The dead-holder liveness check is what
-// actually reaps a crashed fire, and it fires IMMEDIATELY regardless of age, so a long staleMs costs
-// nothing in recovery time: a killed fire's lock (the ~50-minute budget kill is routine here) is
-// taken over on the next attempt, never waited out. staleMs only bounds a holder that is alive but
-// wedged, and 15 minutes is longer than any real landing.
-const LOCK_STALE_MS = 15 * 60_000;
+// How long a contended call waits for the holder before giving up (AC3). How long a lock may sit
+// before it is treated as abandoned (AC5) is NOT set here: it is `REPO_LOCK_STALE_MS`, owned by the
+// lock module, because staleness is judged by the contender — a stale policy this caller chose for
+// itself would apply to whoever contends with `pr merge`, not to `pr merge`. `acquireRepoLock` takes
+// no `staleMs` for that reason. The dead-holder liveness check, not the age bound, is what reaps a
+// crashed fire, and it fires immediately regardless of age — so the routine ~50-minute budget kill
+// leaves a lock that the next attempt takes over rather than waits out.
 const LOCK_WAIT_MS = 120_000;
 
 // The lock this verb serializes on. It ALWAYS resolves to a path — there is no "could not work out
@@ -329,6 +324,29 @@ const LOCK_WAIT_MS = 120_000;
 // The fallbacks key on the GitHub repo instead, because that — not the local directory — is what two
 // racing fires actually contend for: two clones or two worktrees of one repo are different paths
 // landing into the same branch, and a path-keyed lock would let them straight through.
+// The base clone a LINKED WORKTREE belongs to, or null when `dir` is not one (a plain clone, or not a
+// git dir at all). Read from the filesystem rather than `git rev-parse --git-common-dir`, because this
+// function is the lock's NAME: it must answer identically wherever it runs, without a subprocess that
+// can be absent, slow, or fail into the fallback this exists to avoid.
+//
+// A linked worktree's `.git` is a FILE holding `gitdir: <base>/.git/worktrees/<name>`; a plain clone's
+// is a directory (readFileSync → EISDIR → null). The path is matched structurally, so a SUBMODULE's
+// gitdir (`<super>/.git/modules/<name>`) does not answer — a submodule is not a worktree of its
+// superproject and must not borrow its lock.
+function baseCloneOf(dir: string): string | null {
+  let raw: string;
+  try { raw = readFileSync(join(dir, ".git"), "utf8"); } catch { return null; }
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(raw);
+  if (!m) return null;
+  let abs = resolvePath(dir, m[1]!); // git may record it relative (worktree.useRelativePaths)
+  try { abs = realpathSync(abs); } catch { /* keep the resolved form */ }
+  const parts = abs.split(sep);
+  const i = parts.lastIndexOf("worktrees");
+  if (i < 1 || parts[i - 1] !== ".git") return null;
+  const base = parts.slice(0, i - 1).join(sep) || sep;
+  try { return realpathSync(base); } catch { return base; }
+}
+
 export function prMergeLockPath(repoDir: string, ghRepo: string): string {
   const slug = `repo-gh-${ghRepo.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
   const ws = tryResolveWorkspace(repoDir);
@@ -338,15 +356,21 @@ export function prMergeLockPath(repoDir: string, ghRepo: string): string {
     // is not a reason to skip the lock, and a skip here would be a fail-open nobody would see.
     return join(tmpdir(), "dev-loop-locks", `${slug}.lock`);
   }
-  let real: string;
-  try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
+  const canon = (p: string): string => { try { return realpathSync(p); } catch { return resolvePath(p); } };
+  // A ticket worktree is not the base clone, and landing FROM one is the normal dev-tier invocation
+  // (§7 makes the worktree mandatory for both split tiers, in every landing mode). Its path never
+  // equals a registered `path`, so without this the ref match falls through to the remote match —
+  // which needs the OPTIONAL `remote` — and then to `repo-gh-<owner-repo>`, a name
+  // `with-repo-lock <ref>` never takes. Two names is not serialization. So a worktree resolves to
+  // the clone that owns it, and a registry entry without a `remote` is still matched by path.
+  const selves = [canon(repoDir), baseCloneOf(repoDir)].filter((p): p is string => p !== null);
   const entries = Object.entries(ws.file.repos ?? {}) as [string, { path?: string; remote?: string } | null][];
   for (const [ref, e] of entries) {
     if (!e?.path) continue;
     const abs = resolvePath(ws.root, e.path);
     let absReal = abs;
     try { absReal = realpathSync(abs); } catch { /* keep abs */ }
-    if (absReal === real || abs === real) return wsLockPath(ws, `repo-${ref}`);
+    if (selves.includes(absReal) || selves.includes(abs)) return wsLockPath(ws, `repo-${ref}`);
   }
   // The cwd is not a registered repo path (the workspace-root invocation this verb's --help
   // advertises). Match on the remote instead — one entry only; two entries sharing a remote is the
@@ -383,7 +407,7 @@ export async function prMerge(
   const lockPath = opts.lockPath ?? prMergeLockPath(repoDir, ghRepo);
   let release: () => void;
   try {
-    release = await acquireLock(lockPath, { totalMs: opts.lockWaitMs ?? LOCK_WAIT_MS, staleMs: LOCK_STALE_MS });
+    release = await acquireRepoLock(lockPath, { totalMs: opts.lockWaitMs ?? LOCK_WAIT_MS });
   } catch (e) {
     // FAIL CLOSED, and this is the deliberate §3.4 classification AC5 asks for rather than an
     // inherited default. §3.4 fails OPEN for a forge outage on the reasoning that an outage must not
