@@ -24,6 +24,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   init:             ["init-wizard"],               // guided onboarding wizard — composes team init + first project/repo + doctor NEXT (P1)
   team:             ["team"],                      // init | import | repair | set | add-project | add-repo | add-provider | sync-opencode — workspace (v2)
   secret:           ["secret-cli"],                // set | list | unset — workspace secret VALUES (.dev-loop/secrets.env; §16)
+  settings:         ["settings-cli"],              // LOOP-479: list|get|set|unset — the hub projects.settings_json switchboard (humanWrite, workflow.transitions, notifier cadences)
   up:               ["up"],                        // one-click: local operator console / --bundle headless load / --attach remote hub
   attach:           ["up", "--attach"],            // sugar: `dev-loop attach <url>` ≡ `dev-loop up --attach <url>` (§6.0)
   bundle:           ["bundle"],                    // export — the encrypted move/backup artifact (one-click §4)
@@ -98,6 +99,9 @@ Usage: dev-loop <command> [args]
                               workspace (schema v2): create / migrate-from-v1 / repair / validated config writes
   secret set|list|unset       workspace secret VALUES (.dev-loop/secrets.env, chmod 600) — set prompts on
                               the TTY (echo off) or reads stdin; a value never rides an argument (§16)
+  settings list|get|set|unset the hub project's runtime switchboard (projects.settings_json): humanWrite.enabled
+                              (the web-write forms), workflow.transitions, the notifier cadences. Additive by
+                              path; the daemon re-reads per request, so a flip needs no restart
   up [--cli claude|opencode] [--dry-launch]   one-click: scaffold-if-needed + board daemon + EXEC an
                               interactive operator-console chat (setup happens by talking, not shell);
                               --bundle <f> = headless remote load → run; --attach <url> = console → remote hub
@@ -198,8 +202,8 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "pr", "doc-land",
-  "approve", "revoke", "approvals", "request"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; the approvals verbs read/write the approvals table
+  "worktree", "merge-guard", "pr", "doc-land", "settings",
+  "approve", "revoke", "approvals", "request"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; settings reads/writes the projects row; the approvals verbs read/write the approvals table
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {

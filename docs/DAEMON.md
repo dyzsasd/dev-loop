@@ -237,9 +237,21 @@ the opt-in it returns `404`, byte-identical to a pure read surface.
 ### Enabling human web-write (DL-29)
 
 Off by default — with no config the `POST /ticket*` routes are absent (they `405`, byte-identical to a
-pure read surface) and the forms don't render. To enable, an **operator** sets the project's
-`settings_json.humanWrite.enabled` to `true` (the only field this block reads). It is **operator-set
-via seed / CLI / git — never by an agent** (design §11): the hub agents coordinate through the
+pure read surface) and the forms don't render. To enable, an **operator** runs:
+
+```sh
+dev-loop settings set humanWrite.enabled true --project <key>   # off again: … false, or `settings unset`
+```
+
+That verb (LOOP-479) is the supported writer for `projects.settings_json`. It is additive by path —
+every other key in the row (`scratch`, `hub.transport`, `workflow.transitions`, the notifier cadences)
+survives untouched — and it refuses any path outside its allow-list, because this row gates an HTTP
+write surface. `dev-loop settings --help` lists the settable paths; `settings list` shows what is set.
+Before it existed this section read "operator-set via seed / CLI / git", and none of those three paths
+could reach the key: `seed` takes positionals only, `team set` writes `dev-loop.json` (not the hub row),
+and `hub.db` is not in git — so the documented procedure could not be followed as written.
+
+The flag is **operator-set — never set by an agent** (design §11): the hub agents coordinate through the
 CLI/op layer, and the human web-write path is for a human at the localhost board. The flag is read **fresh
 per request**, so toggling it takes effect without a restart. Writes are attributed to the daemon's
 `DEVLOOP_ACTOR` (default `operator`); comment/description bodies are stored **verbatim** (operator
