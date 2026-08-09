@@ -1190,7 +1190,7 @@ or `Duplicate`), and CI freshness (green computed against a base behind the tip)
 silently to a pass** when their evidence is unreachable (no `gh`, forge
 unreachable, no hub DB on `linear`/`local`). An axis OBJECTION is posted to the ticket once
 (idempotent); readiness and CI-pending/unknown holds refuse the squash but write nothing — re-run,
-don't wait for routing. `dev-loop merge-guard` stays the read-only/diagnostic
+don't wait. `dev-loop merge-guard` stays the read-only/diagnostic
 surface (`--json`; `--strict`/`--apply` unchanged) — for inspecting a hold, not the merge path.
 
 Both are **idempotent + race-safe**: a second dev fire finds the PR already merged and no-ops; the
