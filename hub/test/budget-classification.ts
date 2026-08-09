@@ -110,12 +110,13 @@ ok(classifyFireError(0, false, "") === null, "unchanged: exit 0 is never a failu
   ok(classifyFireError(126, false, "Wrote 3 files.\nDone.\n", false, false, KILLED, REJECTED) === "stalled",
     "PR#276 round 3: a tail with no provider-error evidence does not refute the wedge either");
 
-  // The tail may only refute an INFERENCE, never override a MEASUREMENT. A fire that burned tokens was
-  // not wedged, so nothing about it is in question: the deadline is why it ended.
-  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, PRODUCTIVE) === "budget-deadline",
-    "PR#276 round 3: a kill that DID consume tokens is still the deadline's — a tail pattern does not hijack it");
-  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 3, totalTokens: null }) === "budget-deadline",
-    "PR#276 round 3: measured SPEND alone is enough work to keep the kill on the deadline arm");
+  // The tail may only refute an INFERENCE, never override a MEASUREMENT — and the only measurement
+  // about why a fire ENDED is a breach of its ceiling. A tail with nothing in it leaves the earlier
+  // arms to decide: a productive fire that simply ran out of deadline is the deadline's.
+  ok(classifyFireError(126, false, "Wrote 3 files.\nDone.\n", false, false, KILLED, PRODUCTIVE) === "budget-deadline",
+    "a kill with measured work and no rejection in its tail is the deadline's");
+  ok(classifyFireError(126, false, "", false, false, KILLED, { ceilingUsd: 20, spentUsd: 3, totalTokens: null }) === "budget-deadline",
+    "…and measured spend under the ceiling with an empty tail is too — under it, never a breach (AC1)");
 
   // ── Round 4 — UNKNOWN usage is an absence too, and the killed lane is where it actually lives ────
   //
@@ -138,6 +139,25 @@ ok(classifyFireError(0, false, "") === null, "unchanged: exit 0 is never a failu
   // AC6 must survive the new arm: a measured breach is a fact, and no tail string outranks it.
   ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 20.01, totalTokens: 9_000_000 }) === "budget-per-fire",
     "PR#276 round 3: a MEASURED breach still classifies budget-per-fire whatever its tail says (AC6 survives)");
+
+  // ── Round 5 — work measured EARLIER is not evidence about why the fire ended ─────────────────────
+  //
+  // Rounds 3 and 4 consulted the tail only when the fire had measured no work, which reads a provider
+  // rejection as something only an idle fire can suffer. The real opencode sequence is the opposite: a
+  // multi-turn fire bills a token-bearing step, then meets the 429 and retries against it until the
+  // deadline trips. The adapter keeps that earlier positive usage, so the fire arrives here MEASURED
+  // and throttled at once — and went to "budget-deadline", which is not provider-scoped, so every
+  // sibling agent on the same exhausted key kept firing into the outage.
+  const THROTTLED_AFTER_WORK = { ceilingUsd: 20, spentUsd: 2.5, totalTokens: 180_000 };
+  ok(classifyFireError(126, false, "…step 3 ok\n429 too many requests\n", false, false, KILLED, THROTTLED_AFTER_WORK) === "rate-limit",
+    "PR#276 round 5: a fire that billed a step and THEN hit 429 is rate-limit — earlier work is not why it ended");
+  ok(PROVIDER_SCOPED_CLASSES.has(classifyFireError(126, false, "…step 3 ok\n429 too many requests\n", false, false, KILLED, THROTTLED_AFTER_WORK)!),
+    "PR#276 round 5: …and the class is provider-scoped, so the breaker protects the sibling agents (the actual consequence)");
+  ok(classifyFireError(126, false, "you've hit your session limit · resets 12:20am\n", false, false, KILLED, THROTTLED_AFTER_WORK) === "session-limit",
+    "PR#276 round 5: the same holds for a session cap met after productive turns");
+  // The boundary that must NOT move: a measured BREACH still outranks the tail even after throttling.
+  ok(classifyFireError(126, false, "429 too many requests\n", false, false, KILLED, { ceilingUsd: 20, spentUsd: 20.01, totalTokens: 180_000 }) === "budget-per-fire",
+    "PR#276 round 5: a measured breach still outranks a rejection tail — the ceiling is the one measurement that answers this (AC6)");
 
   // One derivation, asserted by RUNNING both paths rather than by re-stating the patterns: a copied
   // predicate would agree with itself here while the shipped path drifted.
