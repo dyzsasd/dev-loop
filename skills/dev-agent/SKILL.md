@@ -59,10 +59,15 @@ grep a guessed tree; leave it for Step 3 (§19).
 ### Step 0.5 — Merge eligible loop PRs (feature + deploy, §12c)
 When `git.autoMerge` and/or `deploy.style:"release-pr"` are set (absent ⇒ no-op), run the §12c
 fire-start pass exactly. `git worktree prune` first (under the §7 lock).
-**Feature PRs** (`autoMerge`): green + mergeable ⇒ **`dev-loop merge-guard --pr <pr> --strict
---apply` FIRST; non-zero HOLDS that merge** (leave the PR open — the objection is already on the
-ticket), else `gh pr merge --squash --delete-branch`, remove the ticket's worktree, move it to
-`In Review`; a FAILED check ⇒ read the CI failure, fix in the worktree, re-push (cap ~2 cycles;
+**Feature PRs** (`autoMerge`): every `git.mergeChecks` green AND `MERGEABLE` ⇒
+`dev-loop pr merge <pr>`. It runs the guard's three axes and squashes only if they clear; **a
+non-zero exit means the PR was NOT merged** — the objection is already on the ticket, so leave the
+PR open and move to the next one. On exit 0, `git worktree remove --force` the ticket's worktree
+and move the ticket `In Progress → In Review`. Exit codes: 0 merged (or already merged) · 1 held
+(every objecting axis named, with a token) · 2 usage · 3 nothing evaluable · 4 gate clear but the
+squash failed. The readiness pre-filter (pending / conflicting / draft / mergeability-unknown) runs
+INSIDE the verb — it reports those states, you don't pre-check them — and the remedies stay yours:
+a FAILED check ⇒ read the CI failure, fix in the worktree, re-push (cap ~2 cycles;
 the 3rd is a `fix-exhausted` block, §9); `DIRTY` ⇒ rebase onto `origin/<defaultBranch>` +
 `--force-with-lease` (unresolvable ⇒ block); pending ⇒ next fire.
 - **Re-freshen a `stale` hold** (`merge-guard --json` `ciFreshness.verdict:"stale"`: green was
