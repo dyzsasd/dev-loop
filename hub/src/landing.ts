@@ -295,6 +295,12 @@ export interface PrReviewState {
   reviewDecision: "" | "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED";
   changeRequesters: string[];        // logins with an active CHANGES_REQUESTED in latestReviews
   unresolvedThreadAuthors: string[]; // logins with ≥1 unresolved review thread (best-effort GraphQL)
+  // LOOP-491: logins GitHub itself reports as a `Bot` actor on this PR (GraphQL `author.__typename`),
+  // across both arms. The forge-review axis excludes these WITHOUT the operator having to enumerate
+  // them, because "is this reviewer a person" is a fact the forge knows and a config list only
+  // guesses. Best-effort like `unresolvedThreadAuthors`: a GraphQL failure leaves it empty, which
+  // degrades to "everyone is a person" — the safe direction (§3.4: hold, never merge).
+  botLogins: string[];
   url: string;
 }
 
@@ -323,30 +329,45 @@ export function readPrReviewState(
       .map((r) => r.author?.login)
       .filter(Boolean) as string[];
 
-    // 2. Unresolved threads — best-effort GraphQL; failure degrades to empty (still honours reviewDecision)
+    // 2. Unresolved threads + actor types — best-effort GraphQL; failure degrades to empty
+    //    (still honours reviewDecision). `__typename` is selected on BOTH author positions: the
+    //    thread arm reads it here, and the `reviews` selection exists only to type the authors the
+    //    CHANGES_REQUESTED arm found via `latestReviews` — which carries no type field of its own.
+    //    Deliberately additive: `latestReviews` keeps deciding WHO requested changes (latest review
+    //    per author), and this query only answers WHAT each of them is (LOOP-491 AC5).
     const [owner, repo] = ghRepo.split("/");
     const prNumber = prData.number;
     const unresolvedThreadAuthors: string[] = [];
+    const botLogins: string[] = [];
+    const noteActor = (a?: { login?: string; __typename?: string }): string | undefined => {
+      const login = a?.login;
+      if (login && a?.__typename === "Bot" && !botLogins.includes(login)) botLogins.push(login);
+      return login;
+    };
     try {
-      const query = "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved,comments(first:1){nodes{author{login}}}}}}}}";
+      const query = "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviews(last:100){nodes{author{login,__typename}}},reviewThreads(first:100){nodes{isResolved,comments(first:1){nodes{author{login,__typename}}}}}}}}";
       const gqlResult = exec(["api", "graphql", "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `repo=${repo}`, "-F", `number=${prNumber}`]);
       if (gqlResult.ok) {
-        const gqlData = JSON.parse(gqlResult.stdout) as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes: Array<{ isResolved: boolean; comments: { nodes: Array<{ author: { login: string } }> } }> } } } } };
-        const threads = gqlData?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-        for (const t of threads) {
-          if (!t.isResolved) {
-            const login = t.comments.nodes[0]?.author?.login;
-            if (login && !unresolvedThreadAuthors.includes(login)) unresolvedThreadAuthors.push(login);
-          }
+        type Actor = { login: string; __typename?: string } | null;
+        const gqlData = JSON.parse(gqlResult.stdout) as { data?: { repository?: { pullRequest?: {
+          reviews?: { nodes: Array<{ author: Actor }> };
+          reviewThreads?: { nodes: Array<{ isResolved: boolean; comments: { nodes: Array<{ author: Actor }> } }> };
+        } } } };
+        const pr = gqlData?.data?.repository?.pullRequest;
+        for (const r of pr?.reviews?.nodes ?? []) noteActor(r?.author ?? undefined);
+        for (const t of pr?.reviewThreads?.nodes ?? []) {
+          const login = noteActor(t.comments?.nodes?.[0]?.author ?? undefined);
+          if (!t.isResolved && login && !unresolvedThreadAuthors.includes(login)) unresolvedThreadAuthors.push(login);
         }
       }
-    } catch { /* graphql failure → empty unresolvedThreadAuthors */ }
+    } catch { /* graphql failure → empty unresolvedThreadAuthors + empty botLogins */ }
 
     return {
       pr: prData.number,
       reviewDecision: (prData.reviewDecision ?? "") as PrReviewState["reviewDecision"],
       changeRequesters,
       unresolvedThreadAuthors,
+      botLogins,
       url: prData.url ?? "",
     };
   } catch {
