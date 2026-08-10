@@ -10,7 +10,7 @@ import { isMainEntry } from "./is-entry.ts";
 import { dirname, join } from "node:path";
 import { resolveWorkspace, wsLockPath, resolveHubDbPath, resolveRepoFromCwd } from "./workspace.ts";
 import { effectiveRepo, inferProjectForRepo } from "./team-config.ts";
-import { pushGuard } from "./push-guard.ts";
+import { pushGuard, approvalRefusalLine } from "./push-guard.ts";
 import { withRepoLockPath } from "./locks.ts";
 
 function die(msg: string, code = 1): never {
@@ -383,13 +383,29 @@ Design: landing-discipline §4.6 (LOOP-57).`);
       // so passenger detection (which keys on the dev-loop/<id> branch shape) naturally returns [].
       // We still check passengers for future-safety: if A2 or another caller extends detection here,
       // the hard-stop gate is in place.
-      const guard = pushGuard(repoDir, defaultBranch, dbPath, defaultBranch);
+      //
+      // `--dry-run` is documented as "print what would push without mutating anything", and the
+      // approvals consult inside the guard appends an `approval.attempt` ledger row by default — so
+      // the one command that promises to write nothing was writing to the audit trail (R10, PR #283
+      // review). `record:false` suppresses that row ONLY: every approval check still runs and still
+      // hard-stops below, so the dry-run reports the same verdict the real run would.
+      const guard = pushGuard(repoDir, defaultBranch, dbPath, defaultBranch, { record: !dryRun });
 
       // Passengers → hard stop (unchanged from push-guard default behaviour)
       if (guard.passengers.length) {
         process.stderr.write(`doc-land: STOPPED — push-guard passenger finding(s):\n`);
         for (const p of guard.passengers) process.stderr.write(`  ⛔ passenger: ${p.sha} "${p.subject}"\n`);
         return { ok: false, blockedMsg: "push-guard: passenger commit found — drop it before landing" };
+      }
+
+      // Approvals → hard stop (LOOP-394). The step-1 docs-only assertion is what lets reference
+      // findings below degrade to a warning, and it buys nothing here: "this range is only docs" says
+      // nothing about whether the human has authorised publishing it. A `push:` row on the ticket is
+      // the operator's statement that this work awaits them, and doc-land pushes to defaultBranch.
+      if (guard.approvals.length) {
+        process.stderr.write(`doc-land: STOPPED — the approvals gate refused this push:\n`);
+        for (const a of guard.approvals) process.stderr.write(`  ${approvalRefusalLine(a)}\n`);
+        return { ok: false, blockedMsg: "push-guard: this commit awaits human approval — not landed" };
       }
 
       // Reference findings (Canceled/Duplicate ticket refs in commit prose) →

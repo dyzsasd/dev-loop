@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { AGENT_HANDLES, AGENT_HANDLE_SET } from "./agent-handles.ts";
+import { actionClasses } from "./approvals.ts"; // LOOP-394 — the ONE action-class registry (design §4)
 
 // ─── Types (impl §2.1) ───────────────────────────────────────────────────────
 export type DocRef = string | { linearDocument: string } | { hubDoc: string } | { path: string };
@@ -112,6 +113,12 @@ export interface TeamBlock {
   bootCorpus?: boolean;
   backup?: BackupBlock;                                       // LOOP-339: board-snapshot cadence/retention (everyHours 0 = OFF)
   budget?: { dailyUsd?: number | null; perFireUsd?: number }; // cost-governance ceilings (design budget-ceiling); dailyUsd = rolling 24h cap (null/unset = OFF), perFireUsd = per-fire cap
+  // LOOP-394 (design approvals §8) — the ONE approvals switch: a per-action-class ENFORCEMENT enable
+  // list, default EMPTY. The RECORD (grant/list/revoke/request) has no switch and is unconditional;
+  // enforcement reads the record, so modelling them as two knobs would make `enforce` non-empty with
+  // the record off representable. Per-class rather than global is required, not stylistic: enabling
+  // `reopen` is nearly free, whereas enabling `push` changes what every fire in the workspace may land.
+  approvals?: { enforce?: string[] };
 }
 
 export interface RepoEntry {
@@ -428,6 +435,45 @@ function validateBudget(budget: unknown, E: Emit): void {
     E("E18", "team.budget.perFireUsd", `budget.perFireUsd must be a positive number (got ${JSON.stringify(b.perFireUsd)})`);
 }
 
+// E18 — team.approvals.enforce (LOOP-394, design approvals §8): the per-action-class enforcement
+// enable list. Members are validated against the ACTION_CLASSES registry rather than accepted as
+// opaque strings, and the reason is the same one design §4 gives for the key grammar: a typo'd class
+// name here is not a cosmetic error, it is enforcement the operator believes is ON and that is
+// silently OFF. Refusing at load is what makes `approvals.enforce: ["pushh"]` impossible to hold.
+const APPROVALS_KEYS = new Set(["enforce"]);
+function validateApprovals(approvals: unknown, E: Emit): void {
+  const a = approvals as { enforce?: unknown } | null;
+  if (a === null || typeof a !== "object" || Array.isArray(a)) { E("E18", "team.approvals", "approvals must be an object"); return; }
+  for (const k of Object.keys(a as object))
+    if (!APPROVALS_KEYS.has(k)) E("E18", `team.approvals.${k}`, `unknown approvals key '${k}' (expected ${[...APPROVALS_KEYS].join(", ")})`);
+  if (a.enforce === undefined) return;
+  if (!Array.isArray(a.enforce)) {
+    E("E18", "team.approvals.enforce", `approvals.enforce must be an array of action-class names (legal: ${actionClasses().join(", ")}) — omit it or use [] to enforce nothing`);
+    return;
+  }
+  const legal = new Set(actionClasses());
+  const seen = new Set<string>();
+  for (const raw of a.enforce as unknown[]) {
+    if (typeof raw !== "string" || !raw.trim()) { E("E18", "team.approvals.enforce", `an entry must be a non-empty action-class name (legal: ${actionClasses().join(", ")})`); continue; }
+    if (!legal.has(raw)) E("E18", "team.approvals.enforce", `unknown action class '${raw}' — legal classes: ${actionClasses().join(", ")}. A class name that matches nothing is enforcement you believe is on and that is off.`);
+    else if (seen.has(raw)) E("E18", "team.approvals.enforce", `action class '${raw}' is listed more than once`);
+    seen.add(raw);
+  }
+}
+
+/**
+ * Is enforcement ON for this action class? The ONE reader every enforcing consumer calls (design §8).
+ *
+ * Default-off is the whole safety story of this increment: an absent block, an absent `enforce`, or an
+ * empty list all answer `false`, so a workspace that has never heard of approvals behaves exactly as
+ * it did before. Consumers must not re-derive this from `team.approvals` themselves — a second copy of
+ * the default is a second place for it to drift ON.
+ */
+export function approvalsEnforced(team: Pick<TeamBlock, "approvals"> | undefined | null, actionClass: string): boolean {
+  const list = team?.approvals?.enforce;
+  return Array.isArray(list) && list.includes(actionClass);
+}
+
 // team.key/backend/E09 + E12/E13 (team level) + E07 comms + E16 providers/opencodePermission.
 function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   if (typeof team.key !== "string" || !TEAM_KEY_RE.test(team.key)) E("E02", "team.key", `team.key must match ${TEAM_KEY_RE}`);
@@ -467,6 +513,7 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
       E("E16", "team.opencodePermission", "opencodePermission must be a JSON object (opencode permission config, injected per fire — replaces the certified wildcard-deny default wholesale)");
   }
   if (team.budget !== undefined) validateBudget(team.budget, E);
+  if (team.approvals !== undefined) validateApprovals((team as { approvals?: unknown }).approvals, E); // LOOP-394
 }
 
 const PROVIDER_KEYS = "kind, baseUrl, authTokenEnv, models, extraOptions, effortMode";

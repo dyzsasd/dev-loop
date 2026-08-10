@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { parseDirtyPaths } from "../src/doc-land.ts";
+import { pushApprovalKey } from "../src/push-guard.ts";
+import { requestApproval } from "../src/approvals.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -203,6 +205,62 @@ try {
   ok(/dry-run/.test(resDry.stdout), `--dry-run output mentions 'dry-run'`);
   const originAfterDry = git(repoDir, ["rev-parse", "origin/main"]);
   ok(originAfterDry === originBeforeDry, `--dry-run: origin/main unchanged (nothing pushed)`);
+
+  // ── --dry-run under the approvals gate: refuses, and writes NOTHING (LOOP-394 R10) ──────────────
+  //
+  // `--dry-run` is documented as "print what would push without mutating anything", but the approvals
+  // consult inside push-guard ledgers an `approval.attempt` row by default — so the one command that
+  // promises to write nothing appended to the audit trail on every inspection.
+  //
+  // The non-dry run is the CONTROL and it is what makes this discriminating: deleting the consult, or
+  // passing `record:false` everywhere, would satisfy the dry-run arm alone. Both arms must ALSO still
+  // refuse — suppressing the ledger row must not weaken the gate, which is the other way this fix
+  // could go wrong.
+  {
+    const wsFile = join(wsRoot, "dev-loop.json");
+    const wsBefore = readFileSync(wsFile, "utf8");
+    const cfg = JSON.parse(wsBefore);
+    cfg.team.approvals = { enforce: ["push"] };
+    writeFileSync(wsFile, JSON.stringify(cfg, null, 2));
+
+    git(repoDir, ["reset", "--hard", "origin/main"]);
+    writeFileSync(join(repoDir, "docs", "STRATEGY.md"), "# Strategy\n\nAwaiting approval.\n");
+    git(repoDir, ["add", "docs/STRATEGY.md"]);
+    git(repoDir, ["commit", "-qm", "docs(strategy): a landing that awaits the operator (TEST-2)"]);
+    const gatedSha = git(repoDir, ["rev-parse", "HEAD"]);
+
+    const d2 = openDb(dbPath);
+    d2.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('TEST-2','p','t-TEST-2','Todo',0,'[]','[]','pm','t','t')").run();
+    requestApproval(d2, { projectId: "p", actionKey: pushApprovalKey("main", gatedSha), requestedBy: "pm", ticketId: "TEST-2" });
+    d2.close();
+
+    const attempts = (): number => {
+      const d = openDb(dbPath);
+      try { return (d.prepare("SELECT count(*) c FROM events WHERE kind='approval.attempt'").get() as { c: number }).c; }
+      finally { d.close(); }
+    };
+
+    const before = attempts();
+    const resDryGated = run(["--repo", "dev-loop", "--dry-run"], wsRoot, { DEVLOOP_HUB_DB: dbPath });
+    const afterDry = attempts();
+    ok(resDryGated.status !== 0, `--dry-run under the gate still REFUSES an ungranted push (got ${resDryGated.status})`);
+    ok(/approvals gate refused|awaits human approval/.test(resDryGated.stderr),
+      `--dry-run names the approvals refusal (got: ${resDryGated.stderr.trim().slice(0, 160)})`);
+    ok(afterDry === before,
+      `--dry-run appends NO approval.attempt row — it mutates nothing, as documented (${before} → ${afterDry})`);
+
+    const resRealGated = run(["--repo", "dev-loop"], wsRoot, { DEVLOOP_HUB_DB: dbPath });
+    const afterReal = attempts();
+    ok(resRealGated.status !== 0, `control: the REAL run refuses the same push (got ${resRealGated.status})`);
+    ok(afterReal === before + 1,
+      `control: the real run DOES ledger the attempt — the audit line is suppressed only for an inspection (${before} → ${afterReal})`);
+    const originAfterGated = git(repoDir, ["rev-parse", "origin/main"]);
+    ok(originAfterGated === originBeforeDry, `neither run pushed — the gate held on both`);
+
+    // Restore: later blocks are written against an unenforced workspace.
+    writeFileSync(wsFile, wsBefore);
+    git(repoDir, ["reset", "--hard", "origin/main"]);
+  }
 
   // ── (g) origin advances with a CODE commit while local has a doc-only commit → LANDS ─────────
   //   LOOP-119, the whole ticket: step-1's two-dot diff saw origin's own code file and named it
