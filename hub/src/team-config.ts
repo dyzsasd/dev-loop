@@ -61,6 +61,29 @@ export interface ProviderEntry {
   effortMode?: "passthrough" | "strip";
 }
 
+// ─── The two governing knobs: one vocabulary (LOOP-408) ──────────────────────
+// §12 `mode` and §12a `autonomy` are read by agents and projected into the hub `projects` row,
+// whose CHECK constraints already enumerate exactly these tokens (db.ts:72-73). Three surfaces
+// used to spell `autonomy` three ways; these constants are the single source, imported by
+// team-edit (the settable enum) and team-init (the flag) rather than re-typed.
+export const MODES = ["dry-run", "live"] as const;
+export type Mode = (typeof MODES)[number];
+export const AUTONOMIES = ["ask", "full"] as const;
+export type Autonomy = (typeof AUTONOMIES)[number];
+// `guarded` is a LEGACY INPUT alias only: accepted at every boundary, normalized on the way
+// through, never stored and never resolved. It exists so a workspace written by an older
+// `team init` keeps loading without a migration touching the operator's file.
+export const AUTONOMY_INPUTS = ["ask", "full", "guarded"] as const;
+export type AutonomyInput = (typeof AUTONOMY_INPUTS)[number];
+
+// The alias DIRECTION is the safety property, not an implementation detail: `guarded` meant
+// "check with the operator before acting", which is §12a's `ask`. Mapping it to `full` would
+// silently grant every default-initialized workspace standing authority to act without asking.
+// Asserted explicitly by name in test/team-config.ts.
+export function normalizeAutonomy(v: AutonomyInput | undefined): Autonomy | undefined {
+  return v === undefined ? undefined : v === "guarded" ? "ask" : v;
+}
+
 export interface TeamBlock {
   key: string;
   backend: "linear" | "service";
@@ -69,8 +92,8 @@ export interface TeamBlock {
   deployPolicy?: Record<string, "auto" | "manual">;
   docSystem?: "local" | "backend";
   docs?: { vision?: DocRef | null; lessons?: { mirror?: boolean } };
-  autonomy?: string;
-  mode?: string;
+  autonomy?: AutonomyInput;
+  mode?: Mode;
   intake?: { mode?: "autonomous" | "passive"; todoDepthCap?: number; acCompletenessGate?: boolean };
   comms?: { provider: "slack" | "lark"; webhookEnv: string };
   reports?: unknown;
@@ -125,8 +148,8 @@ export interface ProjectEntry {
   models?: unknown;
   efforts?: unknown;
   reports?: unknown;
-  mode?: string;
-  autonomy?: string;
+  mode?: Mode;
+  autonomy?: AutonomyInput;
   docSystem?: string;
   defaultCodingAgent?: string;
   codingAgentDefaults?: unknown;
@@ -211,6 +234,18 @@ export function normalizedRel(p: string | undefined): string | null {
 // calls them in the ORIGINAL emission order (the E/W sequence is observable via WsValidationError
 // messages — order preservation is part of behavior), and the same closures hoisted with an Emit param.
 type Emit = (code: string, path: string, message: string) => void;
+
+// E19 — the two governing knobs (§12 `mode`, §12a `autonomy`), validated identically wherever they
+// appear (team block and every project). Until LOOP-408 an unrecognized token was accepted in
+// silence and then resolved to itself, so `"fulll"` reached an agent's prose as an autonomy posture
+// no section defines — the operator's typo decided nothing and said nothing. The path in the message
+// is the exact key to fix, which is the whole point of naming it here rather than at the read site.
+function checkGovernanceTokens(o: { mode?: unknown; autonomy?: unknown }, base: string, E: Emit): void {
+  if (o.mode !== undefined && !(MODES as readonly unknown[]).includes(o.mode))
+    E("E19", `${base}.mode`, `mode must be one of ${MODES.join("|")} (got ${JSON.stringify(o.mode)})`);
+  if (o.autonomy !== undefined && !(AUTONOMY_INPUTS as readonly unknown[]).includes(o.autonomy))
+    E("E19", `${base}.autonomy`, `autonomy must be one of ${AUTONOMIES.join("|")} (got ${JSON.stringify(o.autonomy)}) — "guarded" is also accepted as a legacy alias and resolves to "ask"`);
+}
 
 // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
 function checkIntake(raw: unknown, path: string, E: Emit): void {
@@ -409,6 +444,7 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   if (team.backend === "linear" && (typeof team.linearTeam !== "string" || !team.linearTeam.trim()))
     W("E09", "team.linearTeam", `backend:"linear" has a blank team.linearTeam — fires cannot target a Linear team until it is filled: dev-loop team set team.linearTeam "<Team Name>"`);
   if (team.backup !== undefined) validateBackup((team as { backup?: unknown }).backup, E); // LOOP-339
+  checkGovernanceTokens(team, "team", E); // LOOP-408 — §12 mode / §12a autonomy
   if (team.intake !== undefined) checkIntake(team.intake, "team.intake", E);
   if (team.hub !== undefined) checkHub(team.hub, "team.hub", E);
 
@@ -508,6 +544,7 @@ function validateProjects(projects: Record<string, ProjectEntry>, repos: Record<
       if (prev) E("E10", `projects.${key}.linearProjectId`, `linearProjectId '${p.linearProjectId}' is claimed by both ${prev} and ${key}`);
       else seenLinearProjectId.set(p.linearProjectId, key);
     }
+    checkGovernanceTokens(p ?? {}, `projects.${key}`, E); // LOOP-408 — the project override of the same knobs
     if (p?.intake !== undefined) checkIntake(p.intake, `projects.${key}.intake`, E);
     if (p?.hub !== undefined) checkHub(p.hub, `projects.${key}.hub`, E);
     if (p?.communication !== undefined) checkCommunication(p.communication, `projects.${key}.communication`, E);
@@ -629,7 +666,8 @@ export function loadWorkspace(root: string): Workspace {
 
 // ─── Resolution API (impl §2.3) ───────────────────────────────────────────────
 export interface ResolvedRepo extends RepoEntry { ref: string; absPath: string; defaultBranch: string }
-export interface ResolvedProject extends ProjectEntry { key: string; backend: string; mode?: string; autonomy?: string; docSystem?: string; reports?: unknown }
+// `autonomy` NARROWS on resolution: the input alias set goes in, the canonical §12a pair comes out.
+export interface ResolvedProject extends Omit<ProjectEntry, "autonomy"> { key: string; backend: string; mode?: Mode; autonomy?: Autonomy; docSystem?: string; reports?: unknown }
 
 export function effectiveRepo(ws: Workspace, ref: string): ResolvedRepo {
   const r = ws.file.repos[ref];
@@ -657,7 +695,9 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     ...p, key,
     backend: t.backend,
     mode: p.mode ?? t.mode,
-    autonomy: p.autonomy ?? t.autonomy,
+    // Normalize at RESOLUTION, never by rewriting the operator's file: a config carrying the
+    // legacy `guarded` keeps working untouched and every reader sees the canonical `ask`.
+    autonomy: normalizeAutonomy(p.autonomy ?? t.autonomy),
     docSystem: p.docSystem ?? t.docSystem,
     reports: p.reports ?? t.reports,
     defaultCodingAgent: p.defaultCodingAgent ?? t.defaultCodingAgent,

@@ -40,7 +40,11 @@ try {
   ok(r1.code === 0, "init --yes exits 0");
   const cfg = readJson(join(acme, "dev-loop.json"));
   ok(cfg.schemaVersion === 2 && cfg.team.backend === "service" && cfg.team.key === "acme", "defaults: service backend, team key from the dir name");
-  ok(cfg.team.mode === "dry-run" && cfg.team.autonomy === "guarded" && cfg.team.deployPolicy.prod === "manual" && cfg.team.reports.sink === "files", "init defaults: dry-run / guarded / prod manual / files");
+  // LOOP-408: the autonomy default is the CANONICAL §12a token. It read "guarded" until 1.15.1 —
+  // a token §12a does not define, that no code branched on, and that `team init` was the only
+  // writer of. A fresh workspace must not be minted carrying it.
+  ok(cfg.team.mode === "dry-run" && cfg.team.autonomy === "ask" && cfg.team.deployPolicy.prod === "manual" && cfg.team.reports.sink === "files", "init defaults: dry-run / ask / prod manual / files");
+  ok(!/guarded/.test(r1.out), "the wizard's printed defaults say `ask`, never `guarded`");
   ok(!!cfg.projects.acme, "--yes creates the default first project");
   const keys = hubKeys(acme);
   ok(keys.includes("_team") && keys.includes("acme"), "hub rows seeded: the _team intake row + the auto-seeded project");
