@@ -669,6 +669,35 @@ try {
       "LOOP-379 increments: …and a neighbour linked to one increment's child is still not a parent — partitioning does not relax the direction");
   }
 
+  // ── PR #278 review (P2): a child that names MORE than its parent still has one ────────────────
+  // `relatedTo` is one general append-only field — §4 splits and §15 coverage siblings ride it too
+  // — so a child's outgoing set grows over its life. A single-child design whose child later gains
+  // one ordinary link named two eligible tickets, attributed to neither, and then lost the slug
+  // outright: the undirected fallback saw both as linked to the only child and BOUND 3 resolved it
+  // to nobody. The parent lost PM routing, the Backlog close protection and `sensitive` inheritance
+  // because a follow-up had been filed.
+  //
+  // §21a records the parent edge on BOTH ends — the child links its parent at filing, the parent
+  // back-links every child it staged — so the handshake is what a coverage link cannot fake.
+  {
+    mk("L379M-P", "the sole design of the mesh module", "In Review",
+      ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"], ["L379M-C"]);       // …and names its child back
+    mk("L379M-COVERAGE", "a coverage follow-up", "Todo", ["dev-loop", "Bug", "qa"]);
+    // The child names its parent AND the follow-up — the §15 shape, on the ONLY child of the slug.
+    mk("L379M-C", "Design: hubDoc:design/mesh-mod\n\nthe only slice", "Backlog", ["dev-loop"],
+      ["L379M-P", "L379M-COVERAGE"]);
+
+    const pm2 = designParentIds(db, pid);
+    ok(pm2.has("L379M-P"),
+      "PR #278 P2: a child naming its parent AND a coverage sibling still resolves its parent — the mutual §21a link is the parent edge");
+    ok(!pm2.has("L379M-COVERAGE"),
+      "PR #278 P2: …and the sibling it also names is NOT a parent — the handshake is what separates them, not the count");
+    // The consumer the leak reached: the close gate must still see the staged child.
+    const r = setState("pm", "L379M-P", "Done");
+    ok(r.ok === false && /still in Backlog/.test(r.error) && /L379M-C/.test(r.error),
+      `PR #278 P2: …so R2 still refuses to close it over its one staged child (got ${JSON.stringify(r.error.slice(0, 90))})`);
+  }
+
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }

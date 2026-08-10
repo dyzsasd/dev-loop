@@ -274,7 +274,23 @@ function resolveDesignParents(
       // the child.
       const declaredParentOf = (c: string): string | null => {
         const named = [...(declared.get(c) ?? [])].filter((id) => candidateIds.has(id));
-        return named.length === 1 ? named[0] : null;
+        if (named.length === 1) return named[0];
+        // A child names MORE than its parent (PR #278 review, P2). `relatedTo` is one general
+        // append-only field — §4 splits and §15 coverage siblings ride it too — so "the one eligible
+        // ticket this child names" is not stable over a child's life: a single-child design whose
+        // child later gains a coverage link would name two candidates, attribute to neither, and
+        // then lose the slug entirely, because the undirected fallback sees both as linked to every
+        // child and BOUND 3 resolves the ambiguity to nobody. Losing PM routing and the Backlog
+        // close protection because a follow-up was filed is not a bound, it is a leak.
+        //
+        // §21a records the parent edge on BOTH ends and nothing else: the child carries
+        // `relatedTo:[<parent>]` at filing, and the parent back-links every child it staged in one
+        // write. So the handshake — c names P and P names c — is what distinguishes the parent edge
+        // from an ordinary outgoing relation, and it is read the same way as everything else here,
+        // off the links rather than out of prose. A tie among mutual candidates is still nobody:
+        // this only resolves cases that returned null, it never overrides an unambiguous one.
+        const mutual = named.filter((id) => declared.get(id)?.has(c));
+        return mutual.length === 1 ? mutual[0] : null;
       };
       const ownerOfChild = new Map<string, string>();
       for (const c of allChildren) {
