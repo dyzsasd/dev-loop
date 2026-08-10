@@ -14,8 +14,8 @@ import { execFileSync } from "node:child_process";
 import { createServer as netCreateServer } from "node:net";
 import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync, readdirSync, existsSync, realpathSync } from "node:fs";
+import { join, dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
@@ -410,15 +410,24 @@ async function daemonUp(): Promise<number> {
   return daemonUpForKey(key);
 }
 
-async function daemonUpAll(): Promise<number> {
+// The exact set `up-all` will start, and the workspace it came from. Exported so AC3 — "a project
+// belonging to a DIFFERENT workspace is not started" — can be asserted without spawning daemons.
+// The binding arrives purely as env (DEVLOOP_WORKSPACE) + cwd, i.e. what launchd hands the process.
+export function upAllServiceKeys(): { workspace: string | null; keys: string[] } {
   resolveDaemonContext();
+  const ws = tryResolveWorkspace();
   const cfg = loadProjectsConfig();
   const entries = Object.entries(cfg?.projects ?? {}) as Array<[string, { backend?: string }]>;
-  const serviceKeys = entries.filter(([, p]) => p.backend === "service").map(([key]) => key);
+  return { workspace: ws?.root ?? null, keys: entries.filter(([, p]) => p.backend === "service").map(([key]) => key) };
+}
+
+async function daemonUpAll(): Promise<number> {
+  const { workspace, keys: serviceKeys } = upAllServiceKeys();
   if (!serviceKeys.length) {
     console.log(`[daemon] up-all: no backend:"service" projects configured in ${devloopProjectsPath()}.`);
     return 0;
   }
+  console.log(`[daemon] up-all: starting ${serviceKeys.length} service project(s) of workspace ${workspace ?? "(unresolved)"}: ${serviceKeys.join(", ")}`);
   let code = 0;
   for (const key of serviceKeys) {
     const c = await daemonUpForKey(key);
@@ -445,6 +454,9 @@ async function daemonDown(): Promise<number> {
 
 async function daemonStatus(): Promise<number> {
   resolveDaemonContext();
+  // AC4 (LOOP-469): which workspace the login item will start, printed before anything else and in
+  // EVERY branch below — a binding you must read a plist to discover is not a readable decision.
+  if (platform() === "darwin") console.log(`[daemon] ${describeAutostartBinding(readAutostartBinding())}`);
   const key = lcResolveKey();
   if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo). Set DEVLOOP_PROJECT=<key>, or run from inside a configured repo."); return 0; }
   const info = lcReadRun(key);
@@ -467,51 +479,165 @@ async function daemonStatus(): Promise<number> {
   return 0;
 }
 
-function launchAgentPath(): string {
+export function launchAgentPath(): string {
   return join(process.env.HOME || "", "Library", "LaunchAgents", `${AUTOSTART_LABEL}.plist`);
 }
 
 function plistEscape(s: string): string {
   return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
+// `&amp;` LAST: escaping "&lt;" yields "&amp;lt;", which contains no "&lt;" substring, so the
+// entity-first order can never double-unescape.
+function plistUnescape(s: string): string {
+  return s.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+}
 
-function installAutostart(): number {
-  if (platform() !== "darwin") {
-    console.error("[daemon] install-autostart currently supports macOS LaunchAgent only.");
-    return 1;
-  }
-  const plist = launchAgentPath();
-  mkdirSync(dirname(plist), { recursive: true });
-  const node = lcNode();
-  const self = lcDaemonEntry();
-  const env: Record<string, string> = {};
-  for (const k of ["DEVLOOP_HOME", "DEVLOOP_PROJECTS_JSON", "DEVLOOP_HUB_DB", "DEVLOOP_RUN_DIR", "DEVLOOP_NODE"]) {
-    if (process.env[k]) env[k] = process.env[k]!;
-  }
-  const envXml = Object.entries(env).map(([k, v]) => `      <key>${plistEscape(k)}</key><string>${plistEscape(v)}</string>`).join("\n");
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+// ─── Autostart binding (LOOP-469, design `state-locality` I1 second half) ─────
+// An autostart binding must be a WRITTEN, READABLE decision. The plist names exactly ONE workspace
+// (`WorkingDirectory` + `DEVLOOP_WORKSPACE`); it no longer snapshots the install shell's ambient
+// DEVLOOP_HOME / DEVLOOP_PROJECTS_JSON / DEVLOOP_HUB_DB / DEVLOOP_RUN_DIR. Those four each override
+// workspace resolution — `loadProjectsConfig()` short-circuits on DEVLOOP_PROJECTS_JSON and
+// `resolveDaemonContext()` short-circuits on DEVLOOP_RUN_DIR+DEVLOOP_HUB_DB — so carrying them
+// forward would make DEVLOOP_WORKSPACE inert and let a shell that no longer exists decide which
+// board the login item serves. That is the incident. DEVLOOP_NODE is the one legitimate carry-over:
+// it names the interpreter, not a workspace.
+export const AUTOSTART_CARRIED_ENV = ["DEVLOOP_NODE"] as const;
+
+// Pure renderer — no fs, no launchctl — so the plist's CONTENT is directly assertable (AC2/AC5).
+export function autostartPlistXml(o: {
+  node: string; entry: string; workspace: string; logDir: string; carriedEnv?: Record<string, string>;
+}): string {
+  const env: Record<string, string> = { DEVLOOP_WORKSPACE: o.workspace, ...(o.carriedEnv ?? {}) };
+  const envXml = Object.entries(env)
+    .map(([k, v]) => `      <key>${plistEscape(k)}</key><string>${plistEscape(v)}</string>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>${AUTOSTART_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${plistEscape(node)}</string>
-    <string>${plistEscape(self)}</string>
+    <string>${plistEscape(o.node)}</string>
+    <string>${plistEscape(o.entry)}</string>
     <string>up-all</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>${plistEscape(join(lcRunDir(), "daemon-autostart.out.log"))}</string>
-  <key>StandardErrorPath</key><string>${plistEscape(join(lcRunDir(), "daemon-autostart.err.log"))}</string>
-${envXml ? `  <key>EnvironmentVariables</key>\n  <dict>\n${envXml}\n  </dict>\n` : ""}</dict>
+  <key>WorkingDirectory</key><string>${plistEscape(o.workspace)}</string>
+  <key>StandardOutPath</key><string>${plistEscape(join(o.logDir, "daemon-autostart.out.log"))}</string>
+  <key>StandardErrorPath</key><string>${plistEscape(join(o.logDir, "daemon-autostart.err.log"))}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+${envXml}
+  </dict>
+</dict>
 </plist>
 `;
+}
+
+export interface AutostartBinding {
+  installed: boolean;
+  plist: string;
+  /** The bound workspace root; null when a plist exists but names none (pre-LOOP-469 format). */
+  workspace: string | null;
+}
+
+// AC4: the binding is readable without parsing the plist by hand. One reader, two consumers
+// (`daemon status` and doctor's reconcileAutostart), so the two can never disagree.
+export function readAutostartBinding(plistPath: string = launchAgentPath()): AutostartBinding {
+  if (!existsSync(plistPath)) return { installed: false, plist: plistPath, workspace: null };
+  let xml: string;
+  try { xml = readFileSync(plistPath, "utf8"); } catch { return { installed: true, plist: plistPath, workspace: null }; }
+  const fromEnv = /<key>DEVLOOP_WORKSPACE<\/key>\s*<string>([^<]*)<\/string>/.exec(xml);
+  const fromWd = /<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/.exec(xml);
+  const raw = fromEnv?.[1] ?? fromWd?.[1] ?? null;
+  return { installed: true, plist: plistPath, workspace: raw === null ? null : plistUnescape(raw) };
+}
+
+export function describeAutostartBinding(b: AutostartBinding): string {
+  if (!b.installed)
+    return "daemon autostart — no login item installed (the default; run `dev-loop daemon install-autostart` inside a workspace to opt in)";
+  if (!b.workspace)
+    return `daemon autostart — installed at ${b.plist} but bound to NO workspace (pre-LOOP-469 plist: it starts whatever the install shell exported); re-run \`dev-loop daemon install-autostart\` to bind one`;
+  return `daemon autostart — installed, bound to workspace ${b.workspace} → ${b.plist}`;
+}
+
+function autostartWorkspaceArg(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--workspace") return argv[i + 1] ?? "";
+    if (a.startsWith("--workspace=")) return a.slice("--workspace=".length);
+  }
+  return undefined;
+}
+
+const AUTOSTART_HOWTO = "Name one explicitly — `dev-loop daemon install-autostart --workspace <workspace-root>` — or cd into a workspace (a directory holding dev-loop.json) and re-run.";
+
+// Returns the workspace root to bind, or null after printing WHY it refused. Never writes anything:
+// AC1's "must not write a plist" is a property of the caller ordering, so resolution comes first.
+function resolveAutostartWorkspace(argv: string[]): string | null {
+  const arg = autostartWorkspaceArg(argv);
+  if (arg !== undefined) {
+    if (!arg || arg.startsWith("--")) {
+      console.error("[daemon] install-autostart: --workspace needs a directory path. No plist was written.");
+      return null;
+    }
+    const abs = isAbsolute(arg) ? arg : resolvePath(process.cwd(), arg);
+    if (!existsSync(join(abs, "dev-loop.json"))) {
+      console.error(`[daemon] install-autostart: ${abs} is not a workspace (no dev-loop.json). No plist was written.`);
+      return null;
+    }
+    try { return realpathSync(abs); } catch { return abs; }
+  }
+  let ws = null;
+  try { ws = tryResolveWorkspace(); } catch (e) {
+    console.error(`[daemon] install-autostart: ${(e as Error).message}`);
+    console.error(`[daemon] ${AUTOSTART_HOWTO} No plist was written.`);
+    return null;
+  }
+  if (ws) return ws.root;
+  console.error("[daemon] install-autostart: no workspace resolved — refusing to install a login item that would start a project set nobody chose.");
+  console.error(`[daemon] ${AUTOSTART_HOWTO} No plist was written.`);
+  return null;
+}
+
+// Ordering is the contract, not a style choice. Argument validation and the `--dry-run` RENDER are
+// platform-independent — refusing an unresolvable workspace is an argument fault, and rendering the
+// plist writes nothing and invokes no launchctl. Only the side-effecting half (write the file, load
+// it into launchd) needs macOS. Gating the whole verb on darwin, as this did, made the binding a
+// login item WOULD carry unobservable anywhere but a Mac — including on the Linux CI that gates
+// every merge, where it left the ambient-env regression this ticket exists to prevent unasserted.
+function installAutostart(argv: string[] = []): number {
+  const root = resolveAutostartWorkspace(argv);
+  if (!root) return 1; // AC1 — refused; nothing written
+  const plist = launchAgentPath();
+  const logDir = join(root, ".dev-loop"); // logs follow the BINDING, not the installing shell's run dir
+  const node = lcNode();
+  const self = lcDaemonEntry();
+  const carriedEnv: Record<string, string> = {};
+  for (const k of AUTOSTART_CARRIED_ENV) if (process.env[k]) carriedEnv[k] = process.env[k]!;
+  const xml = autostartPlistXml({ node, entry: self, workspace: root, logDir, carriedEnv });
+  // `--dry-run`: show the operator the exact binding before it becomes a login item. Writes nothing
+  // and runs no launchctl, so it is also the only safe way to assert plist CONTENT in a test —
+  // the real path installs a live LaunchAgent on the machine running it.
+  if (argv.includes("--dry-run")) {
+    console.log(`[daemon] install-autostart --dry-run: would bind workspace ${root} and write ${plist}:`);
+    console.log(xml);
+    return 0;
+  }
+  if (platform() !== "darwin") {
+    console.error("[daemon] install-autostart currently supports macOS LaunchAgent only.");
+    console.error("[daemon] `--dry-run` renders the binding on any OS; run `dev-loop daemon up-all` from systemd/cron to autostart here.");
+    return 1;
+  }
+  mkdirSync(dirname(plist), { recursive: true });
+  mkdirSync(logDir, { recursive: true });
   writeFileSync(plist, xml);
   try { execFileSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
   execFileSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plist], { stdio: "inherit" });
   execFileSync("launchctl", ["enable", `gui/${process.getuid!()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
   console.log(`[daemon] autostart installed → ${plist}`);
-  console.log(`[daemon] LaunchAgent runs \`${node} ${self} up-all\` at login for configured service projects.`);
+  console.log(`[daemon] bound workspace: ${root} (WorkingDirectory + DEVLOOP_WORKSPACE).`);
+  console.log(`[daemon] LaunchAgent runs \`${node} ${self} up-all\` at login for THAT workspace's backend:"service" projects only.`);
   return 0;
 }
 
@@ -631,7 +757,7 @@ export async function daemonLifecycleCode(sub: LifecycleSub): Promise<number> {
     : sub === "down" ? await daemonDown()
     : sub === "status" ? await daemonStatus()
     : sub === "reap" ? await daemonReap({ dryRun: process.argv.includes("--dry-run") })
-    : sub === "install-autostart" ? installAutostart()
+    : sub === "install-autostart" ? installAutostart(process.argv.slice(2))
     : uninstallAutostart();
 }
 export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
