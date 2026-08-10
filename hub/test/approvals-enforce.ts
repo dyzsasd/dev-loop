@@ -546,6 +546,44 @@ try {
       "R8 enforcement OFF over the same foreign record → silent (AC2)");
   }
 
+  // ── R9 (PR #283 review) — every gated ticket on a commit is consulted, not just the first ───────
+  //
+  // R7's scoping made this load-bearing. Unscoped, the gated tickets on one commit were
+  // interchangeable — the key alone decided the verdict, so consulting the first was consulting all
+  // of them. Once each gated ticket carries its OWN project scope, stopping at the first lets a grant
+  // made in that ticket's project stand in for another project's ungranted request on the same
+  // commit: exactly the isolation R7 exists to create, undone by the `find` R7 left in place.
+  {
+    git(work, ["checkout", "-q", "main"]);
+    git(work, ["checkout", "-qb", "dev-loop/AP-7"]);
+    git(work, ["push", "-qu", "origin", "dev-loop/AP-7"]);
+    writeFileSync(join(work, "j.txt"), "j\n");
+    git(work, ["add", "j.txt"]);
+    // AP-1 (project p) FIRST, AP-9 (project q) second — the pre-fix `find` stops at AP-1.
+    git(work, ["commit", "-qm", "feat: one commit, two projects' gated work (AP-1, AP-9)"]);
+    const keyBoth = pushApprovalKey("dev-loop/AP-7", git(work, ["rev-parse", "HEAD"]));
+    const guardBoth = () => pushGuard(work, "dev-loop/AP-7", dbPath, "main", { enforcePush: true, actor: "senior-dev" });
+
+    requestApproval(conn, { projectId: "p", actionKey: keyBoth, requestedBy: "senior-dev", ticketId: "AP-1" });
+    requestApproval(conn, { projectId: "q", actionKey: keyBoth, requestedBy: "senior-dev", ticketId: "AP-9" });
+    ok(guardBoth().approvals.length === 2,
+      "R9 fixture premise: both gated tickets are reported, one finding each — not one finding for the commit");
+
+    // Grant ONLY project p's. AP-1 now authorises; AP-9's request is untouched and must still refuse.
+    grantApproval(conn, { projectId: "p", actionKey: keyBoth, grantor: "operator", ticketId: "AP-1", expires: "24h" });
+    const half = guardBoth();
+    ok(half.approvals.length === 1 && half.approvals[0]?.ticketId === "AP-9",
+      "R9 a grant covering ONE project's ticket does not clear the other's on the same commit (pre-fix: it did)");
+    ok(half.approvals[0]?.state === "requested",
+      "R9 …and the surviving refusal is AP-9's own evaluated verdict, not a fallback");
+
+    // Both granted in their own scopes → the commit clears. Without this arm the fix is
+    // indistinguishable from "a multi-ticket commit can never be approved".
+    grantApproval(conn, { projectId: "q", actionKey: keyBoth, grantor: "operator", ticketId: "AP-9", expires: "24h" });
+    ok(guardBoth().approvals.length === 0,
+      "R9 every applicable scope granted → the push clears (the gate refuses what is ungranted, not what is plural)");
+  }
+
 } catch (e) {
   console.log("❌ harness error: " + (e as Error).message);
   fails++;

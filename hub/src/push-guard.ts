@@ -276,12 +276,12 @@ function checkPushApprovals(
       // No ticket ref at all: this gate keys on `ticket_id` and never had a claim on such a commit —
       // the same silence the unreadable-record branch above keeps.
       if (!ids.length) continue;
-      const gated = ids.find((id) => byTicket.has(id));
+      const gatedIds = ids.filter((id) => byTicket.has(id));
       const key = pushApprovalKey(branch, c.sha);
       const unverifiable = (ticketId: string, why: string): void => {
         out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId, state: APPROVALS_UNVERIFIABLE, reason: why });
       };
-      if (!gated) {
+      if (!gatedIds.length) {
         // R8 (PR #283 review) — "this ticket has no push: row" is an ANSWER only from a record that
         // knows the ticket. `DEVLOOP_HUB_DB` (or a programmatic dbPath) can select another
         // workspace's initialised hub: it passes the R5 probe, `listApprovals` returns rows that are
@@ -306,20 +306,28 @@ function checkPushApprovals(
       // (project_id NULL) still authorises — that narrowing is consultApproval's, not re-stated here.
       // This binds the LOOKUP, not the key: `push:<branch>:<sha>` is design §4 / AC4 and is unchanged
       // (the repo-in-the-key question Codex also raised is a spec call — LOOP-497).
-      const projectId = projectOf(gated);
-      if (projectId === null) {
-        unverifiable(gated, `${gated} carries a push: approval row in ${dbFile} but the record holds no ticket row for it, so the scope a grant would have to match cannot be resolved`);
-        continue;
+      //
+      // EVERY gated ticket the commit names is consulted, not just the first (R9). Scoping made that
+      // load-bearing: each gated ticket now carries its OWN scope, so stopping at the first one lets a
+      // grant in that ticket's project stand in for a different project's ungranted request on the
+      // same commit. Unscoped they were interchangeable — the key alone decided — which is why the
+      // `find` was harmless before R7 and is a hole after it.
+      for (const gated of gatedIds) {
+        const projectId = projectOf(gated);
+        if (projectId === null) {
+          unverifiable(gated, `${gated} carries a push: approval row in ${dbFile} but the record holds no ticket row for it, so the scope a grant would have to match cannot be resolved`);
+          continue;
+        }
+        // The attempt IS ledgered (approvals §14 decision 4: the audit line must not depend on each
+        // consumer remembering to ask). A ledger write can still fail — a busy db, a read-only handle —
+        // and a safety gate that CRASHES is a safety gate that got skipped, so the verdict is re-taken
+        // without the audit line rather than lost. `record:false` grants nothing and skips no check.
+        let v;
+        try { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId }); }
+        catch { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId, record: false }); }
+        if (v.authorises) continue;
+        out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId: gated, state: v.state, reason: v.reason ?? "not authorised" });
       }
-      // The attempt IS ledgered (approvals §14 decision 4: the audit line must not depend on each
-      // consumer remembering to ask). A ledger write can still fail — a busy db, a read-only handle —
-      // and a safety gate that CRASHES is a safety gate that got skipped, so the verdict is re-taken
-      // without the audit line rather than lost. `record:false` grants nothing and skips no check.
-      let v;
-      try { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId }); }
-      catch { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId, record: false }); }
-      if (v.authorises) continue;
-      out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId: gated, state: v.state, reason: v.reason ?? "not authorised" });
     }
   } finally { conn.close(); }
   return out;
