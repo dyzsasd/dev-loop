@@ -31,7 +31,7 @@ import { pushApprovalKey, pushGuard, type PushGuardResult } from "../src/push-gu
 import { prMergeLockPath } from "../src/pr-merge.ts";
 import { repoLandingLockPath } from "../src/repo-lock-path.ts";
 import {
-  push, pushExit, pushArgvFor, documentedExitCodes, PUSH_EXIT, PUSH_HELP, type PushResult, type GitExec,
+  push, pushExit, pushArgvFor, setUpstreamArgvFor, documentedExitCodes, PUSH_EXIT, PUSH_HELP, type PushResult, type GitExec,
 } from "../src/push.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,7 +108,10 @@ try {
       if (j === "fetch origin") return { ok: true, stdout: "", stderr: "" };
       if (j === `rev-parse --verify --quiet refs/remotes/origin/${branch}`) return { ok: !!opts.upstream, stdout: opts.upstream ? "ref" : "", stderr: "" };
       if (j === `rev-list --count origin/${branch}..${branch}`) return { ok: true, stdout: "0", stderr: "" };
-      if (j === pushArgvFor("origin", branch).join(" ")) return { ok: opts.pushOk !== false, stdout: "", stderr: opts.pushOk === false ? "remote: rejected" : "" };
+      if (j === pushArgvFor("origin", branch, "f".repeat(40)).join(" ")) return { ok: opts.pushOk !== false, stdout: "", stderr: opts.pushOk === false ? "remote: rejected" : "" };
+      // LOOP-528 — the tracking step the pinned refspec forced out of the push argv. Answered here so
+      // the double stays STRICT: it is an argv this flow really issues, not a wildcard.
+      if (j === setUpstreamArgvFor("origin", branch).join(" ")) return { ok: true, stdout: "", stderr: "" };
       refused.push(args);
       return { ok: false, stdout: "", stderr: `test double refused: git ${j}` };
     };
@@ -179,7 +182,9 @@ try {
     const { exec, calls } = mkExec(BR);
     const r = await push("/nowhere", { branch: BR, defaultBranch: "main", exec, guard: () => cleanGuard(BR), lockPath: join(ROOT, "lk-ac1") });
     ok(r.pushed && pushExit(r) === PUSH_EXIT.pushed, "AC1 gate clear ⇒ the push is issued from inside the call");
-    ok(JSON.stringify(r.pushArgv) === JSON.stringify(["push", "--set-upstream", "origin", `${BR}:${BR}`]),
+    // LOOP-528 — the source is the SHA the gate cleared, not the branch name; `--set-upstream` moved
+    // to its own step because git silently ignores it with a sha source.
+    ok(JSON.stringify(r.pushArgv) === JSON.stringify(["push", "origin", `${"f".repeat(40)}:refs/heads/${BR}`]),
       `AC1 the recorded push argv is exactly the expected one (${JSON.stringify(r.pushArgv)})`);
     // D1 — it does NOT open the PR. `gh` is never reached: the double records every argv, and a
     // `pr create` would appear here.
@@ -452,6 +457,164 @@ try {
     const r3 = await push(join(ROOT, "not-a-workspace"), {});
     ok(pushExit(r3) === PUSH_EXIT.usage && r3.unresolved !== null,
       "D2 an unresolvable default branch is exit 2 with a named cause, never a guessed 'main'");
+  }
+
+  // ══ LOOP-528 ═════════════════════════════════════════════════════════════════════════════════════
+  // The four findings PR #287 merged with. Every branch `mkWs` builds is a FIRST push (created, never
+  // pushed), which is why these arms sit on the same fixture the AC4 block uses: the case that was
+  // broken is the case the whole suite was already running in.
+
+  // ── AC1/AC3 — a first push evaluates `governance` and `findings`, not `[]` ────────────────────────
+  {
+    const TICKET = "AP-5281";
+    const ws = mkWs("ac528-gov", [], TICKET);
+    mkDb(ws.db, TICKET);
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    // A §17 governing file, in a commit on a branch with no upstream. Before LOOP-528 the guard
+    // hard-coded `governance: []` on exactly this shape, so the most dangerous push the loop can make
+    // — a first push carrying a conventions edit — read clean.
+    mkdirSync(join(ws.repo, "references"), { recursive: true });
+    writeFileSync(join(ws.repo, "references", "conventions.md"), "# conventions\nrule\n");
+    git(ws.repo, ["add", "references/conventions.md"]);
+    git(ws.repo, ["commit", "-qm", `docs: edit the governing file (${TICKET})`]);
+
+    const g = pushGuard(ws.repo, undefined, ws.db, "main");
+    ok(g.governance.length === 1 && g.governance[0]!.file === "references/conventions.md",
+      `AC1 a FIRST push evaluates the governance class (got ${g.governance.length} entr(y/ies))`);
+    ok(g.ahead === 2, `AC1 the first-push range is origin/main..<branch>, so both commits are scanned (ahead=${g.ahead})`);
+    ok(/first push of this branch; gated over origin\/main\.\./.test(g.note ?? ""),
+      `AC1 the note NAMES the range the classes used rather than claiming nothing to compare (note=${g.note})`);
+    const held = await push(ws.repo, { dbPath: ws.db });
+    ok(pushExit(held) === PUSH_EXIT.held && held.holds.some((h) => h.class === "governance"),
+      "AC1 the verb HARD-STOPS on it (§16.3 D3 — all five classes refuse)");
+    ok(held.pushArgv === null && !remoteHas(ws.origin, ws.branch), "AC1 nothing was pushed");
+  }
+
+  // The second class the early return emptied. A separate fixture, so neither arm can pass on the
+  // other's finding — reverting the AC1 change must fail BOTH, and nothing else.
+  {
+    const TICKET = "AP-5282";
+    const DEAD = "AP-5289";
+    const ws = mkWs("ac528-find", [], TICKET);
+    mkDb(ws.db, TICKET);
+    const conn = openDb(ws.db);
+    conn.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,'Canceled',0,'[]','[]','pm','t','t')")
+      .run(DEAD, "p", "canceled");
+    conn.close();
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    writeFileSync(join(ws.repo, "b.txt"), "b\n");
+    git(ws.repo, ["add", "b.txt"]);
+    git(ws.repo, ["commit", "-qm", `feat: work for a canceled ticket (${DEAD})`]);
+
+    const g = pushGuard(ws.repo, undefined, ws.db, "main");
+    ok(g.findings.some((f) => f.ticket === DEAD && f.state === "Canceled"),
+      `AC1 a FIRST push evaluates the findings class (got ${JSON.stringify(g.findings.map((f) => f.ticket))})`);
+    const held = await push(ws.repo, { dbPath: ws.db });
+    ok(pushExit(held) === PUSH_EXIT.held && held.holds.some((h) => h.class === "findings"),
+      "AC1 a ride-along canceled ticket hard-stops a first push");
+  }
+
+  // ── AC2 — unevaluable is exit 3, never an empty-classes exit 0 ───────────────────────────────────
+  {
+    const TICKET = "AP-5283";
+    const ws = mkWs("ac528-unev", [], TICKET);
+    mkDb(ws.db, TICKET);
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    // No origin/<branch> and no origin/<defaultBranch>: the range cannot be resolved from either
+    // remote ref. `main` exists on the remote in this fixture, so name a default branch that does not.
+    const g = pushGuard(ws.repo, undefined, ws.db, "nonexistent-base");
+    ok(g.unresolvedDefaultBranch === "nonexistent-base",
+      "AC2 an unresolvable base is REPORTED, not reported as three clean classes");
+    const r = await push(ws.repo, { dbPath: ws.db, defaultBranch: "nonexistent-base" });
+    ok(pushExit(r) === PUSH_EXIT.unevaluated, `AC2 the verb exits 3 (unevaluated), not 0 — got ${pushExit(r)}`);
+    ok(r.pushArgv === null && !remoteHas(ws.origin, ws.branch), "AC2 and it pushes nothing");
+  }
+
+  // ── AC4 — the push is pinned to the sha the gate cleared ─────────────────────────────────────────
+  {
+    const TICKET = "AP-5284";
+    const ws = mkWs("ac528-pin", [], TICKET);
+    mkDb(ws.db, TICKET);
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    const guarded = ws.sha;
+    // The race, made deterministic: the injected guard is the gate, so committing from inside it
+    // lands a commit at exactly the moment the real TOCTOU window opens — after the gate has read the
+    // branch, before the push resolves it.
+    let raced = "";
+    const r = await push(ws.repo, {
+      dbPath: ws.db,
+      guard: (ctx) => {
+        writeFileSync(join(ws.repo, "raced.txt"), "committed while the gate ran\n");
+        git(ws.repo, ["add", "raced.txt"]);
+        git(ws.repo, ["commit", "-qm", `feat: NOT gated (${TICKET})`]);
+        raced = git(ws.repo, ["rev-parse", "HEAD"]);
+        return pushGuard(ctx.repoDir, ctx.branch, ctx.dbPath, ctx.defaultBranch);
+      },
+    });
+    ok(r.pushed, `AC4 the gate cleared and the push happened (exit ${pushExit(r)})`);
+    ok(raced !== guarded, "AC4 the fixture really did move the branch under the gate");
+    // Assert the OUTCOME, not just the argv: an argv-shape-only assertion would pass against a verb
+    // that built the right refspec and pushed something else.
+    const published = execFileSync("git", ["-C", ws.origin, "rev-parse", `refs/heads/${ws.branch}`], { encoding: "utf8" }).trim();
+    ok(published === guarded, `AC4 the REMOTE carries the guarded sha, not the racing commit (published=${published.slice(0, 8)} guarded=${guarded.slice(0, 8)} raced=${raced.slice(0, 8)})`);
+    ok(r.pushArgv?.join(" ") === `push origin ${guarded}:refs/heads/${ws.branch}`,
+      `AC4 the refspec names the sha, not the branch (${r.pushArgv?.join(" ")})`);
+    ok(r.advancedTo === raced, "AC4 the caller is TOLD their newer commit was not published");
+    // The tracking `-u` used to set: git accepts --set-upstream with a sha source and silently skips
+    // it, so the verb restores it as its own step. Without this the §17 substitution would regress
+    // `git status`'s ahead/behind for every dev-tier branch.
+    const upstream = execFileSync("git", ["-C", ws.repo, "rev-parse", "--abbrev-ref", `${ws.branch}@{upstream}`], { encoding: "utf8" }).trim();
+    ok(upstream === `origin/${ws.branch}`, `AC4 upstream tracking is still set after the pinned push (${upstream})`);
+  }
+
+  // ── AC5 — the findings db resolves from an external worktree (the third reader) ───────────────────
+  {
+    const TICKET = "AP-5285";
+    const DEAD = "AP-5288";
+    const ws = mkWs("ac528-wt", [], TICKET);
+    mkDb(ws.db, TICKET);
+    const conn = openDb(ws.db);
+    conn.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES(?,?,?,'Canceled',0,'[]','[]','pm','t','t')")
+      .run(DEAD, "p", "canceled");
+    conn.close();
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    writeFileSync(join(ws.repo, "c.txt"), "c\n");
+    git(ws.repo, ["add", "c.txt"]);
+    git(ws.repo, ["commit", "-qm", `feat: ride-along (${DEAD})`]);
+
+    const fromRoot = pushGuard(ws.repo, undefined, undefined, "main");   // dbPath undefined ⇒ RESOLVED
+    // A real linked worktree OUTSIDE the workspace tree — §7's canonical dev-tier ship location.
+    const wt = join(ROOT, "ac528-wt-external", TICKET);
+    mkdirSync(dirname(wt), { recursive: true });
+    git(ws.repo, ["worktree", "add", "-q", "--detach", wt, ws.branch]);
+    const fromWt = pushGuard(wt, ws.branch, undefined, "main");
+    ok(fromRoot.findings.some((f) => f.ticket === DEAD),
+      "AC5 from the workspace root the findings db resolves and the canceled ref is found");
+    ok(fromWt.findings.some((f) => f.ticket === DEAD),
+      `AC5 from an EXTERNAL worktree it resolves the SAME db (findings=${fromWt.findings.length}, unknownRefs=${JSON.stringify(fromWt.unknownRefs)})`);
+    ok(fromWt.unknownRefs.length === 0,
+      "AC5 and it does not degrade to 'no local hub', which is how the wrong root failed silently");
+  }
+
+  // ── AC6 — a trailing value-flag is a usage error, not its own default ────────────────────────────
+  {
+    for (const flag of ["--branch", "--remote", "--default-branch", "--lock-wait"]) {
+      const cli = spawnSync(process.execPath, [join(hubRoot, "src", "push.ts"), flag], {
+        encoding: "utf8", env: { ...scrubFireEnv() },
+      });
+      ok(cli.status === PUSH_EXIT.usage && cli.stderr.includes(`${flag} needs a value`),
+        `AC6 a trailing ${flag} exits 2 and names the flag (exit ${cli.status})`);
+    }
+    // The flag-shaped value is the same typo one token later, and it must not be swallowed either.
+    const swallowed = spawnSync(process.execPath, [join(hubRoot, "src", "push.ts"), "--branch", "--dry-run"], {
+      encoding: "utf8", env: { ...scrubFireEnv() },
+    });
+    ok(swallowed.status === PUSH_EXIT.usage, `AC6 '--branch --dry-run' is a usage error, not a dry run of HEAD (exit ${swallowed.status})`);
   }
 } finally {
   if (savedEnv.ws === undefined) delete process.env.DEVLOOP_WORKSPACE; else process.env.DEVLOOP_WORKSPACE = savedEnv.ws;
