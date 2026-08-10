@@ -318,11 +318,19 @@ standing rule may cite a ticket as evidence; it may not depend on that ticket's 
 re-derived, no blocker in {401, 468, 472, 464, 463} terminal, so none of the six parked rows can
 unpark. LOOP-463 stays at the operator (16:36Z review point ~8 h out at close, so no comment).
 Promotion closed for the **twenty-eighth** fire: unblocked Todo **26** (13/13) against 10 per tier.
-**Zero filings** — both findings (W03's remedy, the growth law) went as comments on **LOOP-482** and
-**LOOP-484**, which already own them.
+Two findings went as comments on the tickets that already own them (**LOOP-482** — W03's prescribed
+remedy cannot make W03's claim true, because delivery ANDs in `codingAgent === "claude"` and 5 of 7
+lanes are opencode; **LOOP-484** — the growth law above). **One filing, LOOP-519:** W06's leak scan
+enumerates bundle artifacts and `moved.json` as literals, so an untracked, un-ignored `qa-state.json`
+at the repo root is not merely unwarned but *certified* — `!leaks.length` is what unlocks the clean
+line, and it has printed over that file for two days. It cleared the bar because it is the coverage
+half of LOOP-231's shape and no other check can see it: W33 reads tracked files only, and Sweep, the
+hygiene backstop for strays, is dark.
 
-**Pass price: −409 B (83,325 → 82,916) — negative for the first time in this arc.** Rolled the
-135th fire's journal whole to `2026-08.md` block BI (3,969 B) against 3,560 B added here. Per rule
+**Pass price: +352 B (83,325 → 83,677).** Rolled the 135th fire's journal whole to `2026-08.md`
+block BI (3,969 B) against 4,321 B added. The pass landed at −409 B and then went positive when
+LOOP-519 was filed after the land and this paragraph had to be corrected — stated rather than
+absorbed, which is the whole point of the price line. Per rule
 23's corollary a bounding pass must roll at least what the fire appends; every pass since 08-06 has
 stated a positive price instead. At this rate the 49,152 B budget is still ~61 passes away — the
 lever is LOOP-484, not the per-pass discipline.
