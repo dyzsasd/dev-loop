@@ -429,6 +429,45 @@ No other open row on the board carries an edge, live or retired.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-fifty-second fire) — a merged fix's own incident recurred 23 minutes
+  after it merged, and every health surface but one certified the machine while it did.**
+
+  **What happened.** LOOP-469 (`install-autostart` binds a named workspace instead of snapshotting the
+  install shell) merged as `7ec1d8c` at 21:59Z. I verified it this fire — 55/55 assertions on the
+  merged tree, and I mutation-tested the decisive arm rather than trusting a green suite: re-adding
+  `DEVLOOP_HUB_DB` to `AUTOSTART_CARRIED_ENV` turned 5 assertions red, so the regression test
+  discriminates. At **22:22:57Z** — 23 minutes after the merge — a plist appeared at
+  `~/Library/LaunchAgents/com.dyzsasd.dev-loop.daemon.plist` in the **pre-LOOP-469 format**: no
+  `WorkingDirectory`, no `DEVLOOP_WORKSPACE`, carrying `DEVLOOP_PROJECTS_JSON` / `DEVLOOP_HUB_DB` /
+  `DEVLOOP_RUN_DIR` from a shell. `RunAtLoad` fired and wrote the log the ticket's argument predicted:
+  `up-all: no backend:"service" projects configured in …/.dev-loop/projects.json`, twice, against a
+  file that does not exist.
+
+  **Why this is the entry and not a footnote.** It closes the last rung of the standing
+  shipped ≠ installed ≠ running rule with an *observed effect* rather than a source read. The
+  mechanism is fully pinned: the installed v1.15.1 still carries the pre-LOOP-468 `postinstall.cjs`
+  whose line 88 spawns `install-autostart`; LOOP-468 (`4cf6130`) and LOOP-469 (`7ec1d8c`) are both
+  merged and neither is installed. What is *not* established is what triggered the write at 22:22:57Z
+  — the installed package root's mtime is 51 minutes earlier, so it is not obviously that npm install.
+  原因未查明; recorded as such on LOOP-540 rather than guessed.
+
+  **The surface asymmetry is the durable lesson.** Of nine W-codes doctor emitted, exactly one — W18 —
+  named the condition ("installed v1.15.1 is 7 code commit(s) behind origin/main"). The check that
+  *should* have caught the broken plist printed `✅ daemon autostart installed → <path>`, because
+  LOOP-469's own AC7 polarity fix is also merged-not-installed. **A fix that repairs a health check
+  cannot repair the window in which it is merged but not installed — and in that window the check
+  argues in the wrong direction, with more confidence than before.** The remedy is a release, and a
+  release is the operator's; LOOP-540 is parked for it.
+
+  **Second measurement, kept because it is about detection rather than this instance.** The shared
+  checkout's index held a staged reversal of LOOP-535 — a landed, green commit — for at least two
+  fires. It was dropped mid-fire (verified: `origin/main` unmoved, the fix intact), so LOOP-539 was
+  Canceled as resolved rather than left parked on a premise that had expired. But while three tracked
+  files were dirty, doctor emitted no **W33** at all — the check whose stated axis is uncommitted
+  tracked modifications. LOOP-519 does not cover this: it is scoped to *untracked* files by its own
+  wording. One observation of a check's silence, under a condition that then disappeared, is not
+  enough to file; the next fire that sees dirty tracked files should read W33 first.
+
 - **2026-08-10 (pm, one-hundred-fifty-first fire) — the same wrong unpark, on the same three tickets,
   42 hours after it was repaired and ticketed: a protocol whose only enforcement is agent judgement.**
 
