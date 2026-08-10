@@ -227,22 +227,26 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
   // Every `export` line is classified into: type-only (no runtime value to exercise), a declaration
   // whose name we capture, a named re-export list, or UNREADABLE — which fails.
   const TYPE_ONLY = /^export\s+(?:type|interface)\b/;
-  const DECLARED = /^export\s+(?:async\s+)?(?:function\s*\*?|const|let|var|class)\s+(\w+)/;
+  const DECLARED = /^export\s+(?:async\s+)?(?:(function)\s*\*?|const|let|var|class)\s+(\w+)/;
   const NAMED_LIST = /^export\s*\{([^}]*)\}/;
-  const runtime: string[] = [];
+  // The KIND is captured with the name, because what counts as exercising an export depends on it
+  // (PR #271 review, third round): a function is exercised by being CALLED, a constant by being
+  // READ. A re-exported name has no declaration on the line, so it takes the weaker value rule —
+  // there are none today, and a form the classifier cannot read already fails the arm below.
+  const runtime: Array<{ name: string; callable: boolean }> = [];
   const unreadable: string[] = [];
   for (const line of src.split("\n")) {
     if (!/^export\b/.test(line)) continue;
     if (TYPE_ONLY.test(line)) continue;
     const declared = DECLARED.exec(line);
-    if (declared) { runtime.push(declared[1]); continue; }
+    if (declared) { runtime.push({ name: declared[2], callable: declared[1] === "function" }); continue; }
     const list = NAMED_LIST.exec(line);
     if (list) {
       for (const spec of list[1].split(",")) {
         const s = spec.trim();
         if (!s || /^type\b/.test(s)) continue;
         const parts = s.split(/\s+as\s+/);       // a suite imports the EXPORTED name, not the local one
-        runtime.push((parts[1] ?? parts[0]).trim());
+        runtime.push({ name: (parts[1] ?? parts[0]).trim(), callable: false });
       }
       continue;
     }
@@ -251,7 +255,8 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
   ok(unreadable.length === 0,
     `coverage map: every export line is a form this inventory can read — extend the classifier before adding one it cannot (unreadable: ${unreadable.join(" | ") || "none"})`);
 
-  const runtimeExports = [...runtime].sort();
+  const runtimeExports = runtime.map((e) => e.name).sort();
+  const callableExport = new Map(runtime.map((e) => [e.name, e.callable]));
   const expected = [
     "FIRE_MARKERS", "TOKEN_PREFIX", "activeFireMarker", "commitBothHalves",
     "confirmationToken", "isScratchProject", "isolationVerdict", "workspaceIsolationVerdict",
@@ -335,6 +340,33 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
   // exercised it. The scrub cannot catch that, because a type annotation IS code; the fix has to be
   // here, at what counts as an import (PR #271 review, second round). Inline `{ type X, y }`
   // specifiers are dropped for the same reason.
+  // What counts as EXERCISING an imported name, after the scrub and the value-import rule have both
+  // had their say (PR #271 review, third round). A word search cannot answer it: a value import
+  // followed by `type T = typeof commitBothHalves` or a bare `void commitBothHalves` leaves the
+  // identifier standing in executable text, so deleting the last real test arm would leave this map
+  // green — the same "assertion that cannot discriminate" this block exists to prevent, one level up.
+  //   • a FUNCTION is exercised by being CALLED — the name in call position;
+  //   • a CONSTANT has no call form, so it is exercised by being READ — any reference that is not a
+  //     type query (`typeof X`) or a discarded one (`void X`).
+  // Both rules are asserted on synthetic inputs below, since no suite in the tree is written this
+  // way today — which is exactly why it would have gone unnoticed.
+  const exercises = (body: string, name: string, callable: boolean): boolean => {
+    if (callable) return new RegExp(`\\b${name}\\s*\\(`).test(body);
+    for (const m of body.matchAll(new RegExp(`(?:\\b(typeof|void)\\s+)?\\b${name}\\b`, "g")))
+      if (!m[1]) return true;
+    return false;
+  };
+  for (const [body, name, callable, want, why] of [
+    ["type T = typeof commitBothHalves;", "commitBothHalves", true, false, "a type query is erased before anything runs"],
+    ["void commitBothHalves;", "commitBothHalves", true, false, "a discarded reference calls nothing"],
+    ["commitBothHalves(p);", "commitBothHalves", true, true, "…while a call is the exercise"],
+    ["type T = typeof TOKEN_PREFIX;", "TOKEN_PREFIX", false, false, "a constant in a type query is erased too"],
+    ["const s = TOKEN_PREFIX + k;", "TOKEN_PREFIX", false, true, "…while reading it is the only exercise a constant has"],
+  ] as const) {
+    ok(exercises(body, name, callable) === want,
+      `coverage map: ${JSON.stringify(body)} ${want ? "exercises" : "does NOT exercise"} ${name} — ${why}`);
+  }
+
   const importRe = /import\s*\{([^}]*)\}\s*from\s*"\.\.\/src\/destructive-guard\.ts"/;
   const suites = readdirSync(join(hubRoot, "test")).filter((f) => f.endsWith(".ts") && f !== "run-all.ts");
   const coverage = new Map<string, string[]>();
@@ -346,7 +378,7 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
       .map((s) => s.split(/\s+as\s+/)[0]!).filter(Boolean);
     const body = codeOnly(text.replace(m[0], ""));   // the import itself must not count as a use
     for (const name of imported) {
-      if (!new RegExp(`\\b${name}\\b`).test(body)) continue;
+      if (!exercises(body, name, callableExport.get(name) ?? false)) continue;
       coverage.set(name, [...(coverage.get(name) ?? []), file]);
     }
   }
