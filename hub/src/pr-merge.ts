@@ -240,6 +240,7 @@ function prMergeUnlocked(
     agentReviewers?: string[];
     mergeChecks?: string[];
     ciIrrelevantPaths?: string[];
+    repoRef?: string;             // LOOP-365: registry key, threaded so the stale hint is runnable
     defaultBranch?: string;
     repoEligible?: boolean;
     ciConfigAmbiguous?: boolean;  // ≥2 registry entries share the selected remote — see holdsFrom
@@ -269,6 +270,7 @@ function prMergeUnlocked(
     ...(opts.agentReviewers !== undefined ? { agentReviewers: opts.agentReviewers } : {}),
     ...(opts.mergeChecks !== undefined ? { mergeChecks: opts.mergeChecks } : {}),
     ...(opts.ciIrrelevantPaths !== undefined ? { ciIrrelevantPaths: opts.ciIrrelevantPaths } : {}),
+    ...(opts.repoRef !== undefined ? { repoRef: opts.repoRef } : {}),
     ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
     ...(opts.repoEligible !== undefined ? { repoEligible: opts.repoEligible } : {}),
     ...(opts.ciConfigAmbiguous ? { ciConfigAmbiguous: true } : {}),
@@ -578,7 +580,7 @@ if (isMainEntry(import.meta.url)) {
       ...(resolvedRepo ? { ghRepo: resolvedRepo } : {}),
       ...(ticketId !== undefined ? { ticketId } : {}),
       ...(cfRes.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
-      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
+      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths, repoRef: cfCfg.repoRef } : {}),
     });
   } catch (e) {
     console.error(`dev-loop pr merge: ${(e as Error).message.split("\n")[0]}`);
