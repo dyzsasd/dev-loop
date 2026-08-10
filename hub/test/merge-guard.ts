@@ -43,6 +43,7 @@ try {
   tk("MG-11", "In Review");  // LOOP-216: merged-PR check → skipped_merged (AC1)
   tk("MG-12", "In Review"); // LOOP-218 actor attribution — DEVLOOP_ACTOR set case
   tk("MG-13", "In Review"); // LOOP-218 actor attribution — DEVLOOP_ACTOR unset case
+  tk("MG-14", "In Review"); // LOOP-518 AC2: forge trip + dedup → routing record not silent
 
   conn.close();
 
@@ -377,7 +378,9 @@ try {
   const mg6Comments = readComments("MG-6");
   ok(mg6Comments.length === 1, `apply: exactly one comment written (got ${mg6Comments.length})`);
   const mg6Row = readTicket("MG-6");
-  ok(mg6Row?.state === "Todo", `apply: forge trip ticket moved to Todo (got: ${mg6Row?.state})`);
+  ok(mg6Row?.state === "In Progress", `LOOP-518 AC1: forge trip from In Progress — state unchanged (got: ${mg6Row?.state})`);
+  ok(!mg6Row?.labels.includes("blocked"), "LOOP-518 AC1: forge trip from In Progress — 'blocked' NOT added");
+  ok(mg6Row?.assignee === "senior-dev", "LOOP-518 AC1: forge trip from In Progress — assignee preserved");
   ok(!mg6Row?.labels.includes("blocked"), "apply: forge trip — 'blocked' NOT added (AC3)");
   ok(mg6Row?.assignee === "senior-dev", "apply: forge trip — assignee preserved (senior-dev from setup) (AC3)");
 
@@ -389,6 +392,54 @@ try {
   });
   ok(rApplyForge2.applied?.action === "already_present", `apply: second run → action=already_present (got: ${rApplyForge2.applied?.action})`);
   ok(readComments("MG-6").length === 1, "apply: idempotent — still exactly one comment after second run");
+  // LOOP-518 AC3: forge trip on In Progress runs twice → state In Progress after both, no comment duplicate
+  // Now that AC1 keeps In Progress, the second run checks dedup + state preservation
+  ok(rApplyForge2.applied?.action === "already_present", `LOOP-518 AC3: second forge trip on In Progress → action=already_present (got: ${rApplyForge2.applied?.action})`);
+  const mg6RowAfterSecond = readTicket("MG-6");
+  ok(mg6RowAfterSecond?.state === "In Progress", `LOOP-518 AC3: state still In Progress after second forge trip (got: ${mg6RowAfterSecond?.state})`);
+  ok(readComments("MG-6").length === 1, "LOOP-518 AC3: still exactly one comment after second forge trip on In Progress");
+
+  // LOOP-518 AC2: forge trip on In Review + dedup → routing record posted when comment is deduped
+  // Step 1: first forge trip from In Review → comment posted, state → Todo
+  const rAc2Step1 = mergeGuard(repoDir, {
+    ticketId: "MG-14", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(rAc2Step1.trip, "LOOP-518 AC2 step 1: forge trip detected (In Review)");
+  ok(rAc2Step1.applied?.action === "wrote", `LOOP-518 AC2 step 1: first --apply → action=wrote (got: ${rAc2Step1.applied?.action})`);
+  const mg14CommentsStep1 = readComments("MG-14");
+  ok(mg14CommentsStep1.length === 1, `LOOP-518 AC2 step 1: exactly one objection comment (got ${mg14CommentsStep1.length})`);
+  const mg14RowStep1 = readTicket("MG-14");
+  ok(mg14RowStep1?.state === "Todo", `LOOP-518 AC2 step 1: forge trip → state Todo (got: ${mg14RowStep1?.state})`);
+  ok(mg14RowStep1?.assignee === null, "LOOP-518 AC2 step 1: assignee preserved (was null from fixture)");
+  ok(!mg14RowStep1?.labels.includes("blocked"), "LOOP-518 AC2 step 1: 'blocked' NOT added");
+
+  // Step 2: reset the ticket back to In Review (simulating re-promotion between fires)
+  {
+    const db2 = openDb(dbPath);
+    db2.prepare("UPDATE tickets SET state='In Review', labels='[]', assignee=NULL WHERE id='MG-14'").run();
+    db2.close();
+  }
+  const mg14RowReverted = readTicket("MG-14");
+  ok(mg14RowReverted?.state === "In Review", "LOOP-518 AC2 step 2: state reset to In Review (setup check)");
+
+  // Step 3: second forge trip — comment deduped, routing re-enforces (LOOP-130), AC2 record posted
+  const rAc2Step3 = mergeGuard(repoDir, {
+    ticketId: "MG-14", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(rAc2Step3.trip, "LOOP-518 AC2 step 3: forge trip still detected");
+  ok(rAc2Step3.applied?.action === "already_present", `LOOP-518 AC2 step 3: deduped → action=already_present (got: ${rAc2Step3.applied?.action})`);
+  // 3 comments: original objection + AC2 dedup record
+  const mg14CommentsStep3 = readComments("MG-14");
+  ok(mg14CommentsStep3.length === 2, `LOOP-518 AC2 step 3: 2 comments — original objection + AC2 dedup record (got ${mg14CommentsStep3.length})`);
+  ok(mg14CommentsStep3[1].includes("AC2"), `LOOP-518 AC2 step 3: second comment is the AC2 dedup record (${mg14CommentsStep3[1].slice(0, 100)})`);
+  const mg14RowStep3 = readTicket("MG-14");
+  ok(mg14RowStep3?.state === "Todo", `LOOP-518 AC2 step 3: routing re-enforces → state Todo after dedup (got: ${mg14RowStep3?.state})`);
+  ok(mg14RowStep3?.assignee === null, "LOOP-518 AC2 step 3: assignee preserved after re-routing");
+
 
   // AC: board-state trip (In Review) + --apply → comment posted, ticket routed
   const rApplyBoard = mergeGuard(repoDir, { ticketId: "MG-7", dbPath, apply: true });
