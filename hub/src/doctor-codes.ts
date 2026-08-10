@@ -69,6 +69,7 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W39", name: "secrets.env readable by group/others — live provider keys exposed to every local account", source: "doctor.ts" },
   { code: "W40", name: "approval rows exist but approvals.enforce is empty — the record gates nothing", source: "doctor.ts" },
   { code: "W41", name: "never-expiring approval grant — an end-state authorization with no horizon", source: "doctor.ts" },
+  { code: "W42", name: "hub projects row diverged from the resolved config mode/autonomy", source: "doctor.ts" },
 ] as const;
 
 export const DOCTOR_CODE_SET: ReadonlySet<string> = new Set(DOCTOR_CODES.map((c) => c.code));
