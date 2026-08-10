@@ -31,6 +31,8 @@ import { runDoctor } from "./doctor.ts";
 import { loadProjectsConfig } from "./resolve-project.ts";
 import { mergeMcpServer } from "./mcp-merge.ts";
 import { hubDbPath } from "./paths.ts";
+import { resolveWorkspace } from "./workspace.ts";
+import { syncProjectRows } from "./project-row-sync.ts"; // LOOP-409 — the config → hub-row projection
 
 export interface InitServiceOpts {
   key: string;
@@ -107,7 +109,14 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
   } else {
     try {
       const db = openDb(dbPath);
-      try { ensureSeed(db, key, name, prefix); } finally { db.close(); }
+      try {
+        ensureSeed(db, key, name, prefix);
+        // LOOP-409 — the turnkey bootstrap seeds the row, so it also projects onto it. This path
+        // predates the 1.x workspace file, so the Workspace may not resolve (a legacy
+        // DEVLOOP_PROJECTS_JSON install); that is a skip, never a failed bootstrap.
+        try { syncProjectRows(db, resolveWorkspace()); }
+        catch (e) { log(`•  hub row projection skipped (${(e as Error).message}) — \`dev-loop doctor\` reports the divergence`); }
+      } finally { db.close(); }
       log(`✅ project '${key}' seeded (idempotent on key) + actors + labels in ${dbPath}`);
     } catch (e) {
       // ensureProject hard-throws on a duplicate prefix — its message already says "pick a unique prefix".
