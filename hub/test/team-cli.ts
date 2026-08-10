@@ -1,6 +1,6 @@
 // team init / import / repair + doctor workspace checks — integration via the real CLI entry points.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,7 +85,8 @@ try {
   ok(svcCfg.projects.web.devSplit === true && svcCfg.projects.web.linearProject === "Web", "import carries project fields");
   const impRepo = svcCfg.repos[svcCfg.projects.web.repos[0].ref];
   ok(impRepo.landing === "pr" && JSON.stringify(impRepo.mergeChecks) === '["Lint"]', "import carries physical fields onto the registry");
-  ok(existsSync(join(svc, ".dev-loop", "web", "pm-state.json")), "import moves the state dir");
+  ok(existsSync(join(svc, ".dev-loop", "web", "pm-state.json")), "import carries the state dir");
+  ok(existsSync(join(legacy, "web", "pm-state.json")), "import COPIES the state dir — the legacy source survives (LOOP-472 AC3)");
   ok(existsSync(join(svc, ".dev-loop", "lessons", "web.md")), "import splits lessons.md into the lessons library");
   const ev = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const rows=db.prepare('SELECT id,kind FROM events ORDER BY id').all();console.log(JSON.stringify(rows));db.close()})`, join(svc, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
   const events = JSON.parse(ev.stdout.trim());
@@ -114,6 +115,96 @@ try {
     ok(cfg2.team.comms?.provider === "lark" && cfg2.team.comms?.webhookEnv === "DEVLOOP_NOTIFY_HOOK", "team.comms lifted from the v1 notify block");
     ok(!JSON.stringify(cfg2).includes("inline-TOKEN"), "the inline webhook URL never lands in dev-loop.json (I5)");
     ok(cfg2.projects.web2.notify?.webhookEnv === "DEVLOOP_NOTIFY_HOOK" && !("webhook" in cfg2.projects.web2.notify), "the env-name notify survives as a project passthrough, minus the literal");
+  }
+
+  // ── LOOP-472: carrying a legacy-registry project into ITS OWN workspace ──────────────────────
+  //    The migrated project here is backend:"linear" (devplatform's shape) going into a linear
+  //    workspace seeded by `team init`, per the operator's recorded decision (option A). Fixtures
+  //    only — nothing reads the real ~/.dev-loop.
+  {
+    const lws = join(tmp, "dp-ws");                       // the NEW workspace, seeded first
+    run("team", ["init", "--dir", lws, "--key", "dp-team", "--backend", "linear", "--linear-team", "DP"]);
+    const lgc = join(tmp, "legacy-dp");                   // the legacy registry
+    const dpRepo = join(tmp, "outside", "jinko-dev-platform"); // deliberately OUTSIDE the new workspace
+    mkdirSync(join(dpRepo, "src"), { recursive: true });
+    mkdirSync(join(lgc, "devplatform", "reports", "qa-agent", "daily"), { recursive: true });
+    mkdirSync(join(lgc, "devplatform", "wt", "DP-1"), { recursive: true });
+    writeFileSync(join(lgc, "devplatform", "lessons.md"), "- [dp] a lesson\n");
+    writeFileSync(join(lgc, "devplatform", "pm-state.json"), '{"phase":"a"}');
+    writeFileSync(join(lgc, "devplatform", "reports", "qa-agent", "daily", "2026-08-09.md"), "# dp daily\n");
+    writeFileSync(join(lgc, "devplatform", "wt", "DP-1", "checkout.txt"), "reconstructible\n");
+    writeFileSync(join(lgc, "qa-state.json"), '{"root":"pre-per-project"}'); // the ROOT-level state file
+    writeFileSync(join(lgc, "projects.json"), JSON.stringify({
+      defaultProject: "devplatform",
+      projects: { devplatform: { backend: "linear", repoPath: dpRepo, linearProject: "DevPlatform" } },
+    }));
+
+    const dp1 = run("team", ["import", "--into", lws, "--from", join(lgc, "projects.json")],
+      { cwd: tmp, extra: { DEVLOOP_DATA_DIR: lgc } }); // cwd is NOT the workspace — --into resolves it
+    // AC1 — every file class arrived at its workspace-local destination, with equal content.
+    const dpCfg = readJson(join(lws, "dev-loop.json"));
+    ok(dpCfg.projects.devplatform?.linearProject === "DevPlatform", "AC1 import (--into) folds a linear-backend legacy project into its own workspace");
+    ok(readFileSync(join(lws, ".dev-loop", "lessons", "devplatform.md"), "utf8") === "- [dp] a lesson\n", "AC1 lessons.md arrives in the library with equal content");
+    ok(readFileSync(join(lws, ".dev-loop", "devplatform", "reports", "qa-agent", "daily", "2026-08-09.md"), "utf8") === "# dp daily\n", "AC1 the reports/ tree arrives with equal content");
+    ok(readFileSync(join(lws, ".dev-loop", "devplatform", "pm-state.json"), "utf8") === '{"phase":"a"}', "AC1 <agent>-state.json arrives with equal content");
+    ok(readFileSync(join(lws, ".dev-loop", "devplatform", "qa-state.json"), "utf8") === '{"root":"pre-per-project"}',
+      "AC1 the ROOT-level qa-state.json is carried for the registry's defaultProject");
+    // AC1 (operator constraint 1) — the repo sits outside the new workspace, so the answer is
+    // RELOCATION: a workspace-relative path is registered and the exact `mv` is printed. A repo
+    // path must stay inside the workspace, so an absolute-path reference is not an option.
+    ok(dpCfg.repos["jinko-dev-platform"].path === "jinko-dev-platform" && !dpCfg.repos["jinko-dev-platform"].path.startsWith("/"),
+      "AC1 an outside repo is registered workspace-relative (relocation, not an absolute reference)");
+    ok(dp1.code === 1 && new RegExp(`mv ${dpRepo} ${join(lws, "jinko-dev-platform")}`).test(dp1.out),
+      "AC1 the relocation is reported as the exact mv command, with a non-zero exit until it is run");
+    // Worktrees: the documented decision NOT to carry them, said out loud.
+    ok(!existsSync(join(lws, ".dev-loop", "devplatform", "wt", "DP-1", "checkout.txt")), "wt/ is not carried");
+    ok(/worktrees\s+0 copied, 1 skipped \(not carried — a worktree is reconstructible/.test(dp1.out),
+      "AC5 the report says worktrees were skipped, how many, and why");
+    // AC5 — a per-class report the operator can confirm before LOOP-473.
+    for (const cls of ["lessons", "reports", "state-json"]) {
+      ok(new RegExp(`REPORT devplatform ${cls}\\s+\\d+ copied`).test(dp1.out), `AC5 the report counts the ${cls} class`);
+    }
+    ok(/the legacy tree was NOT modified/.test(dp1.out), "AC5 the report states the source was left alone");
+
+    // AC3 — the source tree is byte-identical after the run (content AND shape).
+    const snap = (root: string) => {
+      const walk = (d: string, base = ""): string[] => readdirSync(d).flatMap((n) => {
+        const p = join(d, n), rel = base ? `${base}/${n}` : n;
+        return statSync(p).isDirectory() ? walk(p, rel) : [`${rel}:${readFileSync(p, "utf8")}`];
+      });
+      return walk(root).sort().join("\n");
+    };
+    const afterFirst = snap(lgc);
+    ok(afterFirst.includes("devplatform/lessons.md:- [dp] a lesson\n") && afterFirst.includes("qa-state.json:"),
+      "AC3 the legacy source tree still holds every file after the import");
+
+    // AC2 — a second run is a reported skip: no duplicate, no overwrite of newer destination content.
+    writeFileSync(join(lws, ".dev-loop", "devplatform", "pm-state.json"), '{"phase":"NEWER"}');
+    const dp2 = run("team", ["import", "--into", lws, "--from", join(lgc, "projects.json")],
+      { cwd: tmp, extra: { DEVLOOP_DATA_DIR: lgc } });
+    ok(/SKIP\s+project 'devplatform' already present/.test(dp2.out), "AC2 a re-run reports the project as already present");
+    ok(readFileSync(join(lws, ".dev-loop", "devplatform", "pm-state.json"), "utf8") === '{"phase":"NEWER"}',
+      "AC2 a re-run does NOT overwrite newer destination content");
+    ok(Object.keys(readJson(join(lws, "dev-loop.json")).projects).filter((k) => k === "devplatform").length === 1,
+      "AC2 a re-run creates no duplicate project entry");
+    ok(snap(lgc) === afterFirst, "AC3 the legacy source is byte-identical after the re-run too");
+
+    // AC4 — a destination the verb cannot write is REPORTED and exits non-zero, never a silent
+    // half-migration. The lessons library is made read-only so exactly one class fails.
+    const lws2 = join(tmp, "dp-ws2");
+    run("team", ["init", "--dir", lws2, "--key", "dp2-team", "--backend", "linear", "--linear-team", "DP"]);
+    const lessonsDir = join(lws2, ".dev-loop", "lessons");
+    mkdirSync(lessonsDir, { recursive: true });
+    chmodSync(lessonsDir, 0o500); // r-x: mkdir succeeds (it exists), the file write inside cannot
+    const dp3 = run("team", ["import", "--into", lws2, "--from", join(lgc, "projects.json")],
+      { cwd: tmp, extra: { DEVLOOP_DATA_DIR: lgc } });
+    chmodSync(lessonsDir, 0o700); // restore before any later assertion reads it
+    ok(dp3.code !== 0, "AC4 an unwritable destination exits non-zero");
+    ok(/FAIL\s+devplatform:.*lessons/.test(dp3.out) && /MIGRATION INCOMPLETE/.test(dp3.out),
+      "AC4 the failure names the file class and says the migration is incomplete");
+    ok(existsSync(join(lws2, ".dev-loop", "devplatform", "pm-state.json")),
+      "AC4 the classes that DID copy are kept — the state is recoverable by re-running, not restarted");
+    ok(snap(lgc) === afterFirst, "AC4 a failed run still leaves the source untouched");
   }
 
   // ── importRepoRefs branch coverage (1.8.1: the extracted phase exposed 49% coverage —
