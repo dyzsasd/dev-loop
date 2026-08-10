@@ -1090,8 +1090,10 @@ try {
     const unpriced = pds.find((d) => d.model === "unpriced");
     ok(slow !== undefined && Math.abs(slow.deadlineMinutes! - 60) < 1e-6,
       `LOOP-297: a $12/hr profile against a $12 ceiling arms at exactly 60 min (got ${slow?.deadlineMinutes})`);
-    ok(unpriced !== undefined && unpriced.priced === false,
+    ok(unpriced !== undefined && unpriced.rateMeasured === false,
       "LOOP-297: a profile with no priced history is LABELLED as using the fallback, not shown as measured");
+    ok(slow !== undefined && slow.rateMeasured === true,
+      "LOOP-297: a profile whose rate DID come from its own priced rows is labelled measured");
     // AC2 — the display can never drift from the enforcer, because it is the same function.
     const enforced = perFireDeadline(12.0, rows297, "claude", "slow", NOW);
     ok(enforced !== null && Math.abs(enforced.deadlineMs / 60_000 - slow!.deadlineMinutes!) < 1e-9,

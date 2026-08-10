@@ -18,6 +18,7 @@ import { isMainEntry } from "./is-entry.ts";
 import { resolveUiToken, plaintextBearerToRemote, plaintextBearerRefusal } from "./ui-token.ts"; // LOOP-173: refuse a plaintext bearer to a remote at the entry point
 import { tryResolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { TEAM_INTAKE_PROJECT, type Workspace } from "./team-config.ts";
+import { TOKEN_PREFIX } from "./destructive-guard.ts"; // LOOP-368: ONE spelling of the token, shared with the gate that consumes it
 import { teamInit } from "./team-init.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 
@@ -37,13 +38,14 @@ interface UpOpts {
   dir: string; cli?: "claude" | "opencode"; model?: string; effort?: string;
   key?: string; backend: "service" | "linear"; noDaemon: boolean; dryLaunch: boolean;
   bundle?: string; attach?: string; forceReseed: boolean;
+  dirExplicit: boolean; // LOOP-418: did the operator actually pass --dir?
 }
 
 export function parseUpArgs(argv: string[]): UpOpts {
-  const o: UpOpts = { dir: process.cwd(), backend: "service", noDaemon: false, dryLaunch: false, forceReseed: false };
+  const o: UpOpts = { dir: process.cwd(), dirExplicit: false, backend: "service", noDaemon: false, dryLaunch: false, forceReseed: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]; const next = () => argv[++i] ?? die(`${a} requires a value`);
-    if (a === "--dir") o.dir = resolve(next());
+    if (a === "--dir") { o.dir = resolve(next()); o.dirExplicit = true; }
     else if (a === "--cli") { const v = next(); if (v !== "claude" && v !== "opencode") die("--cli must be claude or opencode (the interactive console targets)"); o.cli = v; }
     else if (a === "--model") o.model = next();
     else if (a === "--effort") o.effort = next();
@@ -54,6 +56,18 @@ export function parseUpArgs(argv: string[]): UpOpts {
     else if (a === "--bundle") o.bundle = resolve(next());
     else if (a === "--attach") o.attach = next();
     else if (a === "--force-reseed") o.forceReseed = true;
+    // LOOP-368. The isolation token is consumed by the GATE (bundle.ts reads it out of argv), not
+    // here — but this parser ran first and killed it with `unknown option`, so the refusal
+    // `--force-reseed` prints ("pass --i-understand-this-deletes-<key> to confirm you mean THIS
+    // workspace") named a remedy the CLI rejected. A refusal whose stated remedy does not parse is
+    // not a gate with a key; it is a gate with none, and LOOP-316's test could not see it because
+    // "unknown option" also contains no "REFUSED".
+    //
+    // Shape only, deliberately: WHICH workspace the token names is settled downstream by
+    // `workspaceIsolationVerdict`'s exact `argv.includes(requiredToken)` match. This parser cannot
+    // do that check — the workspace is not resolved until --dir and the bundle are read — and a
+    // startsWith accepted HERE grants nothing, because the gate still demands the exact string.
+    else if (a.startsWith(TOKEN_PREFIX)) { /* consumed by the isolation gate, from argv */ }
     else if (a === "--help" || a === "-h") { usage(); process.exit(0); }
     else die(`unknown option '${a}'`);
   }
@@ -165,9 +179,9 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
     // open a session that would leak it in cleartext to a non-loopback host, so the operator learns
     // BEFORE the session starts (op-client.ts backstops an exported DEVLOOP_HUB_URL that skips this).
     if (plaintextBearerToRemote(u, resolveUiToken() !== null)) die(plaintextBearerRefusal(u));
-    ws = tryResolveWorkspace(o.dir);
+    ws = tryResolveWorkspace(o.dirExplicit ? o.dir : undefined); // LOOP-418
   } else {
-    ws = tryResolveWorkspace(o.dir);
+    ws = tryResolveWorkspace(o.dirExplicit ? o.dir : undefined); // LOOP-418
     if (!ws) {
       const key = o.key ?? deriveTeamKey(o.dir);
       console.log(`no workspace at ${o.dir} — scaffolding one (team '${key}', backend ${o.backend})`);

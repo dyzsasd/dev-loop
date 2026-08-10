@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { resolveWorkspace, wsLockPath } from "./workspace.ts";
 import { effectiveRepo } from "./team-config.ts";
-import { acquireLock } from "./locks.ts";
+import { acquireRepoLock } from "./locks.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop with-repo-lock: ${msg}`); process.exit(code); }
 
@@ -34,7 +34,10 @@ export async function withRepoLock(argv: string[]): Promise<number> {
   const lockPath = wsLockPath(ws, `repo-${ref}`);
 
   let release: () => void;
-  try { release = await acquireLock(lockPath, { totalMs: waitMs }); }
+  // The repo lock's stale policy comes from the lock, not from this caller (LOOP-455): with a local
+  // 30s default this contender broke a `pr merge` holder's LIVE lock mid-landing, and the two ran the
+  // same branch's critical section concurrently despite sharing the lock's name.
+  try { release = await acquireRepoLock(lockPath, { totalMs: waitMs }); }
   catch (e) { die((e as Error).message, 1); }
   try {
     const r = spawnSync(cmd[0], cmd.slice(1), { cwd: repoDir, stdio: "inherit" });

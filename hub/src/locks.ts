@@ -50,6 +50,37 @@ export async function acquireLock(lockPath: string, opts: { totalMs?: number; st
   }
 }
 
+// The stale policy for the SHARED repo lock (`repo-<ref>`) — one value, in one place, because
+// staleness is judged by the CONTENDER and never by the holder. A lock file records only `{pid, at}`,
+// so two contenders that disagree about `staleMs` do not serialize at all: the one with the shorter
+// policy breaks the other's LIVE lock and both enter the critical section. That is exactly what
+// `with-repo-lock` (30s default) did to `pr merge` (15min) — the two agree on the lock NAME and
+// disagree on when it expires, which buys nothing.
+//
+// 15 minutes is sized against the work the lock covers — a gate-then-squash round-trip to the forge,
+// or a fetch/rebase/ff-push merge-back — not against the typical case. It only has to outlast a SLOW
+// holder: a holder that DIED is already reclaimed immediately by `isStale`'s liveness check, so a
+// generous bound costs nothing in crash recovery.
+export const REPO_LOCK_STALE_MS = 15 * 60_000;
+
+// Acquire the shared repo lock. `staleMs` is deliberately NOT a parameter: a per-caller stale policy
+// is the defect above, so the only way to take this lock is on the one policy every contender uses.
+//
+// EVERY caller that takes a `repo-<ref>` path goes through this pair — `pr merge`, `with-repo-lock`,
+// `doc-land`, and the worktree add/remove sequences. One holdout is enough to reopen the hole: the
+// policy is enforced by the contender, so a single `withLock` on a `repo-<ref>` path with the 30s
+// default can still break everyone else's live lock.
+export function acquireRepoLock(lockPath: string, opts: { totalMs?: number } = {}): Promise<() => void> {
+  return acquireLock(lockPath, { totalMs: opts.totalMs, staleMs: REPO_LOCK_STALE_MS });
+}
+
+// `withLock` for the shared repo lock — same relationship as `withLock` to `acquireLock`, and the
+// same missing `staleMs`.
+export async function withRepoLockPath<T>(lockPath: string, opts: { totalMs?: number }, fn: () => Promise<T>): Promise<T> {
+  const release = await acquireRepoLock(lockPath, opts);
+  try { return await fn(); } finally { release(); }
+}
+
 // Run `fn` while holding `lockPath`; always releases, even on throw.
 export async function withLock<T>(lockPath: string, opts: { totalMs?: number; staleMs?: number }, fn: () => Promise<T>): Promise<T> {
   const release = await acquireLock(lockPath, opts);

@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { resolveWorkspace, wsLockPath, resolveHubDbPath, resolveRepoFromCwd } from "./workspace.ts";
 import { effectiveRepo, inferProjectForRepo } from "./team-config.ts";
 import { pushGuard } from "./push-guard.ts";
-import { withLock } from "./locks.ts";
+import { withRepoLockPath } from "./locks.ts";
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`doc-land: ${msg}\n`); process.exit(code);
@@ -247,7 +247,7 @@ Design: landing-discipline §4.6 (LOOP-57).`);
   const lockPath = wsLockPath(ws, `repo-${ref}`);
 
   // ── Steps 2–4 under the §7 repo lock (serializes fetch/rebase/push) ────────────
-  return await withLock(lockPath, { totalMs: 60_000 }, async () => {
+  return await withRepoLockPath(lockPath, { totalMs: 60_000 }, async () => {
     const attempt = async (): Promise<{ ok: boolean; blockedMsg?: string; isRejection?: boolean; landed?: number }> => {
       // Step 2: fetch + rebase if origin has moved ahead
       try { git(["fetch", "origin", defaultBranch]); }

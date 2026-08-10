@@ -120,6 +120,7 @@
     "fire-health": "node test/fire-health.ts",
     "push-guard": "node test/push-guard.ts",
     "merge-guard": "node test/merge-guard.ts",
+    "pr-merge": "node test/pr-merge.ts",
     "doc-land": "node test/doc-land.ts",
     "team-repair": "node test/team-repair.ts",
     "ui-token": "node test/ui-token.ts",

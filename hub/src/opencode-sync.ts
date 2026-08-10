@@ -115,10 +115,10 @@ indirected ({env:VAR}); put the values in <workspace>/.dev-loop/secrets.env. Bui
     return 0;
   }
   const dirIdx = argv.indexOf("--dir");
-  const start = dirIdx >= 0 ? argv[dirIdx + 1] : process.cwd();
+  const start = dirIdx >= 0 ? argv[dirIdx + 1] : undefined; // LOOP-418: no --dir ⇒ env ladder
   if (dirIdx >= 0 && !start) { console.error("dev-loop team sync-opencode: --dir needs a path"); return 2; }
-  const ws = tryResolveWorkspace(start!);
-  if (!ws) { console.error(`dev-loop team sync-opencode: no workspace (dev-loop.json) found from ${start}`); return 2; }
+  const ws = tryResolveWorkspace(start);
+  if (!ws) { console.error(`dev-loop team sync-opencode: no workspace (dev-loop.json) found from ${start ?? process.cwd()}`); return 2; }
   const r = syncOpencodeConfig(ws.root, ws.file.team.providers ?? {});
   if (!r.ok) { console.error(`❌ ${r.error}`); return 1; }
   if (r.action === "empty") { console.log("team.providers is empty — nothing to sync (built-in opencode providers need no entry)"); return 0; }

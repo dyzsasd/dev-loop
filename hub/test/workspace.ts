@@ -14,6 +14,8 @@ const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-ws-")));
 process.env.DEVLOOP_HOME = join(tmp, "home");
 delete process.env.DEVLOOP_WORKSPACE;
 delete process.env.DEVLOOP_TEAM;
+delete process.env.DEVLOOP_HUB_DB; // LOOP-418: the no-argument assertions below read this ladder,
+                                   // and every agent fire exports it at the LIVE workspace.
 
 try {
   const root = join(tmp, "workspace");
@@ -35,12 +37,17 @@ try {
   ok(ws.findWorkspaceRoot(tmp) === null, "ascent: a dir above the workspace resolves nothing");
 
   // ── discovery: DEVLOOP_WORKSPACE precedence + hard errors ──
+  // The env ladder answers the NO-ARGUMENT call — "the caller named no root" (LOOP-371).
   process.env.DEVLOOP_WORKSPACE = root;
-  ok(ws.findWorkspaceRoot(tmp) === root, "DEVLOOP_WORKSPACE overrides cwd (even from outside)");
+  ok(ws.findWorkspaceRoot() === root, "DEVLOOP_WORKSPACE answers the no-argument call (even from outside)");
+  // …and an explicit argument outranks it: the caller DID name a root (LOOP-418 AC1).
+  ok(ws.findWorkspaceRoot(tmp) === null, "explicit arg outranks DEVLOOP_WORKSPACE: a dir above the workspace still resolves nothing");
+  ok(ws.findWorkspaceRoot(join(root, "mcp-bff")) === root, "explicit arg outranks DEVLOOP_WORKSPACE: ascent from the named dir");
   process.env.DEVLOOP_WORKSPACE = "relative/path";
-  ok(threw(() => ws.findWorkspaceRoot(root)), "DEVLOOP_WORKSPACE must be absolute → throws");
+  ok(threw(() => ws.findWorkspaceRoot()), "DEVLOOP_WORKSPACE must be absolute → throws");
+  ok(!threw(() => ws.findWorkspaceRoot(root)), "a broken DEVLOOP_WORKSPACE cannot fail a call that named its own root");
   process.env.DEVLOOP_WORKSPACE = join(tmp, "no-such");
-  ok(threw(() => ws.findWorkspaceRoot(root)), "DEVLOOP_WORKSPACE with no dev-loop.json → throws");
+  ok(threw(() => ws.findWorkspaceRoot()), "DEVLOOP_WORKSPACE with no dev-loop.json → throws");
   delete process.env.DEVLOOP_WORKSPACE;
 
   // ── resolveWorkspace loads + validates + self-registers the index ──
@@ -51,10 +58,33 @@ try {
 
   // ── DEVLOOP_TEAM uses the index ──
   process.env.DEVLOOP_TEAM = "jinko-dev";
-  ok(ws.findWorkspaceRoot(tmp) === root, "DEVLOOP_TEAM resolves via the index from anywhere");
+  ok(ws.findWorkspaceRoot() === root, "DEVLOOP_TEAM resolves via the index from anywhere");
+  ok(ws.findWorkspaceRoot(tmp) === null, "explicit arg outranks DEVLOOP_TEAM");
   process.env.DEVLOOP_TEAM = "ghost-team";
-  ok(threw(() => ws.findWorkspaceRoot(tmp)), "DEVLOOP_TEAM not in the index → throws");
+  ok(threw(() => ws.findWorkspaceRoot()), "DEVLOOP_TEAM not in the index → throws");
   delete process.env.DEVLOOP_TEAM;
+
+  // ── LOOP-418 AC3: an explicit root outranks DEVLOOP_HUB_DB, and BOTH directions are asserted ──
+  // DEVLOOP_HUB_DB is set in every agent fire, so a test that hands a fixture root its own path was
+  // silently answered about the LIVE workspace. Asserting only the explicit direction would pass on
+  // a patch that ignored the env entirely — hence the no-argument assertion beside it.
+  {
+    const wsB = join(tmp, "workspace-b");
+    mkdirSync(join(wsB, "sub", "deeper"), { recursive: true });
+    writeFileSync(join(wsB, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      team: { key: "team-b", backend: "linear", linearTeam: "Loop-2" },
+      repos: {}, projects: {},
+    }));
+    process.env.DEVLOOP_HUB_DB = join(root, ".dev-loop", "hub.db"); // points at workspace A
+    ok(ws.findWorkspaceRoot(wsB) === wsB, "AC3: explicit root B outranks DEVLOOP_HUB_DB→A");
+    ok(ws.findWorkspaceRoot(join(wsB, "sub", "deeper")) === wsB, "AC3: explicit subdir of B ascends to B, not A");
+    ok(ws.findWorkspaceRoot() === root, "AC3: the no-argument call still resolves A from DEVLOOP_HUB_DB");
+    // resolveWorkspace/tryResolveWorkspace forward the same distinction (they are the product entry points).
+    ok(ws.resolveWorkspace(wsB).file.team.key === "team-b", "AC3: resolveWorkspace(B) loads B under DEVLOOP_HUB_DB→A");
+    ok(ws.tryResolveWorkspace()?.file.team.key === "jinko-dev", "AC3: tryResolveWorkspace() still loads A from the env");
+    delete process.env.DEVLOOP_HUB_DB;
+  }
 
   // ── a corrupt index is non-fatal (convenience only) ──
   writeFileSync(ws.workspacesIndexPath(), "{ broken json");

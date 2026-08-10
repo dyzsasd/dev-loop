@@ -879,7 +879,11 @@ export function removeProject(argv: string[]): number {
     // Derived from the same verdict object the live path enforces, never recomputed. The third form
     // (NOT scratch, token supplied) exists because a preview that said "needs <token>" to an operator who
     // had already passed it would be misleading in exactly the way this command must never be.
-    console.log(`  isolation : ${isolation.scratch ? "scratch (no token needed)"
+    // LOOP-368: the fire case is rendered FIRST and never mentions the token. A preview that told a
+    // fire "needs <token>" would be handing it the argument the live path now refuses — the exact
+    // shape of the LOOP-367 incident, reproduced in the preview instead of the refusal.
+    console.log(`  isolation : ${isolation.fireMarker ? `REFUSED — inside an agent fire (${isolation.fireMarker} set); no token grants this`
+      : isolation.scratch ? "scratch (no token needed)"
       : isolation.tokenPresent ? `NOT scratch — ${isolation.requiredToken} present`
       : `NOT scratch — needs ${isolation.requiredToken}`}`);
     // BOTH refusal reasons are reported, on separate lines, in the order the live path enforces them. An
@@ -887,7 +891,9 @@ export function removeProject(argv: string[]): number {
     // the preview — and being trusted before an irreversible cascade is this command's entire reason to exist.
     const wouldRefuseCount = !!refuseReason && !force;
     if (isolation.refusal || wouldRefuseCount) {
-      if (isolation.refusal) console.log(`  → WOULD REFUSE (not a scratch project; needs ${isolation.requiredToken})`);
+      if (isolation.refusal) console.log(isolation.fireMarker
+        ? `  → WOULD REFUSE (inside an agent fire — ${isolation.fireMarker} is set; this is an operator action)`
+        : `  → WOULD REFUSE (not a scratch project; needs ${isolation.requiredToken})`);
       if (wouldRefuseCount) console.log(`  → WOULD REFUSE (${refuseReason}; needs --force)`);
     } else {
       const targets = [inConfig ? "the config key" : null, db && projectId ? "the hub.db rows (10-table cascade)" : null]
@@ -902,7 +908,10 @@ export function removeProject(argv: string[]): number {
   // The isolation gate fires BEFORE the recoverability guard and before every write (LOOP-305). Order is
   // deliberate: "did you mean this project?" must be answered before "is this project recoverable?", so an
   // operator who reaches for --force to get past the count guard still has to name the target.
-  if (isolation.refusal) { db?.close(); die(isolation.refusal, 1); }
+  // LOOP-368: a fire refusal exits 4 (the documented identity/guard code, as `board restore` and
+  // `--force-reseed` already use), the token refusal keeps its historical 1 — a fire and an operator
+  // who forgot the token are different callers and should not be told apart only by reading prose.
+  if (isolation.refusal) { db?.close(); die(isolation.refusal, isolation.fireMarker ? 4 : 1); }
 
   if (!force) {
     if (db && projectId) {

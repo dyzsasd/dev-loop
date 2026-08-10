@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { detectRepoFacts, workflowJobNames, SETTABLE } from "../src/team-edit.ts";
 import { openDb } from "../src/db.ts";
 import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX, commitBothHalves } from "../src/destructive-guard.ts";
+import { NOT_SCRATCH_SQL } from "../src/sql-predicates.ts";
 import type { Workspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 
@@ -467,17 +468,23 @@ try {
     "LOOP-305 AC1: isScratchProject reads projects.<key>.scratch === true from CONFIG");
   ok(isScratchProject(wsOf({ other: { scratch: true } }), "dbonly") === false,
     "LOOP-305 AC1: a key ABSENT from config (db-only) reads as NON-scratch — fail closed");
-  const vNon = isolationVerdict(wsOf({ p: {} }), "p", ["--force"]);
+  // LOOP-368: these assert the TOKEN half of the gate, so they must state which side of the FIRE half
+  // they stand on — the verdict now reads the env, and `scrubFireEnv()` is this codebase's one
+  // definition of "an env with no fire markers". Left implicit, every assertion below would pass in
+  // CI and fail inside a fire, which is the CI/fire split scrubFireEnv exists to prevent for
+  // subprocesses and cannot cover for an in-process read of process.env.
+  const noFire = scrubFireEnv();
+  const vNon = isolationVerdict(wsOf({ p: {} }), "p", ["--force"], noFire);
   ok(vNon.refusal !== null && vNon.scratch === false && vNon.tokenPresent === false,
     "LOOP-305 AC2: --force alone does NOT satisfy the isolation gate");
   ok(/--i-understand-this-deletes-p/.test(vNon.refusal ?? "") && /--force does NOT grant this/.test(vNon.refusal ?? ""),
     "LOOP-305 AC2: the refusal names the required token AND states that --force does not grant it");
-  ok(isolationVerdict(wsOf({ p: {} }), "p", [confirmationToken("p")]).refusal === null,
+  ok(isolationVerdict(wsOf({ p: {} }), "p", [confirmationToken("p")], noFire).refusal === null,
     "LOOP-305 AC3: the exact token allows a non-scratch target");
-  ok(isolationVerdict(wsOf({ p: { scratch: true } }), "p", []).refusal === null,
+  ok(isolationVerdict(wsOf({ p: { scratch: true } }), "p", [], noFire).refusal === null,
     "LOOP-305 AC3 discriminator: a scratch project needs NO token — the gate is not 'refuse everything'");
   // The startsWith trap, at the unit level: a token that merely BEGINS with the required one is not it.
-  ok(isolationVerdict(wsOf({ p: {} }), "p", [`${TOKEN_PREFIX}p-and-more`, `${TOKEN_PREFIX}anything`]).refusal !== null,
+  ok(isolationVerdict(wsOf({ p: {} }), "p", [`${TOKEN_PREFIX}p-and-more`, `${TOKEN_PREFIX}anything`], noFire).refusal !== null,
     "LOOP-305 AC4: tokenPresent is an EXACT argv match — a prefix-shaped lookalike does not satisfy the gate");
 
   // (b) end-to-end, on a fixture that trips BOTH guards (2 tickets + 1 repo) so 'both reasons' is real.
@@ -672,9 +679,20 @@ try {
     // AC4: NOT_SCRATCH_SQL predicate excludes scratch project
     sql420('db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({scratch:true}),"p420")');
     const total = sql420('const a=db.prepare("SELECT count(*) as cnt FROM projects").get();console.log(JSON.stringify(a.cnt))');
-    const nonScratch = sql420('const r=db.prepare("SELECT count(*) as cnt FROM projects WHERE CASE WHEN json_valid(settings_json) THEN json_extract(settings_json,\x27$.scratch\x27) ELSE NULL END IS NOT 1").get();console.log(JSON.stringify(r.cnt))');
-    ok(Number(total) === 2 && Number(nonScratch) === 1,
-      `LOOP-420 AC4: NOT_SCRATCH_SQL excludes scratch project (total=${total}, nonScratch=${nonScratch})`);
+    // LOOP-429: run the SHARED constant, never a copy of it. This assertion previously inlined the
+    // predicate character-for-character, so inverting NOT_SCRATCH_SQL — which reverses all three
+    // production consumers — left it green on the same numbers. JSON.stringify embeds the SQL (it
+    // contains single quotes) into the `node -e` source the subprocess parses.
+    const nonScratchSql = JSON.stringify(`SELECT count(*) as cnt FROM projects WHERE ${NOT_SCRATCH_SQL}`);
+    const nonScratch = sql420(`const r=db.prepare(${nonScratchSql}).get();console.log(JSON.stringify(r.cnt))`);
+    // The COUNT alone cannot see an inversion. This fixture holds exactly two projects — `_team` and
+    // the scratch `p420` — so `IS NOT 1` and `IS 1` both return 1, and importing the shared constant
+    // is necessary but not sufficient. Assert WHICH row survives: under `IS NOT 1` it is `_team`,
+    // under the inverse it is `p420`, and that is the difference the count throws away.
+    const keptSql = JSON.stringify(`SELECT key FROM projects WHERE ${NOT_SCRATCH_SQL} ORDER BY key`);
+    const kept = sql420(`const rs=db.prepare(${keptSql}).all();console.log(rs.map(r=>r.key).join(','))`);
+    ok(Number(total) === 2 && Number(nonScratch) === 1 && kept === "_team",
+      `LOOP-420 AC4: NOT_SCRATCH_SQL excludes scratch project (total=${total}, nonScratch=${nonScratch}, kept=${kept})`);
   }
 
 
