@@ -14,7 +14,7 @@ import { readSchedulerBuild, schedulerAlive, schedulerSkew, pkgVersionOf, teamDi
 import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: W31 shares the tier predicate with the queue
 import { tryResolveStrategyDocStat, type StrategyDocStat } from "./context-bill.ts"; // LOOP-282: the §20 form-rule resolver, shared with the bill
 import { STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "./lessons.ts";
-import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
+import { reportTrailGaps, type DecisionItem } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -60,7 +60,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
   const unseeded: string[] = []; // W08 hits, collected for the NEXT line
   let stalledRepo: string | undefined;
   let skewResult: { codeBehind: number; version: string } | null | undefined;
-  let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null | undefined;
+  let decisionStall: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null | undefined;
   if (opts.reconcile) {
     try { ws = tryResolveWorkspace(); }
     catch (e) {
@@ -298,7 +298,7 @@ function reportNoWorkspace(dbPath: string, fatal: boolean): void {
 // Implemented as a `!hasDay2` guard on those two rungs rather than by moving them, so every other
 // rung keeps its exact position: reordering would have moved "add a repo" and the go-live flip too,
 // which LOOP-322 explicitly did not ask for.
-export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null, skewResult?: { codeBehind: number; version: string } | null, fails?: string[]): string {
+export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: string[], stalledRepo?: string, decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null, skewResult?: { codeBehind: number; version: string } | null, fails?: string[]): string {
   // ── 1. cannot run ──
   if (errors.length) { const e = errors[0]; return `fix dev-loop.json — [${e.code}] ${e.path ? e.path + ": " : ""}${e.message}`; }
   if (!ws) return "dev-loop run";
@@ -323,7 +323,10 @@ export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: stri
     const ageMs = Date.now() - Date.parse(oldest.enteredAt);
     const h = Math.floor(ageMs / 3_600_000);
     const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
-    return `rule on the oldest decision ${oldest.id} (${ageStr}): http://127.0.0.1:8787/ticket/${oldest.id}`;
+    // LOOP-393: `ruleOn` is what W20 already computed for THIS item's arm (describeDecisionOldest),
+    // so the NEXT line and the warning cannot prescribe two different actions. Absent ⇒ a caller that
+    // did not compute one: keep the original ticket URL, byte-identical.
+    return `rule on the oldest decision ${oldest.id} (${ageStr}): ${decisionStall.ruleOn ?? `http://127.0.0.1:8787/ticket/${oldest.id}`}`;
   }
   // then a landing stall — the most-blocking state when everything else is green
   if (stalledRepo) return `clear the landing stall: fix the red base / land the wedged PRs — gh pr list --repo ${stalledRepo}`;
@@ -337,10 +340,35 @@ export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: stri
 // ── W20 helper — extracted to keep doctorWorkspace CC under the CRAP gate threshold ─────────────────────
 // Reads the per-project decisionQueue and emits [W20] when non-empty. Best-effort; swallows all exceptions.
 // Returns the stall descriptor (oldest + count) for NEXT-line threading, or null when clean/unavailable.
-export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string; enteredAt: string; state: string }; count: number } | null {
+// LOOP-393 — how the oldest queue item is NAMED and RULED ON, by arm. Extracted as a pure function so
+// checkDecisionQueueStall's complexity stays flat (the doctorWorkspace CRAP ratchet applies to its
+// helpers too) and so both arms are directly assertable.
+//
+// The ticket arm is byte-identical to what it was before requests joined the queue. The request arm
+// exists because an approval's `id` is a row uuid: `/ticket/<uuid>` would prescribe a 404, and the
+// operator rules on a request with a verb, not on the board. (WHICH surface can rule on a TICKET
+// while humanWrite is off is LOOP-481's subject, deliberately untouched here.)
+export function describeDecisionOldest(oldest: DecisionItem): { named: string; stateLabel: string; ruleOn: string } {
+  if (oldest.kind === "approval") {
+    const on = oldest.ticketId ? `  (asked on ${oldest.ticketId})` : "";
+    return {
+      named: `approval request ${oldest.actionKey}`,
+      stateLabel: "request",
+      ruleOn: `dev-loop approve --request ${oldest.id}${on}`,
+    };
+  }
+  const title60 = oldest.title.length > 60 ? oldest.title.slice(0, 57) + "…" : oldest.title;
+  return {
+    named: `${oldest.id} "${title60}"`,
+    stateLabel: oldest.state === "In Review" ? "approve" : "blocked",
+    ruleOn: `http://127.0.0.1:8787/ticket/${oldest.id}`,
+  };
+}
+
+export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null {
   const { ws, out: { warn } } = ctx;
   try {
-    const { decisionQueue, decisionEnteredAt } = require_metrics();
+    const { decisionQueue, decisionItemEnteredAt } = require_metrics();
     // The DRIVER's handle (design §5) — never opened here, and never closed here.
     const db = ctx.openBoardDb();
     {
@@ -349,27 +377,29 @@ export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string;
       // a parked item, §9c edge re-pointing) must not reset its age nor change WHICH item is named oldest.
       // decisionQueue's own ORDER BY updated_at is LOOP-108's concern (the metrics render); W20 re-derives
       // and re-sorts locally, so the two corrections don't collide.
-      const allItems: Array<{ id: string; title: string; state: string; enteredAt: string }> = [];
+      // LOOP-393: the queue now holds two arms (tickets ∪ pending approval requests), so an item's
+      // wait comes from decisionItemEnteredAt — the ledger read for a ticket, requested_at for a
+      // request — and both are counted here. A queue holding ONLY requests is not an empty queue.
+      const allItems: Array<{ item: DecisionItem; enteredAt: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findHubProject(db, key);
         if (!pid) continue;
-        for (const t of decisionQueue(db, pid) as Array<{ id: string; title: string; state: string; updatedAt: string }>) {
-          allItems.push({ id: t.id, title: t.title, state: t.state, enteredAt: decisionEnteredAt(db, t.id, t.state) });
+        for (const t of decisionQueue(db, pid) as DecisionItem[]) {
+          allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t) });
         }
       }
       if (allItems.length > 0) {
         allItems.sort((a, b) => a.enteredAt < b.enteredAt ? -1 : a.enteredAt > b.enteredAt ? 1 : 0);
-        const oldest = allItems[0];
-        const ageMs = Date.now() - Date.parse(oldest.enteredAt);
+        const { item: oldest, enteredAt: oldestEnteredAt } = allItems[0];
+        const ageMs = Date.now() - Date.parse(oldestEnteredAt);
         const h = Math.floor(ageMs / 3_600_000);
         const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
-        const title60 = oldest.title.length > 60 ? oldest.title.slice(0, 57) + "…" : oldest.title;
-        const stateLabel = oldest.state === "In Review" ? "approve" : "blocked";
+        const { named, stateLabel, ruleOn } = describeDecisionOldest(oldest);
         const noCommsNote = !ws.file.team.comms?.webhookEnv
           ? " — no out-of-band escalation path (no team.comms): these surface only here and in `dev-loop metrics`, never as a reminder."
           : "";
-        warn(`[W20] decision queue: ${allItems.length} waiting on you, oldest ${oldest.id} "${title60}" ${ageStr} (${stateLabel}) — rule on it: http://127.0.0.1:8787/ticket/${oldest.id}; full queue: dev-loop metrics${noCommsNote}`);
-        return { oldest: { id: oldest.id, enteredAt: oldest.enteredAt, state: oldest.state }, count: allItems.length };
+        warn(`[W20] decision queue: ${allItems.length} waiting on you, oldest ${named} ${ageStr} (${stateLabel}) — rule on it: ${ruleOn}; full queue: dev-loop metrics${noCommsNote}`);
+        return { oldest: { id: oldest.id, enteredAt: oldestEnteredAt, state: oldest.state }, count: allItems.length, ruleOn };
       }
     }
   } catch { /* decision-queue is best-effort — never fails doctor */ }
@@ -638,7 +668,7 @@ export function checkTierStarvationRow(ctx: BoardCtx): void {
  * individual check. The board db is opened LAZILY on the first board row and closed once here, which
  * is why exactly one openHubDbConn call remains on this path.
  */
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
   let ok = true;
   const fails: string[] = [];
   const out: DoctorOut = {

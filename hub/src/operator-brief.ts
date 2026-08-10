@@ -50,7 +50,13 @@ markers; with them set, operator writes refuse (exit 4).
 ## Operating (day 2+)
 
 - **Your decision queue** — \`dev-loop metrics --json\` → \`.decisionQueue\` (Human-Blocked ∪
-  In Review assigned to operator). Ruling on an item: comment + \`dev-loop ticket update <id> …\`.
+  In Review assigned to operator ∪ pending approval requests). Ruling on an item: comment +
+  \`dev-loop ticket update <id> …\`. An entry with \`"kind":"approval"\` is an AGENT ASKING for an
+  authorization it cannot grant itself — read its \`actionKey\` (the end state) and \`ticketId\`, then
+  \`dev-loop approve --request <id>\` to grant exactly what was asked (\`dev-loop approve <key>\` grants
+  the same end state unprompted, \`--expires\` to bound it), or \`dev-loop revoke <key|id>\` to end it.
+  Nothing waits on your answer: the fire that asked already moved on, so a request sits here until
+  you rule.
 - **Board reads**: \`dev-loop tickets [--state S --type T --label L]\`, \`dev-loop ticket <id>\`,
   any op by name via \`dev-loop op <op> --args-json '{…}'\` (full surface: \`dev-loop op --help\`).
 - **Docs**: \`dev-loop doc list|get|save|publish|archive\` — publish is operator-only; PM

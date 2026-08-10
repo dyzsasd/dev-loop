@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
-import { fireMetrics } from "./metrics.ts";
+import { fireMetrics, decisionQueue } from "./metrics.ts"; // LOOP-393: the approval arm of the queue, so the notifier shares its scope rule
 
 // ─── DL-59 send-target resolution, shared by every notifier tick ───────────────────────────────────
 // ONE send target: the DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project with a
@@ -119,6 +119,39 @@ export async function blockedNotifyTick(opts: {
     } catch (e) {
       // id-only log, NO marker written ⇒ retried next tick (never echo the secret/body)
       console.error(`[daemon] human-blocked notify failed for ${t.id}: ${scrubErr((e as Error).message)}`);
+    }
+  }
+  // LOOP-393 (approvals C3): pending approval REQUESTS are the queue's third shape, and they reach the
+  // operator on the same wire as the other two — a request nobody is told about is the failure this
+  // closes. The set comes from decisionQueue's approval arm rather than a second SQL copy, so the
+  // scope rule (project rows, plus a workspace-scoped row via its attached ticket) has ONE reader.
+  //
+  // De-dup keys on the APPROVAL id inside the event's data, not on ticket_id: two requests can hang off
+  // one ticket, and a workspace-scoped request need not resolve to one at all. Own marker kind ⇒ it can
+  // never cross with the two ticket markers.
+  for (const r of decisionQueue(writeDb, projectId).filter((i) => i.kind === "approval")) {
+    if (sent >= CHANNEL_SEND_CAP) break;
+    const last = writeDb.prepare(
+      "SELECT MAX(created_at) m FROM events WHERE kind='approval_request.notified' AND json_extract(data,'$.approvalId')=?",
+    ).get(r.id) as { m: string | null };
+    if (last.m && (nowMs - Date.parse(last.m)) < cadenceMs) continue;
+    // The wait is requested_at (design §3) — the request never transitions, so there is no ledger
+    // transition to read and no age to omit.
+    const age = ` for ${fmtDur(nowMs - Date.parse(r.enteredAt))}`;
+    const on = r.ticketId ? ` on ${r.ticketId}` : "";
+    // §16 allow-list: the action key (an end state, never a credential), the asking agent, the ticket,
+    // the age, the FIXED grant verb, and the localhost url. No note — the note is free human text.
+    const line = `[${projectKey}] approval requested${age}: ${cleanLine(r.actionKey, 80)} asked by ${cleanLine(r.requestedBy ?? "?", 24)}${on} — grant: dev-loop approve --request ${r.id}${r.ticketId ? ` · ${baseUrl}/ticket/${r.ticketId}` : ""}`;
+    try {
+      if (CHANNEL_DRYRUN) {
+        console.error(`[daemon] [dry-run] would notify approval-request ${r.id} via ${target.label}: ${line}`);
+      } else {
+        await sendVia(target.provider, target.creds, target.channelRef, { kind: "notify", lines: [line] }, opts.fetchImpl ?? fetch, target.transport);
+        logEvent(writeDb, { project_id: projectId, ticket_id: r.ticketId, actor: "daemon", kind: "approval_request.notified", data: { provider: target.provider, approvalId: r.id } });
+      }
+      sent++;
+    } catch (e) {
+      console.error(`[daemon] approval-request notify failed for ${r.id}: ${scrubErr((e as Error).message)}`);
     }
   }
   return sent;
