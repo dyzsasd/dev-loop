@@ -16,6 +16,7 @@ import { AGENT_HANDLES } from "./seed.ts";
 import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: the SAME tier predicate the queue uses
 import { BYTES_PER_TOKEN } from "./context-bill.ts"; // LOOP-267: one token model, shared with the bill
 import { liveBlockerIds } from "./blocked-by.ts";
+import { listApprovals } from "./approvals.ts"; // LOOP-393: pending requests join the decision queue, through the SAME derived-state reader the listing uses
 import { lessonsPaths } from "./lessons.ts";
 
 // ─── fires.jsonl ──────────────────────────────────────────────────────────────
@@ -671,12 +672,88 @@ function parseWindow(s: string): number {
 // `enteredAt` (LOOP-108) is the transition INTO the queue state — the operator's real wait. It is
 // optional on the interface because decisionQueue() itself does not compute it (one extra query per
 // row); collectBoardMetrics fills it in. Renderers must prefer it and fall back to updatedAt.
-export interface DecisionItem { id: string; title: string; state: string; updatedAt: string; enteredAt?: string }
-export function decisionQueue(db: import("node:sqlite").DatabaseSync, projectId: string): DecisionItem[] {
-  return (db.prepare(
+// LOOP-393 (design approvals §8): the queue ALSO carries pending approval requests. An agent that
+// needs an authorization it cannot grant itself files a request and moves on (design §1 — nothing
+// waits inline), so the operator's queue is the only surface that ask can reach. Design §8 makes this
+// rendering deliberately unconditional and switch-free: there are no requests until an agent files
+// one, so on a workspace that never uses the feature the payload below is byte-identical to what it
+// was before this change — the inertness is asserted by test, not assumed.
+//
+// The two arms are told apart by the `kind` DISCRIMINATOR, never by parsing a title. It is present
+// only on the approval arm precisely so the ticket arm's payload is unchanged; `kind?: undefined` on
+// the ticket arm is a type-only field (no runtime key) that still lets TypeScript narrow the union.
+export interface DecisionTicketItem { kind?: undefined; id: string; title: string; state: string; updatedAt: string; enteredAt?: string }
+export interface DecisionApprovalItem {
+  kind: "approval";
+  /** The approval row's id — what `dev-loop approve --request <id>` takes. */
+  id: string;
+  /** The action key, so a renderer that knows nothing of this arm still prints the ask. */
+  title: string;
+  state: "requested";
+  actionKey: string;
+  /** The ticket the request is attached to (`dev-loop request` requires one). */
+  ticketId: string | null;
+  requestedBy: string | null;
+  updatedAt: string;
+  /** AC3 — `requested_at`, the same waiting-since semantics decisionEnteredAt gives a ticket. */
+  enteredAt: string;
+}
+export type DecisionItem = DecisionTicketItem | DecisionApprovalItem;
+
+/**
+ * Pending requests belonging to `projectId`'s queue (design §3 scope, resolved for THIS surface).
+ *
+ * A row scoped to the project is that project's. A WORKSPACE-scoped row (`project_id IS NULL`) has no
+ * project of its own, so it surfaces in the queue of the project owning the ticket it is attached to —
+ * `dev-loop request` makes `--ticket` mandatory exactly so a request is traceable, and this is what
+ * that traceability buys. Each row therefore lands in exactly one project's queue: never duplicated
+ * across projects, never invisible.
+ *
+ * The "is it still pending" predicate is NOT re-implemented here: listApprovals derives it through
+ * deriveState, so this reader and the `dev-loop approvals` listing cannot drift (design §15 rule 6).
+ */
+function pendingApprovalItems(db: import("node:sqlite").DatabaseSync, projectId: string, now?: string): DecisionApprovalItem[] {
+  const rows = listApprovals(db, { states: ["requested"], now });
+  const out: DecisionApprovalItem[] = [];
+  for (const r of rows) {
+    if (r.project_id !== projectId) {
+      if (r.project_id !== null || !r.ticket_id) continue;         // another project's row, or unattachable
+      const owner = (db.prepare("SELECT project_id FROM tickets WHERE id=?").get(r.ticket_id) as { project_id: string } | undefined)?.project_id;
+      if (owner !== projectId) continue;
+    }
+    // A `requested` row with no requested_at is not producible by requestApproval (the only writer of
+    // this state); a hand-written one reads as maximally old ON PURPOSE — in a waiting-since surface
+    // an unknown wait must draw the operator's eye, never hide beneath every real one.
+    const at = r.requested_at ?? new Date(0).toISOString();
+    out.push({
+      kind: "approval", id: r.id, title: r.action_key, state: "requested",
+      actionKey: r.action_key, ticketId: r.ticket_id, requestedBy: r.requested_by,
+      updatedAt: at, enteredAt: at,
+    });
+  }
+  return out.sort((a, b) => a.enteredAt.localeCompare(b.enteredAt));
+}
+
+export function decisionQueue(db: import("node:sqlite").DatabaseSync, projectId: string, now?: string): DecisionItem[] {
+  const tickets: DecisionItem[] = (db.prepare(
     "SELECT id,title,state,updated_at FROM tickets WHERE project_id=? AND (state='Human-Blocked' OR (state='In Review' AND assignee='operator')) ORDER BY updated_at",
   ).all(projectId) as { id: string; title: string; state: string; updated_at: string }[])
     .map((t) => ({ id: t.id, title: t.title, state: t.state, updatedAt: t.updated_at }));
+  // Appended, not interleaved: the ticket entries keep their shape AND their order (AC2). Both
+  // consumers re-sort by the real wait (decisionItemEnteredAt) before rendering.
+  return [...tickets, ...pendingApprovalItems(db, projectId, now)];
+}
+
+/**
+ * The one waiting-since reader for a queue item, whichever arm it is (AC3).
+ *
+ * A ticket's wait is re-derived from the ledger (decisionEnteredAt below); an approval request
+ * carries its own `requested_at` and must NOT go through that ledger read — its id is an approval
+ * uuid, so `WHERE ticket_id=<uuid>` matches nothing and the fallback chain would date every request
+ * to the epoch, making it the permanent "oldest" item on every board.
+ */
+export function decisionItemEnteredAt(db: import("node:sqlite").DatabaseSync, item: DecisionItem): string {
+  return item.kind === "approval" ? item.enteredAt : decisionEnteredAt(db, item.id, item.state);
 }
 
 // LOOP-207: "waiting since" for a decision-queue item — the newest issue.transition INTO the ticket's
@@ -1115,7 +1192,9 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
         // LOOP-108: the wait is measured from the transition INTO the queue state, never from
         // tickets.updated_at — an unrelated later write (Sweep's own hygiene comment did exactly
         // this: 1h10m → 1m on LOOP-101) must not reset the operator's oldest-item age.
-        queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key, enteredAt: decisionEnteredAt(db, t.id, t.state) })));
+        // LOOP-393: decisionItemEnteredAt, not decisionEnteredAt — an approval request's wait is its
+        // own requested_at; re-deriving it from the ticket ledger would date every request to 1970.
+        queue.push(...decisionQueue(db, pid).map((t) => ({ ...t, project: key, enteredAt: decisionItemEnteredAt(db, t) })));
       }
       queue.sort((a, b) => (a.enteredAt ?? a.updatedAt).localeCompare(b.enteredAt ?? b.updatedAt)); // oldest WAIT first
       out.board = board;
@@ -1209,9 +1288,14 @@ export function renderHuman(
     // than let "6 done · 30d" stand on a board holding 174 Done tickets.
     if (r.historyIncomplete && r.historyFloor)
       console.log(`  ⚠ incomplete history: the event ledger begins ${r.historyFloor.slice(0, 10)}, inside this window — every board figure above covers only that shorter period`);
-    const dq = (out.decisionQueue ?? []) as Array<{ id: string; state: string; project: string; updatedAt: string; enteredAt?: string }>;
+    const dq = (out.decisionQueue ?? []) as Array<DecisionItem & { project: string }>;
     if (dq.length) {
-      const lbl = (t: { id: string; state: string }) => `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`;
+      // LOOP-393: the arm is read off the `kind` discriminator, never off the title or the state
+      // string. A request is labelled by its ACTION KEY — the operator rules on the key, and the
+      // approval row's uuid names nothing they can act on at a glance.
+      const lbl = (t: DecisionItem) => t.kind === "approval"
+        ? `${t.actionKey}[request]`
+        : `${t.id}[${t.state === "Human-Blocked" ? "blocked" : "approve"}]`;
       // LOOP-108: enteredAt (the transition INTO the queue state) — updatedAt is bumped by EVERY
       // write, so an agent's own hygiene comment reset the operator's displayed wait to zero. The
       // sibling surface (/activity) already answered this from the event ledger; the two disagreed 42×.

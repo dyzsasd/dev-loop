@@ -335,6 +335,32 @@ absorbed, which is the whole point of the price line. Per rule
 stated a positive price instead. At this rate the 49,152 B budget is still ~61 passes away — the
 lever is LOOP-484, not the per-pass discipline.
 
+**2026-08-10, 148th fire — the observable-and-safe program closed its last open control, and the
+shared checkout was holding a revert of shipped code.** **LOOP-532 verified `Done`** against the
+merged tree at `7d9c7cf`: the banner's two fault sources became state and `renderBanner()` the single
+writer, so a healthy poll can no longer clear a banner raised by a lost stream. The five
+`operator-design-review` controls now stand at **4 `Done`** and **1 `In Progress`** (LOOP-384) — and
+that ticket's live branch is `c63f65d` on open PR #292, superseding the `f9fb354` this doc named at
+the 144th fire. **Verified by mutation, not by reading:** three mutations of the shipped client,
+each red (3 / 10 / 5 assertions), the third reconstructing LOOP-386's defect exactly and being named
+by the suite's own AC — the power its predecessor's four `text.includes(…)` assertions never had.
+**What the checkout was carrying:** a STAGED revert of shipped LOOP-468 code (`postinstall.cjs` +
+its test, re-adding the autostart spawn PR #293 removed) left by the 147th fire's own mutation test,
+plus a superseded half-applied `migrate.ts` edit. Restored to `HEAD` before any doc work; the
+discarded diff preserved and reported on LOOP-384.
+**Todo depth 23 — senior 13/10, junior 10/10.** Promotion closed for the 39th time in 40 fires;
+Backlog steady at 74 for a fourth fire. `Human-Blocked` is zero for a fourth fire. Job C filed
+nothing for a fourth consecutive lens sweep: the ux-flows finding — the projects index, the page an
+operator lands on, renders three delivery counts and no decision-queue count at all — deduped into
+LOOP-390 as AC5 rather than becoming ticket #75.
+
+**Pass price: +5,044 B (132,940 → 137,984, this line included).** Rolled nothing. Larger than the ≤2.5 KB the 147th fire
+committed to, and a deliberate trim pass recovered only 270 B — the entry is long because it carries
+two findings and mints a standing rule, not because it is padded. Stating that rather than absorbing
+it: the per-pass lever is nearly exhausted, and the doc has now grown every pass since 08-06. The
+lever is LOOP-484 (Backlog, behind the cap), which argues the naive rollup is wrong because 244 of
+284 Decisions lines are in-force doctrine rather than superseded history.
+
 **2026-08-10, 144th fire — the observable-and-safe program, and what the board actually holds.**
 The five `operator-design-review` controls now stand at **3 `Done`** (LOOP-382 pause/resume, LOOP-383
 typed approvals, LOOP-385 release resilience), **1 `In Progress`** (LOOP-384 waiting-on discriminator,
@@ -390,6 +416,148 @@ discipline.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fiftieth fire) — a ticket this agent filed last fire carried a false
+  factual premise; the lens that found it produced no ticket of its own.**
+
+  **The correction is the fire's main output.** LOOP-534, filed at 20:57Z in fire 149, asserted in its
+  body and again in AC4: "There is no `_team` daemon, so no reminder of any kind." Measured this fire:
+  `dev-loop hub status` reports TWO daemons — `_team` at 127.0.0.1:8793 (pid 93353) and `loop` at
+  :8787 (pid 93333) — and `/api/health` on 8793 returns `{"ok":true,"project":"_team"}`. `ps -o etime`
+  gives 01:40:34 for both, so the `_team` daemon had been running for roughly 100 minutes when the
+  ticket claiming its absence was filed. The fire-149 check read one daemon and generalised.
+
+  **The ticket's conclusion survives; its mechanism was replaced.** `_team` has no entry in
+  `dev-loop.json.projects` (the projected view returns `fixture,loop`), so at that daemon's boot
+  `projCfg` is undefined, `commsConfigured` is false, `_team`'s `settings_json` is `{}`, and
+  `resolveBlockedReminderHours({}, false)` returns 0 — per `daemon-notifiers.ts:58` no reminder timer
+  is started. No out-of-band reminder can reach a `_team` park, caused by a missing config entry rather
+  than a missing process. This is the same root as the ticket's `deliveryProjects(ws)` finding: `_team`
+  is real to the database and absent from config. Both the body and AC4 were rewritten in place
+  (verified byte-identical to the intended patch on re-read) and the measurement posted as a comment.
+  AC4 now also carries an explicit negative — do not spawn a second `_team` process, one exists.
+
+  **Job C — `polish-performance`, the first sweep of that lens, yield zero tickets.** Three
+  measurements, all negative, all worth recording so the next sweep does not repeat them:
+  - CLI latency is healthy. `project --json` 76 ms, `ticket <id> --json` 68 ms, `queue` 125 ms, against
+    22 ms for `--version` (bare node start), over 3 runs each, min reported. No defect.
+  - §8 dedupe is not blind to the board's tail. `opListIssues` pushes the search into SQL via
+    `ticketSearchClause` inside the WHERE clause (`agentops.ts:201-203`); the row cap is applied after,
+    in JS. LOOP-419's "filters run after the SQL cap" defect is specific to the web `/api/tickets` path
+    and does not reach the op the agents use.
+  - The one surviving candidate did not survive dedupe. Every fire's env carries
+    `DEVLOOP_PROJECTS_JSON` (`run-agents.ts:1005`) pointing at `<workspace>/.dev-loop/projects.json`, a
+    v1 path 1.0 never creates, and `loadProjectsConfig()` treats the variable as authoritative when set
+    — returning null rather than falling through to workspace discovery. Capturing it is therefore
+    worse than capturing nothing. Four dedupe probes returned LOOP-469 (In Progress, senior) on all
+    four; it already owns `installAutostart()`'s env snapshot. Filed nothing; posted the chain as a
+    comment, because it changes the fix: AC2's `WorkingDirectory` restores the cwd walk, and a captured
+    `DEVLOOP_PROJECTS_JSON` short-circuits that walk before it runs, so the variable must be dropped
+    from the captured set rather than supplemented.
+
+  A second observation went to LOOP-507 rather than a new ticket: the same `agentops.ts:275` expression
+  it already quotes ends in `.slice(0, 100)`, a silent cap with no marker or count. Latent at 74 Backlog
+  rows, 26 away, and the two defects compose — truncating an unranked list drops an arbitrary 41 rows,
+  truncating a §5-ordered one drops the 41 lowest-priority rows.
+
+  **Mints STANDING RULE 45 — a negative existence claim requires the unfiltered enumeration, and a
+  probe run inside a fire is not a probe of the product.** Both halves cost something this fire. The
+  first put a false premise on the board: "there is no `_team` daemon" came from a partial read. The
+  second nearly produced a ticket: `loadProjectsConfig()` returned null under measurement, which reads
+  exactly like a defect, until `ps eww` showed neither daemon carries `DEVLOOP_PROJECTS_JSON` while
+  this fire's own shell does. With the variable unset the same call returns `projects: fixture,loop`
+  and `loop.comms` resolves. Before asserting that something does not exist, enumerate without a
+  filter; before calling a measured value a defect, re-measure with the fire markers stripped.
+
+  Jobs A and B were empty: no In Review, no `needs-pm`, no `Human-Blocked`. The §9c pass re-derived all
+  four parks (LOOP-483 → 464; LOOP-404/403/402 → 401) and both blockers are open, so nothing unparks.
+  Job B2 promoted nothing — senior 12/10 and junior 10/10, both at or over cap — which is the 41st
+  fire in 42 where the promotion gate was shut at close.
+
+- **2026-08-10 (pm, one-hundred-forty-ninth fire) — a visibility guarantee that holds at the module
+  layer and is lost at the composition layer, found in the increment that shipped it.**
+
+  **LOOP-393 (approvals C3) verified against the merged tree and closed `Done`.** PR #289 squashed at
+  20:45Z as `225713d`; main's own run for that sha reads `completed success`. All six ACs were
+  exercised by running `hub/test/decision-queue-approvals.ts` on a detached worktree at that sha — 30
+  assertions, exit 0 — rather than read off the diff. Three mutations confirmed the suite
+  discriminates: tagging the ticket arm `kind:"ticket"` fails 3 assertions, so design §8's inertness
+  claim is genuinely pinned; routing approvals through `decisionEnteredAt` fails AC3; filtering
+  approvals out of `checkDecisionQueueStall` fails AC6 four times. Stage-1 triage clean —
+  `doctor.ts`/`doctor-registry.ts` fall outside the ticket's named Scope but AC6 cannot be satisfied
+  anywhere else, so they are in-scope-by-necessity. Verified against the merged tree, not published.
+
+  **The trust-safety lens then found what that increment does not reach: LOOP-534** (P2, `Bug`+`qa`,
+  `sensitive` ⇒ senior). LOOP-393 exists so that a pending approval request is never a row nobody is
+  told about; the closure covers the delivery projects only. Measured chain: the steward agents fire
+  at `project = _team` (`fires.jsonl` — sweep 214, reflect 6; `run-agents.ts:833` states the same rule
+  for ops and communication); a `dev-loop request` from that identity resolves scope through
+  `resolveIdentity().projectKey`, and `_team` is a seeded board row, so the insert succeeds and the
+  verb exits 0 printing the grant command; both consumers iterate `deliveryProjects(ws)`, which drops
+  `_team` at `team-config.ts:215`. Evaluated on this workspace, `deliveryProjects(ws)` returns
+  `["loop"]`. The daemon does not compensate — it binds one `projectId` at boot and the running
+  instance is `loop` — and the default `dev-loop approvals` listing does not either, since `inScope`
+  matches own-project ∪ workspace-scoped rows while a `_team` row is neither. The ticket arm carries
+  the same gap, so a §9b team intake parked for the operator would also be silent. Exposure is latent:
+  `approvals` holds 0 rows and the `_team` board 0 tickets.
+
+  **This mints STANDING RULE 44 — a correctness claim proven at the module layer says nothing about
+  the SET its callers enumerate.** `pendingApprovalItems` is correct: given a project id it resolves
+  each row into exactly one queue, and its docstring's "never invisible" holds for every id it is
+  handed. The guarantee is lost one layer up, in which ids the consumers pass. When a mechanism
+  promises coverage, check the enumeration as a question separate from the rule.
+
+  **Job B2: promotion opened and closed inside one fire, the 40th time in 41.** junior stood at 9/10
+  at boot, so LOOP-502 promoted — rank 3 by `PICK_RANK`, where a `Bug` outranks every P1 Improvement
+  at 4.5, and FIFO made it the oldest of the four junior Bugs. Grooming it produced a correction worth
+  more than the promotion: its "Live reproductions" section names PRs #271 and #273, both since
+  landed, so the verification step it prescribes would now mislead. Measured all three open PRs —
+  reverse compares of 194,288 B / 77,557 B / 79,794 B against the 1 MiB cap — so no live reproduction
+  exists on the board, and the injected-exec seam its own ACs name is the only remaining path.
+  Recorded on the ticket; no AC changed.
+
+  **Also observed, already ticketed:** `35f70b6` (pass 117) reads `cancelled` — the `225713d` code
+  push cancelled the docs run beneath it. LOOP-486 is filed for the docs-cancels-code direction; this
+  is the same defect in the code-cancels-docs direction, so it is evidence on that ticket rather than
+  a new one.
+
+  **Pass price: +4,055 B (137,984 → 142,039).** Rolled nothing; the per-pass lever stays exhausted and
+  the real lever remains LOOP-484 (Backlog, behind the cap).
+
+- **2026-08-10 (pm, one-hundred-forty-eighth fire) — two artifacts that were true when written and
+  false when read: a mutation left staged in the shared tree, and this doc's own commit citation.**
+  Both cost real work this fire, and both are the same failure with different clocks.
+
+  **The first is a near-miss with a large blast radius.** The 147th fire mutation-tested LOOP-468's
+  regression test by reverting `postinstall.cjs` to re-add the autostart spawn. That revert was still
+  **staged** in the shared checkout at this fire's boot, together with the matching test revert —
+  `M  hub/postinstall.cjs`, `M  hub/test/build-artifact.ts`. The mutation was correct; it was never undone. A mutation applied by
+  restoring an older blob lands in the INDEX, so the mutant is not working-tree scratch that a later
+  `git checkout` sweeps away — it is a staged payload waiting for the next commit. Had any agent run
+  `git add -A`, LOOP-468 would have been silently un-shipped inside an unrelated ticket's commit, with
+  every gate green. The 147th fire's report said the mutation went red; it did not say the tree was
+  clean, because nothing asked it to.
+
+  **This mints STANDING RULE 43 — the close condition of a mutation test is a clean tree, not a red
+  test run.** Verify the restore in the same fire, with `git status --porcelain` empty for the files
+  you touched, and say so where you report the mutation. The corollary names the tell: a mutation
+  performed as `git checkout <sha> -- <file>` STAGES it, so `git status` shows `M ` in the FIRST
+  column — the column that means "already staged for commit". This fire ran three mutations under the
+  rule and closed with the tree clean.
+
+  **The second is this document turning into a source of error.** I took the 144th fire's `LOOP-384 …
+  committed and pushed as f9fb354` at face value, found that commit bumps `SCHEMA_VERSION` to 6 while
+  touching no test, and filed a finding that its merge check would go red. It would not: the tip is
+  `c63f65d` on PR #292 and carries exactly that fix. The doc was accurate the day it was written.
+  Correcting the ticket was the cheap part; the expensive part is that a stale citation in the north
+  star reads exactly like a current fact.
+
+  **This folds into STANDING RULE 42** (verify a shipped constant against the spec, not the prose that
+  cites it) rather than minting a rule: a dated snapshot is prose about a branch, and a claim about a
+  branch is read from the branch. Practically — `git log <branch>`, `gh pr list --search <id>`, never
+  a commit sha quoted in a dated block. Per the existing discipline, the 144th fire's record is left
+  standing and superseded here rather than rewritten.
+  LOOP-532, LOOP-384, LOOP-468, LOOP-390.
 
 - **2026-08-10 (pm, one-hundred-forty-seventh fire) — a regression test whose discriminating power
   came from the code path its own fix deleted, so it went inert at the moment it started passing.**

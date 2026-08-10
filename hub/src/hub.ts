@@ -10,8 +10,16 @@ import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { TEAM_INTAKE_PROJECT, deliveryProjects, type Workspace } from "./team-config.ts";
 import { daemonLifecycleCode, daemonUpForKey, daemonStatusAll } from "./daemon-lifecycle.ts";
 import { openDb } from "./db.ts";
+import { syncProjectRowsBestEffort } from "./project-row-sync.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop hub: ${msg}`); process.exit(code); }
+
+// LOOP-409 — the HEAL path. Rows that predate the projection (every workspace ever created before
+// it) converge here, with no re-seed and no command the operator has to remember: bringing the hub
+// up is already the thing they do. Best-effort by construction — a busy db never blocks a start.
+function healProjectRows(ws: Workspace): void {
+  syncProjectRowsBestEffort(ws, () => openDb(wsHubDb(ws)), (line) => console.log(line));
+}
 
 // Point the daemon lifecycle at THIS workspace's hub db + runfile dir, keyed to the _team project.
 // DEVLOOP_PROJECT is always overwritten (not just when unset): an inherited ambient value from a parent
@@ -46,6 +54,7 @@ function reportSize(dbPath: string): void {
 // daemon-_team.json. Both are ensured; neither replaces the other.
 export async function ensureHub(ws: Workspace): Promise<number> {
   if (ws.file.team.backend !== "service") return 0;
+  healProjectRows(ws); // LOOP-409 — `dev-loop run` converges the rows before any fire reads them
   // Ensure _team first (web-UI + intake daemon). _team is not in ws.file.projects, so the loop
   // below never reaches it — the explicit call here is required.
   wireEnv(ws);
@@ -76,11 +85,11 @@ export async function hubCmd(argv = process.argv.slice(2)): Promise<number> {
   switch (sub) {
     case "start": {
       if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon up' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
-      wireEnv(ws); console.log(`hub start: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("up");
+      healProjectRows(ws); wireEnv(ws); console.log(`hub start: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("up");
     }
     case "ensure": {
       if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon up' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
-      wireEnv(ws); console.log(`hub ensure: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("ensure");
+      healProjectRows(ws); wireEnv(ws); console.log(`hub ensure: '${TEAM_INTAKE_PROJECT}'`); return daemonLifecycleCode("ensure");
     }
     case "stop": {
       if (isNonTeamProject) die(`'${namedProject}' is a per-project daemon — use 'DEVLOOP_PROJECT=${namedProject} dev-loop daemon down' (hub manages only the '${TEAM_INTAKE_PROJECT}' workspace hub)`);
