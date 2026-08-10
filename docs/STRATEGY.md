@@ -369,6 +369,39 @@ lever is LOOP-484, not the per-pass discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-thirty-eighth fire) — the §21a design gate passed on LOOP-499 and the
+  board refused the close, because the running build enforces a predicate the merged tree replaced.**
+  The gate's own work was clean. `hubDoc:design/approvals` v5 §16 answers all three conditions of the
+  operator's 03:30Z ruling — the one-call verb (§16.3), the enable-window check the second condition
+  asked for (§16.4), and the §17 adoption the third pre-approved (§16.7) — and LOOP-521/522/523
+  decompose it one to one. Four load-bearing claims were re-measured against the tree rather than read
+  off the handoff: `push-guard.ts` is the only `consultApproval` caller, W41 is the current maximum
+  doctor code, the four lock helpers are `pr-merge.ts`-private, and `conventions.md:574` confirms §7's
+  guard is scoped to `defaultBranch`, which is what puts the pr path outside the rule as written. The
+  design's own fail-open reproduces exactly: over `skills/dev-agent/SKILL.md`, `push the branch`
+  matches 0 times line-oriented and `` `git push` `` 0 times, while the wrap-tolerant form matches 1 —
+  the designer found that while verifying its own premise, and catching it before it shipped inside a
+  safety check is the strongest thing about the increment. Children promoted `Backlog`→`Todo` first
+  per the crash-safe order; LOOP-521 was claimed `In Progress` inside the same fire.
+  **The close then exited 1:** *"LOOP-499 is a design parent with 5 staged child(ren) still in Backlog
+  (LOOP-495, LOOP-501, LOOP-500, LOOP-497, LOOP-496)"* — specific, citing §21a, and false on this
+  board; those five belong to the module's FIRST increment (LOOP-383). The installed CLI is a local
+  source build six code commits behind `origin/main`, and its `design-parent.js` carries none of
+  `declaredParentOf`/`ownerBySlug`/`childrenByParent`/`designChildrenOf`, so it resolves a slug by
+  lifetime instead of per increment. Running HEAD's derivation against a copy of the live board
+  returns `designChildrenOf(LOOP-499) = {LOOP-521, LOOP-522, LOOP-523}`, none of them `Backlog`: the
+  gate passes on the merged tree. The fix is `9ed0358` (LOOP-379, #278), merged and in no release.
+  **The call:** the parent stays `In Review` with the verdict recorded, and the five stay in the §5a
+  funnel. Promoting them would push a senior slice already over cap further over and commit an
+  attribution the merged tree does not make, to satisfy a check that no longer exists upstream. The
+  design met its criteria, so §3's close-and-follow-up does not apply; no decision is owed, so §9's
+  park does not either. The exit condition is the reinstall doctor W18 already prescribes, after which
+  the close is a single move — recorded on the ticket so the next fire retries it before re-verifying.
+  **Folded into STANDING RULE 15** rather than opened as rule 41, per the standing practice of
+  sharpening the rule that already names the shape: rule 15 required a claim about delivery to name
+  which axis it measured, and what it did not carry is that the axes apply equally to the machine
+  doing the judging.
+
 - **2026-08-10 (pm, one-hundred-thirty-seventh fire) — an acceptance criterion that names a GENERATOR
   is not a criterion about DELIVERY, and from inside the ticket the two are indistinguishable.**
   Two increments verified, both PASS. **(1) LOOP-395** (approvals `--covers`) met all six ACs; AC5
@@ -630,7 +663,12 @@ lever is LOOP-484, not the per-pass discipline.
      delivery (branch/commit/PR + what the running env serves) BEFORE judging the code, and re-derive
      it per axis — `dev-loop --version` alone answers none of them. On this workspace the axes are
      four: the CLI, the `skills/`+`references/` corpus, the daemons, and the `run-agents` scheduler
-     (W36), and §12b applies the moment any one of them moves.
+     (W36), and §12b applies the moment any one of them moves. **The axes also bind the machine that
+     judges you (fire 138).** A write-layer gate runs on the INSTALLED axis, so a refusal can enforce
+     a predicate the merged tree already replaced, phrased exactly as a current one would phrase it:
+     LOOP-499's close was held over five tickets that HEAD's own derivation attributes to a different
+     parent. Before acting on any gate's stated remedy, establish whether the gate's own axis is
+     current — and never satisfy a refusal by making board changes the merged tree does not ask for.
   16. **A commit is not verified to carry one increment.** A shared checkout leaks an unrelated
      fire's uncommitted edits into the commit, and every gate — build, test, CRAP, review — passes on
      the union. `git apply --reverse --check` against the claimed diff is the decisive
