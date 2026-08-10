@@ -9,7 +9,7 @@ import { join, isAbsolute } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
-import { validateTeamFile, referencingProjects, isTeamProject, type TeamFile, type Workspace } from "./team-config.ts";
+import { validateTeamFile, referencingProjects, isTeamProject, normalizeAutonomy, MODES, AUTONOMY_INPUTS, type TeamFile, type Workspace, type AutonomyInput } from "./team-config.ts";
 import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
@@ -38,7 +38,14 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
 // or an interview field: edit dev-loop.json directly and let doctor validate.
 type SetKind = "string" | "boolean" | "number" | "int" | "string-list" | "nullable-pos-number" | readonly string[];
 export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
-  { re: /^team\.mode$/, kind: ["dry-run", "live"] as const },
+  { re: /^team\.mode$/, kind: MODES },
+  // LOOP-408 — the §12/§12a knobs an operator could not change at all after `team init`: `autonomy`
+  // had NO settable path (team or project), and `mode` had one only at team scope. The enum lists the
+  // legacy `guarded` because it is genuinely accepted; the write below stores the canonical `ask`, so
+  // the settable surface can never put the deprecated token back into the file.
+  { re: /^team\.autonomy$/, kind: AUTONOMY_INPUTS },
+  { re: /^projects\.[^.]+\.autonomy$/, kind: AUTONOMY_INPUTS },
+  { re: /^projects\.[^.]+\.mode$/, kind: MODES },
   { re: /^team\.linearTeam$/, kind: "string" },
   { re: /^team\.git\.defaultBranch$/, kind: "string" },
   { re: /^team\.comms\.provider$/, kind: ["slack", "lark"] as const },
@@ -97,8 +104,8 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},agents.<a>.{codingAgent,model,effort}}, " +
-  "projects.<key>.{enabled,weight,devSplit,scratch,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
+  "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},agents.<a>.{codingAgent,model,effort}}, " +
+  "projects.<key>.{enabled,weight,devSplit,scratch,mode,autonomy,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
   "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}, " +
@@ -156,7 +163,11 @@ export async function teamSet(argv: string[]): Promise<number> {
   const entry = SETTABLE.find((s) => s.re.test(path));
   if (!entry) die(`'${path}' is not an operator-settable path.\n  settable: ${SETTABLE_SUMMARY}\n${unsettableGuidance(path)}`);
 
-  const coerced = coerce(entry.kind, value, path);
+  // LOOP-408 — the legacy alias is normalized AT THE WRITE BOUNDARY, so `set … guarded` is accepted
+  // and `"ask"` is what lands in dev-loop.json. Normalizing here (not in the walk below) keeps the
+  // reported before → after line honest about the value actually written.
+  const raw = coerce(entry.kind, value, path);
+  const coerced = /^(team|projects\.[^.]+)\.autonomy$/.test(path) ? normalizeAutonomy(raw as AutonomyInput) : raw;
   const segs = path.split(".");
   // Own-property discipline: a wildcard segment like `__proto__`/`constructor` resolves on the PROTOTYPE
   // chain (truthy, object-typed) and the walk below would silently mutate Object.prototype instead of the

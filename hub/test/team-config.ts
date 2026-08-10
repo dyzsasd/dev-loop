@@ -272,6 +272,46 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
   ok(eff.autonomy === "full" && eff.docSystem === "backend" && eff.backend === "linear", "effectiveProject: unset fields fall back to team; backend stamped");
 }
 
+// ── E19 + the mode/autonomy vocabulary (LOOP-408) ──────────────────────────────
+// Three surfaces used to spell `autonomy` three ways; `guarded` was written by `team init` and read
+// by nothing. These pin the ONE token set, the alias direction, and the fact that a typo is refused
+// at the config boundary instead of resolving to a posture §12a does not define.
+{
+  const f = base(); f.team.autonomy = "fulll" as never;
+  const e = validateTeamFile(f).errors.find((x) => x.code === "E19");
+  ok(!!e && e.path === "team.autonomy", "E19: an unknown team.autonomy token is refused, at the exact path");
+  ok(!!e && /ask\|full/.test(e.message), "E19: the message lists the legal tokens");
+}
+{
+  const f = base(); f.projects.devplatform.mode = "dryrun" as never;
+  const e = validateTeamFile(f).errors.find((x) => x.code === "E19");
+  ok(!!e && e.path === "projects.devplatform.mode", "E19: an unknown project mode is refused, and the path names the project");
+}
+{ const f = base(); f.team.mode = "live"; f.team.autonomy = "full"; ok(!has(f, "E19"), "E19: the canonical tokens validate clean"); }
+{ const f = base(); f.team.autonomy = "guarded"; ok(!has(f, "E19"), "E19: the legacy `guarded` alias still loads (no migration is forced on an existing workspace)"); }
+
+// THE SAFETY PROPERTY: `guarded` meant "ask first", so it resolves to `ask` and NEVER to `full`.
+// The opposite mapping would hand every workspace minted before 1.15.1 standing authority to act
+// without asking (§12a). Asserted on BOTH members so a mapping to `full` cannot pass either half.
+{
+  const f = base(); f.team.autonomy = "guarded";
+  const eff = effectiveProject(mkWs(f), "devplatform");
+  ok(eff.autonomy === "ask", "autonomy alias DIRECTION: team `guarded` resolves to `ask`");
+  ok(eff.autonomy !== "full", "autonomy alias DIRECTION: `guarded` never resolves to `full` (it would grant act-without-asking)");
+}
+{
+  const f = base(); f.team.autonomy = "full"; f.projects.devplatform.autonomy = "guarded";
+  const eff = effectiveProject(mkWs(f), "devplatform");
+  ok(eff.autonomy === "ask", "autonomy alias: a PROJECT-level `guarded` normalizes too, and still overrides a team `full`");
+}
+// export-desktop-skill renders the agent-facing autonomy line straight off toLegacyView, so this is
+// the same value that reaches an agent's prose — the surface where `guarded` was visible before.
+{
+  const f = base(); f.team.autonomy = "guarded";
+  const p = toLegacyView(mkWs(f)).projects.devplatform as { autonomy?: string };
+  ok(p.autonomy === "ask", "toLegacyView (what export-desktop-skill renders) carries `ask`, never `guarded`");
+}
+
 // ── toLegacyView: the compat shape every existing consumer reads ──
 {
   const f = base();
