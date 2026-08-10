@@ -118,15 +118,16 @@ try {
   const localPostinstall = run(process.execPath, [join(inst, "postinstall.cjs")], { HOME: tmp, npm_config_global: "false", npm_config_location: "project" });
   ok(localPostinstall.code === 0 && !/install-autostart/.test(localPostinstall.out),
     "postinstall during local/project npm install → quiet no-op (does not install autostart in dev/CI)");
+  // LOOP-468: autostart removed from postinstall — global install no longer spawns install-autostart
   const globalPostinstall = run(process.execPath, [join(inst, "postinstall.cjs")], {
     HOME: tmp,
+    npm_config_global: "true",
     DEVLOOP_POSTINSTALL_FORCE: "1",
     DEVLOOP_POSTINSTALL_TEST_DARWIN: "1",
     DEVLOOP_POSTINSTALL_DRY_RUN: "1",
-    DEVLOOP_NODE: process.execPath,
   });
-  ok(globalPostinstall.code === 0 && globalPostinstall.out.includes("dist/daemon.js install-autostart"),
-    "postinstall for a global macOS install delegates to packaged daemon.js install-autostart");
+  ok(globalPostinstall.code === 0 && !/install-autostart|LaunchAgent|plist|login.item/i.test(globalPostinstall.out),
+    "postinstall global macOS install → does NOT install autostart (LOOP-468)");
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──
