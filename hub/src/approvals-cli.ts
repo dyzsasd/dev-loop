@@ -20,7 +20,7 @@
 // and reading the record authorise nothing, and a fire that could not ask would route around the
 // module entirely (design §1: a missing approval is a typed request and a moved-on fire, never a wait).
 import { isMainEntry } from "./is-entry.ts";
-import { openDb, actorExists, listActorHandles } from "./db.ts";
+import { openDb, actorExists, actorIsHuman, listActorHandles, listHumanActorHandles } from "./db.ts";
 import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath } from "./workspace.ts";
 import { resolveIdentity } from "./resolve-project.ts";
@@ -381,6 +381,28 @@ export function approvalsCmd(argv: readonly string[] = process.argv.slice(2)): n
       `dev-loop ${v}: DEVLOOP_ACTOR='${actor}' is not a known actor, so this ${v} could only be ` +
       `recorded against a name the workspace does not have. Valid: ${listActorHandles(db).join(", ")}. ` +
       `Nothing has been written.`,
+    );
+    return 4;
+  }
+
+  // G2 — the grantor is a HUMAN, not merely a known actor. The fire refusal above answers "may a FIRE
+  // do this?"; this answers "is this caller the party the design says grants?", and they are not the
+  // same question: `DEVLOOP_ACTOR=senior-dev dev-loop approve <key>` outside any fire passed G1 (the
+  // handle is real) and wrote a GRANTED row attributed to an agent. The store already carries the
+  // distinction — `actors.kind` is CHECKed to ('agent','human') — and the approvals schema declares
+  // `grantor` to be "always a human/operator identity", so this enforces a contract the column had
+  // only documented.
+  //
+  // The set is FIRE_REFUSED_VERBS deliberately, not a second list: the two questions differ but their
+  // answer set is the same one — the verbs that AUTHORISE. `request` stays open (AC3: an agent's only
+  // way to ask, and asking authorises nothing) and so does the listing (reading attributes nothing).
+  // Naming one set keeps a verb from being added to the fire gate and silently missed by this one.
+  if (FIRE_REFUSED_VERBS.has(v) && !actorIsHuman(db, actor)) {
+    console.error(
+      `dev-loop ${v}: DEVLOOP_ACTOR='${actor}' is an agent identity, and granting is the human's act — ` +
+      `an approval recorded against an agent would attribute the authorisation to the party it is meant ` +
+      `to authorise. Human identities in this workspace: ${listHumanActorHandles(db).join(", ") || "(none seeded)"}. ` +
+      `Nothing has been written. To ask for this approval, file it: dev-loop request <key> --ticket <id>.`,
     );
     return 4;
   }

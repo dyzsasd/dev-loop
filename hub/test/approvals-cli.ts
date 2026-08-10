@@ -478,6 +478,41 @@ try {
       "P9 control: a real --ticket is still requestable from inside a fire");
   }
 
+  {
+    // P10 — G1 asked only "is this handle in the roster?", so an AGENT handle outside a fire granted:
+    // `DEVLOOP_ACTOR=senior-dev dev-loop approve <key>` exited 0 and left a GRANTED row whose grantor
+    // is the party the approval exists to authorise. The fire refusal does not cover it — it answers
+    // "may a FIRE do this?", and this caller has no marker. The store already knew the difference
+    // (`actors.kind`) and the approvals schema already declared `grantor` to be a human identity.
+    const KEY = `push:human:${SHA}`;
+    const asAgent = run(["approve", KEY], undefined, "senior-dev");
+    ok(asAgent.code === 4, `P10 approve as an AGENT identity is refused with exit 4 (got ${asAgent.code})`);
+    ok(!byKey(KEY), "P10 and no grant was written attributing the authorisation to an agent");
+    // AC4's property, applied to this refusal: it may name the ASK path (which authorises nothing —
+    // the fire refusal names it too), and must name nothing that would let THIS caller grant. An
+    // env re-spelling is the shape to watch here, since the gate reads DEVLOOP_ACTOR.
+    ok(asAgent.err.includes("dev-loop request"), "P10 the refusal names what this caller may legitimately do instead");
+    const BYPASS = [TOKEN_PREFIX, "--i-am-the-operator", "--force", "--yes", "--override", "DEVLOOP_ACTOR=operator", "export "];
+    const leaked = BYPASS.filter((t) => asAgent.err.includes(t));
+    ok(leaked.length === 0, `P10 and documents no bypass (leaked: ${leaked.join(", ") || "none"})`);
+
+    ok(run(["approve", PUSH_KEY]).code === 0, "P10 fixture: a live grant for the revoke arm");
+    const revokeAsAgent = run(["revoke", PUSH_KEY], undefined, "junior-dev");
+    ok(revokeAsAgent.code === 4, `P10 revoke as an AGENT identity is refused too (got ${revokeAsAgent.code})`);
+    ok(byKey(PUSH_KEY)?.state === "granted", `P10 and the approval was NOT ended (state=${byKey(PUSH_KEY)?.state})`);
+
+    // Both directions — a guard that refused every agent everywhere would satisfy the two arms above
+    // while destroying AC3, which is the agent's ONLY way to ask, and with it design §1.
+    const asked = run(["request", "reopen:AP-920", "--ticket", "AP-920"], undefined, "senior-dev");
+    ok(asked.code === 0, `P10 control: the SAME agent identity can still file a request (got ${asked.code})`);
+    ok(byKey("reopen:AP-920")?.requested_by === "senior-dev", "P10 control: attributed to the asking agent");
+    ok(run(["approvals", "--json"], undefined, "junior-dev").code === 0,
+      "P10 control: and an agent can still READ the record — a listing attributes nothing");
+    // Control: the human identity still grants and revokes, so the gate discriminates by kind.
+    ok(run(["revoke", PUSH_KEY]).code === 0, "P10 control: the operator still revokes");
+    ok(byKey(PUSH_KEY)?.state === "revoked", "P10 control: and it ended");
+  }
+
   console.log(fails ? `\n${fails} assertion(s) failed` : "\nAPPROVALS_CLI_OK");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
