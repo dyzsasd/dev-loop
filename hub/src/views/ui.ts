@@ -287,6 +287,10 @@ select{font:inherit;padding:.3rem .45rem;border:1px solid var(--line);border-rad
   .detail{padding:.9rem 1rem}
   .meta{grid-template-columns:1fr}
 }
+/* ── stale-daemon banner (LOOP-386): full-width, sticky top, shown/hidden via JS ── */
+.stale-banner{display:none;position:sticky;top:0;z-index:100;width:100%;padding:.6rem 1rem;font-size:var(--fs-sm);line-height:var(--lh-sm);background:color-mix(in srgb,var(--c-incident) 10%,var(--surface));border-bottom:1px solid color-mix(in srgb,var(--c-incident) 30%,var(--line));color:var(--c-incident)}
+.stale-banner.show{display:block}
+.stale-banner .sb-remedy{display:block;margin-top:.25rem;font-size:var(--fs-xs);line-height:var(--lh-xs);color:var(--mut)}
 `;
 // Exported for the test/webui.ts token guards (asserted on the EVALUATED sheet, not source slices).
 export { STYLE };
@@ -342,6 +346,7 @@ export function page(title: string, project: string, inner: string, opts: PageOp
     + `<span class="live-dot" id="live" title="live — updates when agents change the board"></span>`
     + `${nav}</header>`
     + wsBar
+    + `<div id="stale-banner" class="stale-banner"></div>`
     + `<main>${inner}</main>`
     + liveScript(opts.hub ? "/api/stream?all=1" : href(project, "/api/stream"))
     + `</body></html>`;
@@ -356,14 +361,30 @@ export function page(title: string, project: string, inner: string, opts: PageOp
 const liveScript = (streamPath: string) => `<script>
 (function(){
   try{
-    var dot=document.getElementById('live'), base=null, pending=false;
+    var dot=document.getElementById('live'), base=null, pending=false, banner=document.getElementById('stale-banner'), streamLost=false;
     var es=new EventSource(${JSON.stringify(streamPath)});
     function typing(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT');}
+    function showBanner(msg,remedy){if(banner){banner.innerHTML=esc(msg)+(remedy?'<span class=\"sb-remedy\">'+esc(remedy)+'</span>':'');banner.classList.add('show');}}
+    function hideBanner(){if(banner){banner.classList.remove('show');banner.innerHTML='';}}
+    function esc(s){return String(s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
     es.onmessage=function(e){
       var id=e.data; if(base===null){base=id;return;}
       if(id!==base){ if(dot)dot.classList.add('on'); pending=true; if(!typing())location.reload(); }
+      if(streamLost){streamLost=false;if(!pending)hideBanner();}
+    };
+    es.onerror=function(){
+      streamLost=true; showBanner('Connection to daemon lost — this view may be stale','The page will reload automatically when the connection returns.');
     };
     document.addEventListener('focusout',function(){ if(pending&&!typing())location.reload(); });
+    var healthTimer=setInterval(function(){
+      try{
+        fetch('/api/health').then(function(r){return r.json();}).then(function(h){
+          if(h&&h.ok===false){showBanner(h.error||'Daemon unhealthy','Restart it: dev-loop daemon up');}
+          else{hideBanner();}
+        }).catch(function(){});
+      }catch(_){}
+    },15000);
+    healthTimer.unref?.();
   }catch(_){/* no EventSource ⇒ static page, fine */}
 })();
 </script>`;
