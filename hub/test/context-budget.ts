@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { CONVENTIONS_BUDGETS } from "../src/context-bill.ts"; // LOOP-238: the conventions ratchet
 import { conventionsSlice } from "../src/conventions-verb.ts";
 import { loadWorkspace, type Workspace } from "../src/team-config.ts";
-import { tryResolveWorkspace } from "../src/workspace.ts";
+import { resolveWorkspace } from "../src/workspace.ts";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -513,32 +513,132 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
   ok(billSrc.includes("STRATEGY_DOC_MAX_BYTES") && doctorSrc.includes("STRATEGY_DOC_MAX_BYTES"),
     "LOOP-282: the bill and doctor share ONE exported budget — two literals is how a budget and its report drift");
 
-  // The DEFAULT resolver path (LOOP-406). The band fixtures below inject `resolveStat`, so nothing
-  // else would notice if the default stopped being `tryResolveStrategyDocStat` — this call is the only
-  // coverage that the two-argument production form still resolves the live workspace doc at all.
-  // What it can assert is band-INDEPENDENT: this host's doc sits in whichever band it sits in (that is
-  // the ticket's finding — an ambient doc is not a fixture), so it asserts the invariant that holds in
-  // every band, plus the message shape of whichever line did emit.
+  // The DEFAULT resolver path (LOOP-406 / LOOP-452). The band fixtures below inject `resolveStat`,
+  // so nothing else would notice if the default stopped being `tryResolveStrategyDocStat` — this is
+  // the only coverage that the three-argument production form resolves a doc at all.
+  //
+  // LOOP-452 replaces LOOP-406's ambient version of this block, which read `tryResolveWorkspace()`
+  // and wrapped every assertion in `if (ws)`. Two defects, both silent:
+  //   · it measured whichever band THIS host's live doc happened to sit in, so it could not assert
+  //     which workspace was measured — the one question LOOP-426 fixed and this block should guard;
+  //   · on a CI checkout no workspace resolves above `hub/`, `ws` is null, and the whole block is
+  //     skipped. Measured: the pre-LOOP-426 source is caught only with a fire env present, and
+  //     `run-all.ts` scrubs DEVLOOP_* — so the arm that detects the defect is the arm CI never runs.
+  // The fixtures below are host-independent instead: the workspace under test is passed explicitly,
+  // and the AMBIENT workspace is pinned to a decoy through DEVLOOP_WORKSPACE (discovery precedence 1,
+  // consulted only when no cwd is named — workspace.ts `findWorkspaceRoot`). So "which workspace did
+  // it measure?" has a different, known answer in each direction, on any host and under any env.
   {
-    const warns: string[] = [];
-    const infos: string[] = [];
-    const ws = tryResolveWorkspace();
-    if (ws) {
-      checkStrategyDocBudget(
-        ws,
-        (msg) => warns.push(msg),
-        (msg) => infos.push(msg),
-      );
-      ok(warns.length + infos.length <= 1,
-        `LOOP-406: the default resolver emits at most ONE line — the bands are exclusive (got ${warns.length} warn + ${infos.length} info)`);
-      for (const line of warns) {
-        ok(/\[W37\]/.test(line), "LOOP-282: the over-budget warning carries W37");
-        ok(/budget/.test(line) && /KB/.test(line), "LOOP-282: …naming the measured bytes and the limit");
-        ok(/strategy-archive/.test(line), "LOOP-282: …and the §20 R2 remediation");
+    const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
+    // A doc of EXACTLY `bytes`, newline-terminated so measureOf(splitLines(text)).bytes === the file size.
+    const docOfBytes = (bytes: number): string => {
+      const head = "# Strategy fixture\n";
+      return head + "x".repeat(bytes - head.length - 1) + "\n";
+    };
+    // A minimal valid schema-v2 workspace; `docRel === null` configures NO strategyDoc.
+    const mkWorkspaceFixture = (teamKey: string, docRel: string | null, bytes: number): string => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), `loop452-${teamKey}-`)));
+      mkdirSync(join(root, "my-repo"), { recursive: true });
+      if (docRel) {
+        mkdirSync(dirname(join(root, "my-repo", docRel)), { recursive: true });
+        writeFileSync(join(root, "my-repo", docRel), docOfBytes(bytes), "utf8");
       }
-      for (const line of infos) {
-        ok(!/\[W37\]/.test(line), "LOOP-353: soft advisory line does not carry W37");
-        ok(/strategy-archive/.test(line), "LOOP-353: soft advisory names the §20 R2 remedy");
+      writeFileSync(join(root, "dev-loop.json"), JSON.stringify({
+        schemaVersion: 2,
+        workspaceId: `loop452-${teamKey}`,
+        team: { key: teamKey, backend: "service" },
+        repos: { "my-repo": { path: "my-repo" } },
+        projects: { test: { repos: [{ ref: "my-repo" }], ...(docRel ? { strategyDoc: docRel } : {}) } },
+      }), "utf8");
+      return root;
+    };
+
+    // The decoy is what a check that reads the AMBIENT workspace would measure: over budget, and at a
+    // path/size that no correct assertion below can produce. Both a wrong SIZE and a wrong LABEL are
+    // therefore observable, not just the presence or absence of a line.
+    const DECOY_BYTES = 52 * 1024;
+    const MEASURED_BYTES = 60 * 1024;
+    const decoyRoot = mkWorkspaceFixture("loop452decoy", "docs/DECOY-STRATEGY.md", DECOY_BYTES);
+    const measuredRoot = mkWorkspaceFixture("loop452measured", "docs/STRATEGY.md", MEASURED_BYTES);
+    const silentRoot = mkWorkspaceFixture("loop452silent", null, 0);
+    const priorWorkspaceEnv = process.env.DEVLOOP_WORKSPACE;
+    const priorHomeEnv = process.env.DEVLOOP_HOME;
+    process.env.DEVLOOP_WORKSPACE = decoyRoot;
+    // `resolveWorkspace` self-heals the machine-global team index (workspace.ts upsertWorkspaceIndex).
+    // Point DEVLOOP_HOME at a scratch dir so these fixtures' team keys do not accrete in the
+    // operator's ~/.dev-loop/workspaces.json as entries pointing at temp dirs this block then deletes.
+    const scratchHome = realpathSync(mkdtempSync(join(tmpdir(), "loop452-home-")));
+    process.env.DEVLOOP_HOME = scratchHome;
+    try {
+      const run = (root: string) => {
+        const warns: string[] = [];
+        const infos: string[] = [];
+        // The three-argument PRODUCTION form — no `resolveStat` seam, so the default resolver and its
+        // `ws` thread are what answer. `resolveWorkspace(root)` names its root explicitly, so the
+        // fixture is loaded regardless of DEVLOOP_WORKSPACE (which pins only the ambient fallback).
+        checkStrategyDocBudget(resolveWorkspace(root), (m) => warns.push(m), (m) => infos.push(m));
+        return { warns, infos };
+      };
+
+      // Sanity control, not coverage: the decoy really is over budget, so the two arms below fail
+      // LOUDLY (a wrong line) rather than vacuously (no line at all) when the `ws` thread breaks.
+      {
+        const { warns } = run(decoyRoot);
+        ok(warns.length === 1 && warns[0]!.includes(kb(DECOY_BYTES)),
+          `LOOP-452 control: the decoy workspace is over budget at ${kb(DECOY_BYTES)} (got ${warns.length} warning(s))`);
+      }
+
+      // AC1 — the ws thread. The doc measured is the one PASSED, never the ambient one. This is the
+      // arm LOOP-426's AC3 asked for: a temp workspace whose strategyDoc is a repo file of known
+      // size, asserted through checkStrategyDocBudget's default resolver.
+      {
+        const { warns, infos } = run(measuredRoot);
+        ok(warns.length === 1 && infos.length === 0,
+          `LOOP-452 AC1: an over-budget fixture emits EXACTLY one W37 warning (got ${warns.length} warn + ${infos.length} info)`);
+        const line = warns[0] ?? "";
+        ok(line.includes("[W37]"), "LOOP-282: the over-budget warning carries W37");
+        ok(line.includes(kb(MEASURED_BYTES)),
+          `LOOP-452 AC1: …naming the PASSED workspace's ${kb(MEASURED_BYTES)} — not the ambient decoy's ${kb(DECOY_BYTES)} (got: ${line.slice(0, 120)})`);
+        ok(line.includes("docs/STRATEGY.md") && !line.includes("DECOY"),
+          "LOOP-452 AC1: …and the passed workspace's doc PATH, so a right-sized wrong file is caught too");
+        ok(/budget/.test(line) && /KB/.test(line), "LOOP-282: …naming the measured bytes and the limit");
+        ok(line.includes("strategy-archive"), "LOOP-282: …and the §20 R2 remediation");
+      }
+
+      // AC2 — the absence arm, with an ambient workspace deliberately resolvable and over budget.
+      // `doctor-golden.ts` covers this only when the host has no workspace above it; here the host
+      // always has one, so the silence is attributable to the fixture rather than to the environment.
+      {
+        const { warns, infos } = run(silentRoot);
+        ok(warns.length === 0 && infos.length === 0,
+          `LOOP-452 AC2: a workspace configuring NO strategyDoc emits nothing, though the ambient workspace is resolvable and over budget (got ${warns.length} warn + ${infos.length} info: ${[...warns, ...infos].join(" | ").slice(0, 160)})`);
+      }
+
+      // The soft band, driven the same way: 90% of the budget is one info, no warn, no W37. LOOP-406's
+      // band fixtures assert this through the injected seam, which never touches `ws`; this one reaches
+      // it through the default resolver, so the band and the thread are covered by the same call.
+      {
+        const softRoot = mkWorkspaceFixture("loop452soft", "docs/STRATEGY.md", Math.round(STRATEGY_DOC_MAX_BYTES * 0.9));
+        try {
+          const { warns, infos } = run(softRoot);
+          ok(warns.length === 0 && infos.length === 1,
+            `LOOP-452: a fixture inside the soft band emits exactly one advisory and no warning (got ${warns.length} warn + ${infos.length} info)`);
+          const line = infos[0] ?? "";
+          ok(!line.includes("[W37]"), "LOOP-353: soft advisory line does not carry W37");
+          ok(line.includes("strategy-archive"), "LOOP-353: soft advisory names the §20 R2 remedy");
+          ok(line.includes(kb(Math.round(STRATEGY_DOC_MAX_BYTES * 0.9))),
+            "LOOP-452: …and measures the PASSED workspace, not the ambient decoy");
+        } finally {
+          try { rmSync(softRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+        }
+      }
+    } finally {
+      if (priorWorkspaceEnv === undefined) delete process.env.DEVLOOP_WORKSPACE;
+      else process.env.DEVLOOP_WORKSPACE = priorWorkspaceEnv;
+      if (priorHomeEnv === undefined) delete process.env.DEVLOOP_HOME;
+      else process.env.DEVLOOP_HOME = priorHomeEnv;
+      for (const root of [decoyRoot, measuredRoot, silentRoot, scratchHome]) {
+        try { rmSync(root, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
     }
   }
