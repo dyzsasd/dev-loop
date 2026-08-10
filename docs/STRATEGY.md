@@ -369,6 +369,37 @@ lever is LOOP-484, not the per-pass discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-fortieth fire) — a re-swept lens found its finding already filed,
+  and the yield was the acceptance criterion rather than the ticket.**
+  The **ux-flows** lens came round again at code sha `c66ac22`. The measurement it produced —
+  `/activity`'s KPI tiles are bare `<div>`s, so the most actionable number the hub renders dead-ends
+  — was already on the board as **LOOP-390**, filed off the same lens at fire 58. §8 says comment,
+  do not re-file, and that is where this would normally stop.
+  **Rule 19 says to open the sibling's ACs anyway, and it paid.** LOOP-390 frames itself as "the
+  values are right and the flow they should start does not exist", and scopes AC1 to linking the
+  tile at `?state=Human-Blocked`, under the invariant "a tile links ONLY where the destination
+  reproduces the tile's own figure." The values half is not measured. `metrics.ts:675` defines the
+  operator's queue as `Human-Blocked ∪ (In Review AND assignee='operator')` — the set `dev-loop
+  metrics`, doctor's `[W20]`/`NEXT`, the daemon reminder and the §22a digest all read — while
+  `views/activity.ts:201` builds the tile from `openIn("Human-Blocked")` alone. The dropped arm is
+  the §9a investigation park and it holds real waits: from this workspace's `issue.transition`
+  ledger, LOOP-366 sat in `In Review`@operator for **5h 36m** (08-06 18:53:02Z → 08-07 00:28:48Z)
+  and LOOP-434 for 13m. Board filters are AND-ed (`views/board.ts:179-183`,
+  `fClauses.join(" AND ")`), so no query string the board accepts can express that OR.
+  **The call:** AC1 amended so tile and destination must agree rather than hard-coding the one-arm
+  URL, plus AC6/AC7 requiring the page to reach both arms by reusing `decisionQueue()` instead of
+  restating its predicate — the second AC pinned against that function's own result so the test
+  cannot pass by hard-coding a predicate that later drifts from `metrics.ts`. No new ticket: filing
+  a second one would have split the tile's spec across two owners, which is the failure the
+  amendment exists to prevent. LOOP-390 stays `Backlog`, junior tier, unpromoted.
+  **Folded into STANDING RULE 19** rather than opened as rule 41 (the fifth use of that practice):
+  the rule already names the mechanism and only ran in the filing direction. It now also covers the
+  reverse — a §8 hit ends in "its spec already covers this" or an amendment, never silence — and
+  adds the weighting the case turned on, that a ticket's MEASURED claims age well while its ASSERTED
+  ones are where an AC inherits an error.
+  Nothing was promoted: unblocked Todo is 12 senior / 12 junior against a cap of 10 per tier, so
+  Job B2 stays groom-only, as it has since the cap closed.
+
 - **2026-08-10 (pm, one-hundred-thirty-ninth fire) — the previous fire's exit condition was
   necessary and not sufficient, and the wait it recorded reached no surface for two fires.**
   Two separate defects in one hand-off, both mine.
@@ -716,6 +747,13 @@ lever is LOOP-484, not the per-pass discipline.
   19. **A dedupe note is a prediction about code that has not been written** — it claims a sibling's
      fix, as specified, leaves this defect standing. Test it by opening the sibling's ACs, never by
      comparing titles; and re-check it at promotion, because a ticket's premises decay.
+     **This runs in both directions, and the reverse one is where the yield is.** When the dedupe
+     hit means you file NOTHING, opening the sibling's ACs is still the job: the output of a §8 hit
+     is either "its spec already covers this" or an amendment to that spec — never silence. A
+     re-sweep that stops at "already filed" discards its own finding. Weight the sibling's prose by
+     how it was obtained: a ticket's MEASURED claims age well, its ASSERTED ones are where the ACs
+     inherit an error (LOOP-390 pinned the markup verbatim and asserted "the values are right", and
+     only the asserted half produced a wrong AC).
   20. **A ticket deliberately given no dev tier still needs an owner label, and an idle senior queue
      is a fact about the board rather than a routing bug.** The senior tier is fed by escalations and
      by other agents' `sensitive` findings; §21b forbids re-tiering to balance load, so an empty
