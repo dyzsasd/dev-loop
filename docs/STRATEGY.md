@@ -443,6 +443,22 @@ detector for the LOOP-407/LOOP-444 class (`main` has no branch protection, so `m
 enforced only by `merge-guard` at Step 0.5 and a never-dispatched check reads CLEAN). Its remedy is
 an operator GitHub setting or the standing rule never to merge on CLEAN alone; no ticket is needed.
 
+
+**Board at this fire's close: Todo 23 unblocked (senior 13/10, junior 10/10) — both tiers at or over
+cap, so nothing was promoted; Backlog 72 (+1 filed, −1 closed Duplicate).** Job A was empty at boot
+and at close: LOOP-443 was the fire-155 handoff and closed `Done` at 23:10Z before this fire booted.
+Job B resolved nothing to `Todo` — the one `needs-pm` item (LOOP-396) is correctly blocked behind
+LOOP-542, which remains the single operator park and is now commented for the first time with a
+re-measurement of its own premise. The §9c edge audit ran clean for the third consecutive fire, with
+one edge deliberately rewritten (LOOP-483: LOOP-464 → LOOP-543).
+
+**Doctor gained a hard `❌`.** `repo 'web.app' path missing on disk` is new at 22:59Z and is the
+first hard failure this workspace has carried; `dev-loop doctor` exits 1. It is owned by LOOP-546
+for the remedy-text half. The half that is **not** a product defect — whether `projects.testproj` /
+`repos.web.app` belong in this workspace at all — is the operator's call and is recorded here rather
+than filed. `[W18]` now reads 10 code commits behind (up from 7 at LOOP-542's filing), and `[W17]`
+(`testproj` has repos but no `strategyDoc`) arrived with the same row.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -476,6 +492,62 @@ an operator GitHub setting or the standing rule never to merge on CLEAN alone; n
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fifty-sixth fire) — the workspace health gate went hard-red on a
+  registry row whose printed remedy cannot be performed, and the ❌ displaced both live day-2
+  signals from the one line the operator acts on.**
+
+  **What was measured.** At 2026-08-10T22:59:25.915Z a repo registry row was added to
+  `dev-loop.json` — `repos.web.app`, `{"path": "dot-repo"}`, referenced by a new
+  `projects.testproj` — pointing at a directory that does not exist. `dev-loop doctor` now exits
+  **1** with `DOCTOR_FAILED`, and its closing line reads `NEXT: fix the ❌ first: repo 'web.app'
+  path missing on disk … (clone it, or /dev-loop:sync-repo)`. The row carries **no `remote`**, so
+  there is no source to clone from; both actions the message names are unavailable. `hub/src/
+  doctor.ts:431` builds that string unconditionally — `r` is in scope and carries `remote`, and the
+  message never reads it, so a recoverable row and an unrecoverable one print the same prescription.
+
+  **The consequence is not confined to one line.** `nextStep` (`doctor.ts:305`) returns
+  `fix the ❌ first: ${fails[0]}` at rung 1, above the entire day-2 ladder. Two day-2 conditions are
+  live in this workspace right now — `[W20]` (LOOP-542, one item waiting on the operator) and
+  `[W18]` (10 merged code commits not installed) — and neither can reach the `NEXT:` line while an
+  unclearable ❌ holds rung 1. Rung 1 is the correct position for a ❌ that can be cleared; the
+  defect is the ❌ that cannot be. Filed as **LOOP-546** (P2, junior), scoped to make the remedy
+  remote-aware and to leave the ordering and the verdict untouched.
+
+  **Attribution is not established, and the ticket does not depend on it.** Neither `testproj` nor
+  `dot-repo` occurs anywhere in `origin/main:hub/`, so the row is not one of this repo's own test
+  fixtures. Who registered it is the operator's question. Doctor's response to the row is wrong
+  regardless of the answer, so LOOP-546 was scoped to the response alone.
+
+  **A parked premise decayed while parked, and the version string could not see it.** LOOP-542 was
+  filed at 22:36Z reading "7 code commits behind". Re-measured this fire: the installed build is
+  `c7a9e11` (from `build-commit.json`), origin/main is `a6b0a60`, and the gap is **10 code commits
+  (21 total)** — doctor's own `[W18]` agrees. The installed version string and the repo's
+  `hub/package.json` are both `1.15.1`, so the version comparison reports no gap at all. The
+  decisive check is content: `force-with-lease` appears 4× in `origin/main:hub/src/push.ts`
+  (LOOP-536, merged as `a6b0a60`) and 0× in the installed `dist/push.js`. §9c re-measures a
+  tracker's premise every fire, not only its symptom; this is the case where re-measuring moved the
+  number in the wrong direction.
+
+  **Correcting a premise in a comment does not retire the ticket that premise created.** LOOP-464
+  (P1) was filed on provider credit exhaustion; its own 22:38Z comment recorded that credit is not
+  exhausted ($4.19 remaining, HTTP 200) and that the fires carry no error to classify. The surviving
+  scope — an exit-0 fire that produced nothing carries `errorClass: null`, so every liveness surface
+  reads healthy — is LOOP-543's scope, measured over a wider window with the falsified causal claims
+  already struck. Two P1s were therefore open for one detector, the older one still naming a cause
+  its own comments disproved. LOOP-464 closed `Duplicate` of LOOP-543 this fire. The
+  **`Blocked-by` edge is the part that does not close itself**: LOOP-483 was blocked by LOOP-464
+  and LOOP-463 (`Done`). Retiring the LOOP-464 edge alone would have left one blocker, `Done`, and
+  §9c would then read "≥1 blocker, all resolved" and auto-unpark LOOP-483 onto work nobody has
+  done. The edge was re-pointed (`Unblocked-by: LOOP-464`, `Blocked-by: LOOP-543`) in the same pass,
+  and LOOP-483 stays parked.
+
+  **RULE 51 — when a ticket's premise is corrected, close or re-scope the ticket in the same pass,
+  and walk its blocking edges before you do.** Rule 49 required a control before a diagnosis is
+  recorded; rule 50 required the control to run first. Both govern the diagnosis. Neither reaches
+  the artifacts an incorrect diagnosis already produced: the ticket it opened, its priority, and any
+  `Blocked-by` edge pointing at it. A premise correction that stops at a comment leaves a P1 in the
+  queue and a dependency aimed at a ticket that will never be worked. Max rule number is now 51.
 
 - **2026-08-10 (pm, one-hundred-fifty-fifth fire) — a correctly-ranked queue can still hold six
   tickets it will never serve, and the loop had no way to see it.**
