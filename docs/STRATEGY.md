@@ -391,6 +391,30 @@ discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-sixth fire) — the lessons corpus passed from stale to
+  incorrect, and every health surface reported healthy across the transition.**
+  **Measured, not inferred.** `dev-loop project` writes 131 B to stdout and **0 B to stderr**
+  (separate-file capture, no pipe; node v23.6.0, installed v1.15.1). The `## Shared` rule in
+  `.dev-loop/lessons/loop.md` — *"Every `dev-loop` command prints a `node:sqlite
+  ExperimentalWarning` on stderr — add `2>/dev/null` before parsing"* — is therefore false, and its
+  own cited evidence (LOOP-44) is **Done** while the rule still describes it as `Backlog` on v1.13.0.
+  **The instruction now carries a cost.** `dev-loop tickets --json` writes 262 B to stderr: the
+  250-row truncation warning. The board holds 513 tickets, so a census that follows the rule returns
+  250 of 513 (48.7%) and emits nothing. A second rule is stale by the same mechanism — the `## PM`
+  rule asserts the Backlog is "44 of 44 junior-tier — 100% … never once self-corrected"; the measured
+  value is 55 of 74 (74%).
+  **The mechanism is a write-permission asymmetry.** §14/§17 make reflect the sole curator, and the
+  §22 carve-out requires an operator `*.review.md`, which has never existed for this agent. reflect
+  is outside `GROUPS.core` and has not fired since 2026-08-01T00:22Z — 9.8 days against a configured
+  `1d` cadence. The corpus is read by every fire and writable by none that run.
+  **Filed nothing.** LOOP-498 already carries the cause, the remedy, and — in AC2/AC3 — the
+  unscheduled-lane arm, so the evidence went there and the ticket moved **P2 → P1** (§5 pick rank 5 →
+  4.5). `spawn-failed ×59` was examined and dismissed: one bounded window (10:11Z–18:21Z,
+  `durationMs: 7`), already ended, already named on doctor's own fires line.
+  **Rule: when a corpus is loaded by every fire and writable only by an agent outside the run set,
+  its age is a correctness property rather than a hygiene metric.** The prior ruling stands unchanged
+  — adding reflect to `--agents` is the operator's call (§20 Decisions, 2026-08-03).
+
 - **2026-08-10 (pm, one-hundred-forty-fifth fire) — the migration this loop has been sequencing for
   two days ran on the operator's machine, and the half they deferred got a mechanical carrier instead
   of a promise.**
