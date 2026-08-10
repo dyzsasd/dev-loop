@@ -282,50 +282,47 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
   junior's slice behind LOOP-365). Both survivors are junior-tier, so the program cannot advance
   while the outage holds, whatever their rank.
+- **The board's write surface has a supported switch (LOOP-479, `6b451ed`, verified Done
+  2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
+  (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
+  unset here, so the board is still read-only and the CLI is still the only way to rule.
 - **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`)** —
   verified 2026-08-10 to the third rung (source, installed `dist/`, observed effect), with a
   control against the pre-retirement tree. Full measurements: archive block BI.
 
-### 2026-08-10 (pm, one-hundred-twenty-ninth fire): the ask repaired inside the 57 characters that reach the reader, and a rule its own code states one hop too shallow
+### 2026-08-10 (pm, one-hundred-thirtieth fire): a citation written in the keyword that binds it, and the merge gate's own bug filed twice
 
-**LOOP-463's headline now carries its own magnitude, because the projection that truncates it is
-not going to change this week.** Pass 97 filed LOOP-509 on the mechanism; this fire fixed the
-INSTANCE. Measured, not inferred: `doctor.ts:366` cuts the queue title at 57 characters and
-LOOP-463's first digit sat at index 78, so the operator's only decision line read *"Restore
-OpenRouter credit: junior-dev, qa and sweep have …"* — **no number in it at all** — while the ledger
-held **292 dead-lane fires over 36.9 h**. The title now opens `$510 burned, 37h, 3 of 6 lanes dead:
-add OpenRouter credi…`. **The check that made this a repair rather than a harm is the part worth
-keeping:** a title write bumps `updated_at`, and any surface ageing a park from `updated_at` would
-have reset a 10-hour escalation to zero — the fix would have hidden precisely what it was written to
-surface. Both operator surfaces age from the events ledger instead (`decisionEnteredAt`,
-`metrics.ts:690`; W20 re-derives and re-sorts locally, `doctor.ts:347-351`), confirmed by reading
-both before the write and re-reading W20 after — age held at 10h. Editing the DATA to fit a broken
-projection is legitimate only after enumerating what else reads that data.
+**LOOP-479 verified `Done` against the merged tree (`6b451ed`, landed mid-fire).** `dev-loop settings
+list|get|set|unset <path>` gives `projects.settings_json` its first writer; every AC met, AC5 being
+the split I made on 08-09 (LOOP-481, unparked this fire). Two things outlive the increment. The verb
+is **fire-gated** — exit 4 under `DEVLOOP_DEV_SPLIT`, "nothing has been read or written" — which is
+LOOP-503's ask already solved in-tree for a sibling verb, so that ticket now has a precedent to copy
+rather than a design to invent. And its test imports the shipped `humanWriteEnabled` instead of
+re-deriving it, citing the LOOP-429 shape unprompted. **Merged, not published:** fires still run
+`0cac647`/v1.15.1, so no fire can reach the verb yet.
 
-**The cost of the wait is now on the park, and it is what decides urgency.** **$509.71 since the
-fixed anchor over 36.9 h = $331.96/day**, every dollar of it `pm` ($258.37) and `senior-dev`
-($251.34); the three dark lanes spent nothing across 291 no-op fires. Both spending lanes are ~100%
-metered (39/39, 24/24), so this is not a coverage artifact. What makes it urgent rather than merely
-large: **the spend is not idling, it is accumulating into a queue its executor cannot drain** —
-`junior-dev` owns 40 of the 60 Backlog rows and 13 of the 28 Todo rows and has not completed a fire
-since the anchor. The operator's ruling (2026-08-09T22:19Z) stands and was not disturbed: account
-credit, human action, stays parked.
+**A `Design:` line is a state-machine write — and this fire found the form that reports nothing.**
+LOOP-502 (the merge-gate bug holding PRs #271/#273) opened `Design: parent LOOP-448`, meant as
+provenance; `designParentIds` binds the `parent <id>` form on nothing but `onBoard.has(id)`, so a
+`Done` §17 proposal became a design parent and LOOP-502 its staged child. Pass 104 recorded this
+shape on LOOP-480, where it surfaced LOUDLY as a refused close. Here it surfaced nowhere — a `Done`
+parent's gate never fires again. Line removed, `relatedTo` untouched; recorded as pass 104's
+detection clause, not a new rule.
 
-**LOOP-510 filed (P3): the parked/sequenced split states the right rule and applies it only to the
-ticket already in hand.** `parkedSplit` (`metrics.ts:553-555`) says it outright — *"a human is the
-gate; the edge is not what is holding it"* — and enforces it at depth 0 only; one edge out,
-`hasLiveBlockerEdge` (`:590`) asks nothing but `!TERMINAL`. So LOOP-483, whose live edges are
-LOOP-464 **and LOOP-463 (Human-Blocked)**, is filed in the bucket the field comment calls *"will
-self-unpark"*. It will not. The board line reads `1 parked, 7 sequenced` when the human-gated count
-is 2 of 8 — a 100% under-report of the only number on that line describing work that cannot move
-without the operator, and the exact direction LOOP-26's own AC named as dangerous.
+**The same defect, filed twice in 118 minutes, the second contradicting the first.** LOOP-511
+re-derived LOOP-502's cause (the reverse `compare` at `landing.ts:214` crossing Node's 1 MiB
+`spawnSync` ceiling) two hours after LOOP-502's thread established it. Closed `Duplicate` with its
+unique content merged up, not dropped: an AC bounding the REQUEST (`?per_page=1` + `behind_by`) and a
+test arm pinning the request SHAPE. The ordering was the risk — LOOP-511's *first* AC prescribed the
+bare `maxBuffer` bump LOOP-502 had already shown to be a deadline rather than a fix. LOOP-502's body
+also still claimed "a payload-size overflow is ruled out" against its own comments; the spec now says
+what its thread found.
 
-**Board and protocol.** Job A empty for the fifth consecutive fire — all four In Review rows are
-`qa`-owned and that verifier is dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is
-Done/Canceled, so none of the seven parked rows can unpark; `needs-pm` empty on both scans; no
-`## Deferred findings` awaiting triage. Promotion closed for the twenty-second consecutive fire:
-unblocked Todo **28** (senior 15, junior 13) against the default cap of 10 per tier; Backlog 60 → 61,
-every row carrying both a tier and an owner label.
+**Job C, `polish-performance`: two candidates killed, nothing filed.** The `bootBytes` coverage gap
+is historical and closed (62/62 recent claude fires carry it); the 250-row cap does signal truncation
+precisely, on stderr — I had suppressed stderr, and re-ran the audit over all 493 rows rather than
+trust the narrower basis. With 48 of 61 Backlog rows owned by a tier dark for 37 h, a 62nd filing is
+inventory, not throughput.
 
 ## Personas
 
@@ -440,6 +437,14 @@ every row carrying both a tier and an owner label.
   that way.** Generalizes the same shape already recorded for `Blocked-by:`/`Unblocked-by:`.
   Cost of the mis-encoding: a verified increment sat closeable-but-refused, and the refusal surfaced
   only at the parent's close, not at the child's filing. LOOP-455, LOOP-480.
+  **Second instance, 2026-08-10 (fire 130) — and it has no refusal at all.** LOOP-502 opened
+  `Design: parent LOOP-448`; LOOP-448 is a `Done` §17 proposal, so the child was staged under a
+  parent whose gate had already fired. Where LOOP-480 was caught LOUDLY by a refused close, this one
+  is caught by NOTHING — a `Done` parent's gate never fires again, Job B2 excludes staged children
+  from grooming, and the stranded-child repair needs a live Sweep. **The rule gains a detection
+  clause, not a new rule: a mis-bound pointer self-reports only while its named parent is open; once
+  that parent is terminal, only an audit finds the child.** Audit the WHOLE board — at 493 rows the
+  250-row read that looks complete is exactly the cap. LOOP-502, LOOP-448.
 
 - **2026-08-09 (pm, ninety-second fire) — where the taxonomy already determines the answer, a write
   path should COMPLETE the input rather than refuse it.** The hub's create path derives a ticket's
@@ -802,9 +807,10 @@ every row carrying both a tier and an owner label.
     (LOOP-385), the `local` backend's retirement verified across the taught surface (LOOP-465), and
     the north star shedding facts it cannot keep (LOOP-494) → `2026-08.md`, incl. block **AX**.
     Doctrine: RULES 35–38.
-  - **2026-08-10** (fires 121–127; R2 passes 91–97) — the per-fire journals of the approvals-gate
-    arc and the boot-corpus lane split → `2026-08.md`, blocks **BC–BF**. Doctrine: RULES 39–40, plus
-    the mirror clause folded into 32 and the projection clause into 35.
+  - **2026-08-10** (fires 121–129; R2 passes 91–99) — the per-fire journals of the approvals-gate
+    arc, the boot-corpus lane split and the settings-writer arc → `2026-08.md`, blocks **BC–BJ**.
+    Doctrine: RULES 39–40, plus the mirror clause folded into 32, the projection clause into 35, and
+    pass 104's marker rule gaining its detection clause.
 - **2026-08-10 — operator ruling on LOOP-499: build the seam, and close the silent-enable window
   in the same arc.** `approvals.enforce: ["push"]` reaches no reader on `landing:"pr"` — the mode
   this workspace runs — because the pr-mode ship path pushes the ticket branch with a bare
