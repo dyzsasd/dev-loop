@@ -71,6 +71,10 @@ export interface PushResult {
   // class was read and no push was attempted. Deliberately not a `hold` — a hold names an objection
   // somebody must answer, and "another fire is landing in this repo" is a retry, not an objection.
   lockUnavailable: string | null;
+  // LOOP-528 — the branch tip AFTER a successful push, when it is no longer the `sha` that was
+  // published. The refspec is pinned to the audited sha, so a commit made while the gate ran stays
+  // local; a caller who is not told that would have to diff the remote to find out.
+  advancedTo?: string;
   dryRun: boolean;
 }
 
@@ -102,12 +106,30 @@ export const defaultGitExec = (repoDir: string): GitExec => (args) => {
   }
 };
 
-// The push this verb issues. `--set-upstream` keeps the tracking the ship sequence's
-// `git push -u origin <branch>` set, so the §17 adoption stays a one-token substitution (D1).
-// There is no force variant and no flag that adds one: a gate whose action can be re-shaped by the
-// caller is not a gate.
-export function pushArgvFor(remote: string, branch: string): string[] {
-  return ["push", "--set-upstream", remote, `${branch}:${branch}`];
+// The push this verb issues. There is no force variant and no flag that adds one: a gate whose
+// action can be re-shaped by the caller is not a gate.
+//
+// LOOP-528 — the source is the SHA the gate cleared, not the branch NAME. `<branch>:<branch>`
+// re-resolves the ref inside `git push`, so an ordinary `git commit` landing between the guard
+// returning and the push publishes a tip nothing checked. The per-repo landing lock does not close
+// that window: it serializes `dev-loop` verbs against each other, not the author's own editor, and
+// this verb is called BY the author mid-fire (D7). Pinning the refspec makes the published tip
+// exactly the audited one — a TOCTOU that a re-read-and-compare could only narrow.
+//
+// `--set-upstream` is DELIBERATELY absent, and its absence is why `setUpstreamArgvFor` exists below.
+// git accepts `-u` with a sha source and then silently does not set the upstream (no warning, exit
+// 0) — measured, not assumed — so keeping the flag here would have left an argv that claims a
+// tracking write it never performs.
+export function pushArgvFor(remote: string, branch: string, sha: string): string[] {
+  return ["push", remote, `${sha}:refs/heads/${branch}`];
+}
+
+// The tracking `git push -u origin <branch>` used to set, restored as its own local step so the §17
+// adoption stays a one-token substitution (D1) and `git status` still reports ahead/behind. It runs
+// only after a successful push, writes no remote state, and a failure is reported without failing
+// the push — the commits are published by then, and claiming otherwise would be the worse lie.
+export function setUpstreamArgvFor(remote: string, branch: string): string[] {
+  return ["branch", `--set-upstream-to=${remote}/${branch}`, branch];
 }
 
 function holdsFrom(g: PushGuardResult): PushHold[] {
@@ -263,7 +285,18 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   }
 
   // ── The push ─────────────────────────────────────────────────────────────────────
-  const argv = pushArgvFor(remote, branch);
+  // `sha` was read at readiness, before the gate. Publishing it is safe by SUBSET: the guard measured
+  // its range against the branch as it stood when the guard ran, which is `sha` or a descendant of
+  // it, so the pinned tip is always inside the audited range. Anything committed since is simply not
+  // published — reported below rather than swallowed, because a caller who expects their latest
+  // commit on the forge must not have to diff the remote to discover it isn't.
+  if (!sha) {
+    // Unreachable via the readiness checks above (the branch resolved), so this is a guard against a
+    // future refactor rather than a live path — but a null sha must not silently fall back to a
+    // name-resolved refspec, which is the defect this block exists to close.
+    return { ...base, branch, sha, guard, gateUnevaluated: `could not resolve the tip of '${branch}' — refusing to push a ref the gate cannot name` };
+  }
+  const argv = pushArgvFor(remote, branch, sha);
   if (dryRun) {
     // Every check above ran and would have refused; the only thing skipped is the mutation. The argv
     // stays null because none was issued — a dry run must not leave a trace that reads like a push.
@@ -273,7 +306,12 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   if (!r.ok) {
     return { ...base, branch, sha, guard, pushArgv: argv, pushError: (r.stderr || "git push failed").split("\n")[0]! };
   }
-  return { ...base, branch, sha, guard, pushArgv: argv, pushed: true };
+  // Tracking, restored (see `setUpstreamArgvFor`). Reported, never fatal: the push already happened.
+  const up = git(setUpstreamArgvFor(remote, branch));
+  if (!up.ok) process.stderr.write(`push: pushed, but setting upstream failed: ${up.stderr.split("\n")[0]}\n`);
+  const movedTo = git(["rev-parse", branch]);
+  const advancedTo = movedTo.ok && movedTo.stdout !== sha ? movedTo.stdout : null;
+  return { ...base, branch, sha, guard, pushArgv: argv, pushed: true, ...(advancedTo ? { advancedTo } : {}) };
 }
 
 // `dev-loop push` — the gate AND the push under ONE per-repo lock.
@@ -409,16 +447,27 @@ if (isMainEntry(import.meta.url)) {
   let dryRun = false;
   let asJson = false;
   let lockWaitMs: number | undefined;
+  // LOOP-528 — every value-taking flag reads its value through this, so a flag standing LAST on the
+  // line is a usage error rather than its own default. `argv[++i]` alone returns undefined there, and
+  // each of these flags treats undefined as "not passed": `dev-loop push --branch` pushed the current
+  // branch, and `--remote` published to origin, in both cases naming something the caller did not.
+  // A flag the caller typed and the parser dropped must not be a silent success.
+  const valueFor = (flag: string, i: number): string => {
+    const v = argv[i + 1];
+    // A following flag is not a value: `--branch --dry-run` is the same typo one token later.
+    if (v === undefined || v.startsWith("--")) { console.error(`dev-loop push: ${flag} needs a value`); process.exit(PUSH_EXIT.usage); }
+    return v;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--repo") repo = argv[++i] ?? "";
-    else if (a === "--branch") branch = argv[++i];
-    else if (a === "--remote") remote = argv[++i];
-    else if (a === "--default-branch") explicitDefaultBranch = argv[++i];
+    if (a === "--repo") { repo = valueFor(a, i); i++; }
+    else if (a === "--branch") { branch = valueFor(a, i); i++; }
+    else if (a === "--remote") { remote = valueFor(a, i); i++; }
+    else if (a === "--default-branch") { explicitDefaultBranch = valueFor(a, i); i++; }
     else if (a === "--dry-run") dryRun = true;
     else if (a === "--json") asJson = true;
     else if (a === "--lock-wait") {
-      const v = argv[++i] ?? "";
+      const v = valueFor(a, i); i++;
       const m = v.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);   // the `with-repo-lock --wait` grammar
       if (!m) { console.error(`dev-loop push: invalid --lock-wait duration '${v}'`); process.exit(PUSH_EXIT.usage); }
       const u = m[2] ?? "s";
@@ -466,6 +515,9 @@ if (isMainEntry(import.meta.url)) {
     console.log(`push (dry-run): the gate CLEARS — would push ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}. Nothing was written outward: not the remote, not the approvals ledger (the base was fetched, as the real run would).`);
   } else {
     console.log(`push: ✅ gate clear — pushed ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}`);
+    // The refspec is pinned to the audited sha, so a commit made while the gate ran is still local.
+    // Said out loud: the alternative is a caller who believes their newest commit is on the forge.
+    if (result.advancedTo) console.log(`  note: ${result.branch} has since advanced to ${result.advancedTo.slice(0, 12)} — that commit was NOT gated and NOT pushed; re-run to publish it.`);
   }
   process.exit(exit);
 }
