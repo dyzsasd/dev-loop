@@ -1,7 +1,7 @@
 // P1-2 push-guard — regression tests for the ride-along class (MP-275: a Canceled ticket's commit rode a
 // batched push into a prod deploy). Real git repos (bare origin + clone), real hub rows.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -266,6 +266,72 @@ try {
         .some((l) => l.includes('"main"'));
     ok(!carriesMainLiteral("push-guard.ts"), "AC2: hub/src/push-guard.ts carries no \"main\" branch-default literal (design §5)");
     ok(!carriesMainLiteral("worktree.ts"), "AC2: hub/src/worktree.ts carries no \"main\" branch-default literal (design §5)");
+  }
+
+  // LOOP-535 — a REBASE-refresh must not be judged on commits the default branch already carries.
+  //
+  // LOOP-528 pointed findings/governance at the approvals range (`origin/<br>..<br>`). That set equals
+  // "content newly reaching the default branch" for a first push and a fast-forward, and diverges for
+  // exactly one operation: a rebase — which is precisely §12c's prescribed remedy for a `stale`
+  // ciFreshness hold or a `DIRTY` mergeStateStatus. After a rebase `origin/<br>` is the PRE-rebase tip,
+  // so the range re-admits every default-branch commit the rebase brought in, and the two classes
+  // hard-stop on already-published work with no flag to waive it. Field measurement that produced this
+  // ticket: `dev-loop/LOOP-396` rebased onto `afc8bc6` scanned 12 commits where 1 was its own, and
+  // 9 findings named Canceled tickets carried by commits already ancestors of `origin/main`.
+  //
+  // Its own repo pair: the shared fixture's `main` has unpushed commits and extra branches by this
+  // point, and this case needs an exact, pushed base to rebase onto.
+  {
+    const origin2 = join(ROOT, "origin2.git");
+    const w2 = join(ROOT, "work2");
+    mkdirSync(origin2, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", origin2]);
+    execFileSync("git", ["clone", "-q", origin2, w2]);
+    git(w2, ["commit", "--allow-empty", "-qm", "baseline"]);
+    git(w2, ["push", "-qu", "origin", "main"]);
+
+    // A feature branch WITH an upstream — the state every re-pushed PR branch is in.
+    git(w2, ["checkout", "-qb", "dev-loop/CERT-2"]);
+    git(w2, ["commit", "--allow-empty", "-qm", "CERT-2: the branch's own work"]);
+    git(w2, ["push", "-qu", "origin", "dev-loop/CERT-2"]);
+
+    // main then advances carrying exactly the two things these classes hard-stop on.
+    git(w2, ["checkout", "-q", "main"]);
+    git(w2, ["commit", "--allow-empty", "-qm", "CERT-1: canceled work, already published on main"]);
+    mkdirSync(join(w2, "references"), { recursive: true });
+    writeFileSync(join(w2, "references", "conventions.md"), "a governed edit that is already on the default branch\n");
+    git(w2, ["add", "references/conventions.md"]);
+    git(w2, ["commit", "-qm", "docs(conventions): a governing-file edit, already published"]);
+    git(w2, ["push", "-q", "origin", "main"]);
+
+    // The §12c remedy.
+    git(w2, ["checkout", "-q", "dev-loop/CERT-2"]);
+    git(w2, ["rebase", "-q", "origin/main"]);
+
+    const reb = pushGuard(w2, "dev-loop/CERT-2", db, "main");
+    ok(reb.findings.length === 0,
+      `AC1 a rebased branch raises no ride-along finding for a Canceled ref already on origin/main (got ${reb.findings.map((f) => `${f.sha}:${f.ticket}`).join(",") || "none"})`);
+    ok(reb.governance.length === 0,
+      `AC2 nor a §17 finding for a governing-file edit already on origin/main (got ${reb.governance.map((g) => `${g.sha}:${g.file}`).join(",") || "none"})`);
+    ok(reb.passengers.length === 0,
+      `AC1 the passenger class agrees — it always measured origin/<defaultBranch>..<branch> (got ${reb.passengers.length})`);
+    // `ahead` is printed as "ahead of origin/<branch>", so it must KEEP the wider publish count: the
+    // two rebased-in commits plus the branch's own. Pins that this fix narrowed the scanned set only.
+    ok(reb.ahead === 3, `AC5 ahead still counts the publish range origin/<br>..<br> (got ${reb.ahead}, want 3)`);
+
+    // The guard's real job survives: a Canceled ref that is NOT on the default branch is still caught,
+    // and a governing edit made ON the branch is still caught. Without this pair the fix above would
+    // pass by disabling both classes for every tracked branch.
+    git(w2, ["commit", "--allow-empty", "-qm", "CERT-1: a real ride-along, cherry-picked onto the branch"]);
+    writeFileSync(join(w2, "references", "conventions.md"), "an edit made ON the feature branch\n");
+    git(w2, ["add", "references/conventions.md"]);
+    git(w2, ["commit", "-qm", "docs(conventions): a governing edit made on the branch"]);
+    const reb2 = pushGuard(w2, "dev-loop/CERT-2", db, "main");
+    ok(reb2.findings.some((f) => f.ticket === "CERT-1" && f.state === "Canceled"),
+      "AC3 a Canceled ref NOT on the default branch is still a finding");
+    ok(reb2.governance.some((g) => g.file === "references/conventions.md"),
+      "AC3 a governing-file edit made on the branch is still a §17 finding");
+    ok(reb2.ahead === 5, `AC5 ahead grows with the two new branch commits (got ${reb2.ahead}, want 5)`);
   }
 
 } finally {

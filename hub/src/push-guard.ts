@@ -4,6 +4,9 @@
 // has since Canceled (the field's MP-275: a canceled ticket's commit rode a junior ship's push into a
 // Vercel prod deploy; revert d7b617f). Also flags passenger commits in origin/<defaultBranch>..HEAD that
 // are not attributable to the PR's own ticket (LOOP-87: stacked branches drag parent-ticket commits).
+// Two ranges, deliberately (LOOP-535): the approvals receipt covers what a push PUBLISHES to the branch
+// ref, while ride-along/passenger/§17 cover CONTENT that would newly reach the default branch — which
+// after a rebase is the narrower set, since `origin/<br>` is then the pre-rebase tip.
 // Read-only on git, and on the hub's BOARD; the dev-agent ship sequence runs it `--strict` before
 // `git push` (§12). One deliberate exception since LOOP-394: with `approvals.enforce` naming `push`,
 // consulting the approvals record appends an `approval.attempt` ledger row — an audit line, per
@@ -475,8 +478,32 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // -z NUL-terminates each record so newlines in the body don't split records; %B is the full commit
   // message (subject + body), which allows ticket refs in trailers/footers to be detected (LOOP-25).
   const commits = range ? parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])) : [];
+
+  // LOOP-535 — the ride-along and §17 classes judge CONTENT that would newly reach the default
+  // branch; the approvals receipt above judges the commits this push PUBLISHES to the branch ref.
+  // Those are the same set for a first push and for a fast-forward, and they diverge for exactly one
+  // operation: a REBASE, which is what §12c prescribes as the remedy for a `stale` ciFreshness hold
+  // or a `DIRTY` mergeStateStatus. After a rebase `origin/<br>` is the PRE-rebase tip, so
+  // `origin/<br>..<br>` also contains every default-branch commit the rebase brought in — commits
+  // already on `origin/<defaultBranch>`, which this push publishes nothing new about. Judging them
+  // hard-stopped the refresh on already-published work with no flag to waive it: measured on
+  // dev-loop/LOOP-396 rebased onto afc8bc6, the range held 12 commits where 1 was the branch's own,
+  // and 9 findings named Canceled tickets belonging to commits (35f70b6, 7d9c7cf, c7a9e11, 8cbebbf,
+  // 4cf6130) that were already ancestors of origin/main — one of them 1daa96d, LOOP-528's own fix.
+  //
+  // So subtract what the default branch already carries. This preserves LOOP-528's fix rather than
+  // reverting it: the no-upstream arm is untouched, so a FIRST push still gates all five classes
+  // (`origin/<defaultBranch>..<br>` already excludes the default branch by construction), and the
+  // no-refs arm has no default-branch ref to subtract. Only the tracked-branch arm narrows.
+  // `ahead` keeps counting `range` — it is printed as "ahead of origin/<branch>", which for a
+  // rebased branch genuinely IS the wider number.
+  const subtractPublished = hasUpstream && gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`]);
+  const scanCommits = !range ? []
+    : subtractPublished
+      ? parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range, "--not", `${remote}/${defaultBranch}`]))
+      : commits;
   const refs = new Map<string, { sha: string; subject: string }[]>();
-  for (const c of commits) {
+  for (const c of scanCommits) {
     for (const id of c.msg.match(TICKET_RE) ?? []) (refs.get(id) ?? refs.set(id, []).get(id)!).push(c);
   }
   const findings: PushGuardFinding[] = [];
@@ -509,7 +536,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // §17 (LOOP-35) — governing-file edits in the unpushed range. Local git only, like every other
   // check here: no forge call, so it works offline and cannot be disabled by a `gh` outage.
   const governance: PushGuardGovernance[] = [];
-  for (const c of commits) {
+  for (const c of scanCommits) {
     let files: string[] = [];
     try { files = git(["show", "--pretty=format:", "--name-only", c.sha]).split("\n").map((f) => f.trim()).filter(Boolean); }
     catch { continue; }
