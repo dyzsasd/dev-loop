@@ -600,11 +600,13 @@ function resolveAutostartWorkspace(argv: string[]): string | null {
   return null;
 }
 
+// Ordering is the contract, not a style choice. Argument validation and the `--dry-run` RENDER are
+// platform-independent — refusing an unresolvable workspace is an argument fault, and rendering the
+// plist writes nothing and invokes no launchctl. Only the side-effecting half (write the file, load
+// it into launchd) needs macOS. Gating the whole verb on darwin, as this did, made the binding a
+// login item WOULD carry unobservable anywhere but a Mac — including on the Linux CI that gates
+// every merge, where it left the ambient-env regression this ticket exists to prevent unasserted.
 function installAutostart(argv: string[] = []): number {
-  if (platform() !== "darwin") {
-    console.error("[daemon] install-autostart currently supports macOS LaunchAgent only.");
-    return 1;
-  }
   const root = resolveAutostartWorkspace(argv);
   if (!root) return 1; // AC1 — refused; nothing written
   const plist = launchAgentPath();
@@ -621,6 +623,11 @@ function installAutostart(argv: string[] = []): number {
     console.log(`[daemon] install-autostart --dry-run: would bind workspace ${root} and write ${plist}:`);
     console.log(xml);
     return 0;
+  }
+  if (platform() !== "darwin") {
+    console.error("[daemon] install-autostart currently supports macOS LaunchAgent only.");
+    console.error("[daemon] `--dry-run` renders the binding on any OS; run `dev-loop daemon up-all` from systemd/cron to autostart here.");
+    return 1;
   }
   mkdirSync(dirname(plist), { recursive: true });
   mkdirSync(logDir, { recursive: true });

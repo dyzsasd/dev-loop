@@ -126,7 +126,10 @@ try {
     });
     ok(r.status === 0, `AC3: up-all resolution runs under the login env (got ${r.status}: ${(r.stderr ?? "").split("\n").slice(-3).join(" | ")})`);
     const line = (r.stdout ?? "").trim().split("\n").filter((l) => l.startsWith("{")).pop() ?? "{}";
-    const got = JSON.parse(line) as { workspace: string | null; keys: string[] };
+    // Defaulted, not asserted-into: when the probe fails, the arms below must REPORT a failure —
+    // a TypeError here would abort the file and silently take AC4–AC7 with it (it did: CI's run
+    // ended at this line, so five later ACs reported neither pass nor fail).
+    const got = { workspace: null as string | null, keys: [] as string[], ...JSON.parse(line) };
     ok(got.workspace === WS_A, `AC3: up-all resolves the BOUND workspace (got ${got.workspace})`);
     ok(got.keys.includes("alpha"), `AC3: it starts the bound workspace's service project (keys: ${got.keys.join(",")})`);
     ok(!got.keys.includes("beta"), "AC3: a project belonging to a DIFFERENT workspace is NOT started");
@@ -140,11 +143,14 @@ try {
     ok(b.installed && b.workspace === WS_A, `AC4: readAutostartBinding reports the bound workspace (got ${b.workspace})`);
     ok(describeAutostartBinding(b).includes(WS_A), "AC4: the one-line description names the workspace");
 
-    const status = cli(WS_A, {}, "daemon", "status");
-    ok(/daemon autostart/.test(`${status.stdout ?? ""}${status.stderr ?? ""}`), "AC4: `daemon status` prints the autostart binding line");
-    if (process.platform === "darwin")
+    // `daemon status`'s binding line reads a LaunchAgent plist, so the product prints it on darwin
+    // only — asserting it elsewhere would assert a claim the product does not make. Everything above
+    // and below this arm is platform-independent and DOES run on CI.
+    if (process.platform === "darwin") {
+      const status = cli(WS_A, {}, "daemon", "status");
+      ok(/daemon autostart/.test(`${status.stdout ?? ""}${status.stderr ?? ""}`), "AC4: `daemon status` prints the autostart binding line");
       ok((status.stdout ?? "").includes(WS_A), `AC4: \`daemon status\` names the bound workspace`);
-    else ok(true, "AC4: binding line is macOS-only (skipped: not darwin)");
+    } else ok(true, "AC4: `daemon status` binding line is macOS-only (not asserted: not darwin)");
 
     // Absent → informational, and it must NOT read as a deficiency (AC7's polarity, at the source).
     const none = readAutostartBinding(join(RROOT, "no-such.plist"));
@@ -179,16 +185,29 @@ try {
   }
 
   // ── AC6 — uninstall removes whatever install wrote, previous format included ───────────────────
-  for (const [label, body] of [
-    ["current", autostartPlistXml({ node: NODE, entry: "/x/daemon.ts", workspace: WS_A, logDir: join(WS_A, ".dev-loop") })],
-    ["legacy", `<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>com.dyzsasd.dev-loop.daemon</string><key>RunAtLoad</key><true/></dict></plist>\n`],
-  ] as const) {
-    mkdirSync(dirname(PLIST), { recursive: true });
-    writeFileSync(PLIST, body);
-    const r = cli(WS_A, {}, "daemon", "uninstall-autostart");
-    ok(r.status === 0, `AC6 (${label}): uninstall-autostart exits 0 (got ${r.status})`);
-    ok(!existsSync(PLIST), `AC6 (${label}): the plist is gone`);
-  }
+  // Removing a LaunchAgent means unloading it from launchd; the verb refuses off darwin by design.
+  if (process.platform === "darwin") {
+    for (const [label, body] of [
+      ["current", autostartPlistXml({ node: NODE, entry: "/x/daemon.ts", workspace: WS_A, logDir: join(WS_A, ".dev-loop") })],
+      ["legacy", `<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>com.dyzsasd.dev-loop.daemon</string><key>RunAtLoad</key><true/></dict></plist>\n`],
+    ] as const) {
+      mkdirSync(dirname(PLIST), { recursive: true });
+      writeFileSync(PLIST, body);
+      const r = cli(WS_A, {}, "daemon", "uninstall-autostart");
+      ok(r.status === 0, `AC6 (${label}): uninstall-autostart exits 0 (got ${r.status})`);
+      ok(!existsSync(PLIST), `AC6 (${label}): the plist is gone`);
+    }
+  } else ok(true, "AC6: uninstall-autostart is macOS-only (not asserted: not darwin)");
+
+  // ── The platform seam itself — the real install still refuses off darwin, and writes nothing ───
+  // This is what the reordering must NOT have loosened: `--dry-run` renders everywhere, the actual
+  // login item is still macOS-only.
+  if (process.platform !== "darwin") {
+    rmSync(PLIST, { force: true });
+    const real = cli(WS_B, {}, "daemon", "install-autostart", "--workspace", WS_A);
+    ok(real.status !== 0, `AC5: a real install off darwin still refuses (got ${real.status})`);
+    ok(!existsSync(PLIST), "AC5: …and wrote no plist");
+  } else ok(true, "AC5: the off-darwin refusal is asserted on non-darwin runners");
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
