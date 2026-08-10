@@ -228,6 +228,11 @@ export function approvalsRecordUnusable(dbFile: string): string | null {
  * lookup key is built from THIS commit, so a grant naming another sha simply does not match and the
  * verdict reads "no approval exists" — which is the design §4 end-state property, not a special case
  * anyone had to remember to write.
+ *
+ * `record` is whether the consult appends its `approval.attempt` ledger row (R10, PR #283 review). It
+ * says nothing about the VERDICT: every check runs and refuses identically either way — the only
+ * difference is whether the audit trail gains a line. It exists for the caller that is inspecting
+ * rather than pushing, and `doc-land --dry-run` is that caller today.
  */
 function checkPushApprovals(
   commits: Array<{ sha: string; subject: string; msg: string }>,
@@ -235,6 +240,7 @@ function checkPushApprovals(
   dbFile: string,
   actor: string,
   unusable: string | null,
+  record: boolean,
 ): PushGuardApproval[] {
   const out: PushGuardApproval[] = [];
   if (!commits.length) return out;
@@ -319,11 +325,12 @@ function checkPushApprovals(
           continue;
         }
         // The attempt IS ledgered (approvals §14 decision 4: the audit line must not depend on each
-        // consumer remembering to ask). A ledger write can still fail — a busy db, a read-only handle —
-        // and a safety gate that CRASHES is a safety gate that got skipped, so the verdict is re-taken
-        // without the audit line rather than lost. `record:false` grants nothing and skips no check.
+        // consumer remembering to ask) — unless the caller is only INSPECTING, which is not an attempt
+        // to do anything. A ledger write can still fail — a busy db, a read-only handle — and a safety
+        // gate that CRASHES is a safety gate that got skipped, so the verdict is re-taken without the
+        // audit line rather than lost. `record:false` grants nothing and skips no check.
         let v;
-        try { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId }); }
+        try { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId, record }); }
         catch { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId, record: false }); }
         if (v.authorises) continue;
         out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId: gated, state: v.state, reason: v.reason ?? "not authorised" });
@@ -333,7 +340,7 @@ function checkPushApprovals(
   return out;
 }
 
-export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string, opts: { enforcePush?: boolean; actor?: string } = {}): PushGuardResult {
+export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string, opts: { enforcePush?: boolean; actor?: string; record?: boolean } = {}): PushGuardResult {
   const git = (args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const gitOk = (args: string[]): boolean => { try { git(args); return true; } catch { return false; } };
   const parseLog = (raw: string) => raw ? raw.split("\0").filter(Boolean).map((r) => {
@@ -425,8 +432,11 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     // Guarded on the branch resolving: an unborn branch genuinely publishes nothing.
     : gitOk(["rev-parse", "--verify", "--quiet", br]) ? br
     : null;
+  // Ledgering the attempt is the DEFAULT — a consumer that forgot to ask for it would silently lose the
+  // audit line, which is the failure approvals §14 decision 4 exists to prevent. Only a caller that
+  // states it is inspecting opts out, and opting out changes nothing else about the verdict below.
   const approvals = enforcePush && range
-    ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, approvalsDbFile, opts.actor ?? "unknown", recordUnusable)
+    ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, approvalsDbFile, opts.actor ?? "unknown", recordUnusable, opts.record !== false)
     : [];
 
   if (!hasUpstream) return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], approvals, unresolvedDefaultBranch, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` };

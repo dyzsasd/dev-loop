@@ -383,7 +383,13 @@ Design: landing-discipline §4.6 (LOOP-57).`);
       // so passenger detection (which keys on the dev-loop/<id> branch shape) naturally returns [].
       // We still check passengers for future-safety: if A2 or another caller extends detection here,
       // the hard-stop gate is in place.
-      const guard = pushGuard(repoDir, defaultBranch, dbPath, defaultBranch);
+      //
+      // `--dry-run` is documented as "print what would push without mutating anything", and the
+      // approvals consult inside the guard appends an `approval.attempt` ledger row by default — so
+      // the one command that promises to write nothing was writing to the audit trail (R10, PR #283
+      // review). `record:false` suppresses that row ONLY: every approval check still runs and still
+      // hard-stops below, so the dry-run reports the same verdict the real run would.
+      const guard = pushGuard(repoDir, defaultBranch, dbPath, defaultBranch, { record: !dryRun });
 
       // Passengers → hard stop (unchanged from push-guard default behaviour)
       if (guard.passengers.length) {
