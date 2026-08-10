@@ -138,6 +138,14 @@ export interface CiFreshness {
 // Read CI freshness for a single PR. Returns a verdict based on check conclusions and
 // whether the tested head is behind the current default branch tip.
 // Never throws; all forge failures degrade to `unknown`.
+// POSIX single-quote quoting for a value interpolated into a printed command (LOOP-365). A repo ref
+// is an operator-chosen key with no enforced charset — `team-config.ts` validates the
+// ciIrrelevantPaths ENTRIES, not the ref — so an unquoted ref carrying a space or a metacharacter
+// would emit a line that parses as a different command than the one described.
+export function shellArg(v: string): string {
+  return /^[A-Za-z0-9_.\/-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
 export function readCiFreshness(
   exec: ExecFn,
   ghRepo: string,
@@ -145,6 +153,7 @@ export function readCiFreshness(
   mergeChecks: string[],
   defaultBranch: string,
   ciIrrelevantPaths?: string[], // LOOP-335: paths whose change cannot alter any check result
+  repoRef?: string, // LOOP-365: this repo's KEY in dev-loop.json — the only thing that makes the hint runnable
 ): CiFreshness {
   try {
     // 1. PR view — get headRefOid + statusCheckRollup
@@ -230,8 +239,22 @@ export function readCiFreshness(
               composition = `delta touches ${names.length} CI-irrelevant file(s): ${shown}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`;
             }
             // LOOP-365: when the delta is known and not truncated and ciIrrelevantPaths is unset, surface the knob.
+            //
+            // The hint is a REMEDY, so it is held to the standard a remedy has to meet: what it prints
+            // must be runnable as printed. Two things stop that from being automatic.
+            //
+            // 1. The knob is keyed by the repo's key in `dev-loop.json` (`repos.<ref>`) — an arbitrary
+            //    operator-chosen string, NOT derivable from `ghRepo` (`owner/name`), the directory
+            //    name, or the remote. So it is threaded in from the resolver that read the entry, and
+            //    when no entry resolved we do NOT print a command: a literal `<ref>` is not a value,
+            //    and `<` opens a shell redirection, so the copy-paste fails in a way that reads like
+            //    the tool is broken rather than like a placeholder was left for you.
+            // 2. The VALUE is the operator's judgement (which paths cannot affect a check), so it
+            //    stays an example — but a quoted one, for the same reason.
             if (!truncated && !exempt && (!ciIrrelevantPaths || ciIrrelevantPaths.length === 0)) {
-              hint = `no repos.<ref>.ciIrrelevantPaths is configured \u2014 if none of these files can affect a check result, set it with \`dev-loop team set repos.<ref>.ciIrrelevantPaths <comma-separated paths>\``;
+              hint = repoRef
+                ? `no ciIrrelevantPaths is configured for this repo \u2014 if none of these files can affect a check result, set it with: dev-loop team set ${shellArg(`repos.${repoRef}.ciIrrelevantPaths`)} 'path/one.md,dir/two/'`
+                : `no ciIrrelevantPaths is configured for this repo \u2014 set repos.<ref>.ciIrrelevantPaths through \`dev-loop team set\`, where <ref> is this repo's key in dev-loop.json; it did not resolve here, so this is a description and not a command to copy`;
             }
           } else {
             composition = "delta touches 0 files (empty commits)";

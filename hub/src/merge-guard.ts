@@ -348,7 +348,7 @@ export function resolveGhRepo(repoDir: string): string | null {
 // squashes on it, which is the very thing that verb exists to refuse. So when no registered path
 // matches, fall back to the entry whose remote IS the selected repo. Path match still wins, so every
 // existing caller keeps its answer; ambiguity (two entries, same remote) is refused, not guessed.
-export interface CiFreshnessConfig { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; ciIrrelevantPaths?: string[] }
+export interface CiFreshnessConfig { mergeChecks: string[]; defaultBranch: string; repoEligible: boolean; repoRef?: string; ciIrrelevantPaths?: string[] }
 
 // The THREE distinguishable answers. They used to be two, because `ambiguous` was returned as
 // `null` — and a caller reading `null` omits mergeChecks, which makes the axis skip as
@@ -373,32 +373,35 @@ export function resolveRegistryCiFreshnessConfig(
     try { real = realpathSync(repoDir); } catch { real = resolvePath(repoDir); }
     // §19 defaultBranch chain: repo entry → team.git.defaultBranch → "main" (LOOP-188 pattern).
     const teamBranch = (ws.file.team as { git?: { defaultBranch?: string } }).git?.defaultBranch;
-    const configOf = (e: CfEntry): CiFreshnessConfig => ({
+    const configOf = (ref: string, e: CfEntry): CiFreshnessConfig => ({
+      // LOOP-365: the registry KEY, carried so the stale-reason remedy can name the real knob path.
+      repoRef: ref,
       mergeChecks: e.mergeChecks ?? [],
       defaultBranch: e.defaultBranch ?? teamBranch ?? "main",
       // AC2: the axis applies only where Step 0.5 merges — landing:"pr" + autoMerge (design §3).
       repoEligible: e.landing === "pr" && e.autoMerge === true,
       ciIrrelevantPaths: Array.isArray(e.ciIrrelevantPaths) ? e.ciIrrelevantPaths : undefined, // LOOP-335
     });
-    const entries = (Object.values(ws.file.repos ?? {}) as (CfEntry | null)[]).filter((e): e is CfEntry => !!e);
-    for (const e of entries) {
+    const entries = (Object.entries(ws.file.repos ?? {}) as [string, CfEntry | null][])
+      .filter((kv): kv is [string, CfEntry] => !!kv[1]);
+    for (const [ref, e] of entries) {
       if (!e.path) continue;
       const abs = resolvePath(ws.root, e.path);
       let absReal = abs;
       try { absReal = realpathSync(abs); } catch { /* keep abs */ }
       if (absReal !== real && abs !== real) continue;
-      return { kind: "resolved", config: configOf(e) };
+      return { kind: "resolved", config: configOf(ref, e) };
     }
     if (ghRepo) {
-      const byRemote = entries.filter((e) => e.remote && ghRepoFromRemote(e.remote) === ghRepo);
-      if (byRemote.length === 1) return { kind: "resolved", config: configOf(byRemote[0]!) };
+      const byRemote = entries.filter(([, e]) => e.remote && ghRepoFromRemote(e.remote) === ghRepo);
+      if (byRemote.length === 1) return { kind: "resolved", config: configOf(byRemote[0]![0], byRemote[0]![1]) };
       // Two entries, distinct paths, SAME remote — a shape the config validator permits, and one
       // `registryGhRepos` hides from `resolveGhRepo` because it dedupes remotes into a Set. So the
       // repo resolves and its config does not. Report the ambiguity with its candidates; the remedy
       // (`--repo <dir>`) is the caller's to take, and guessing an entry would gate one repo's config
       // against another's checks.
       if (byRemote.length > 1) {
-        return { kind: "ambiguous", ghRepo, paths: byRemote.map((e) => e.path ?? "<no path>").sort() };
+        return { kind: "ambiguous", ghRepo, paths: byRemote.map(([, e]) => e.path ?? "<no path>").sort() };
       }
     }
     return { kind: "none" };
@@ -455,6 +458,7 @@ export function mergeGuard(
     // CI-freshness axis (Child A / LOOP-242, wired by LOOP-323):
     mergeChecks?: string[];    // check names to validate; absent/empty → axis skipped
     ciIrrelevantPaths?: string[]; // LOOP-335: paths whose change cannot alter a check result
+    repoRef?: string;          // LOOP-365: registry key, so the stale hint can name a runnable knob path
     defaultBranch?: string;    // default branch name (default: "main")
     // LOOP-323 AC2: the CLI resolves this from the workspace repo registry — false when the repo
     // is not landing:"pr" + autoMerge, making the axis inapplicable with its own skipReason.
@@ -636,7 +640,7 @@ export function mergeGuard(
       if (isNaN(prNumber)) {
         ciFreshness = { trip: false, skipped: true, skipReason: "forge-unreachable", verdict: null, behindBy: null, testedHead: null, currentTip: null, reason: null };
       } else {
-        const fr = readCiFreshness(exec, ghRepo, prNumber, mergeChecks, defaultBranch, opts.ciIrrelevantPaths);
+        const fr = readCiFreshness(exec, ghRepo, prNumber, mergeChecks, defaultBranch, opts.ciIrrelevantPaths, opts.repoRef);
         // LOOP-407 — `check-never-reported` trips UNCONDITIONALLY, like "red" and unlike "stale"
         // (which is behind the rollback constant above). There is no advisory reading of it: the
         // guard is the only machine gate on the Step 0.5 squash, `main` carries no branch
@@ -776,7 +780,7 @@ Exit codes: 0 clean/advisory/degraded · 1 trip under --strict · 2 usage ·
     result = mergeGuard(repo, {
       ticketId, pr, apply,
       ...(cfRes.kind === "ambiguous" ? { ciConfigAmbiguous: true } : {}),
-      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths } : {}),
+      ...(cfCfg ? { mergeChecks: cfCfg.mergeChecks, defaultBranch: cfCfg.defaultBranch, repoEligible: cfCfg.repoEligible, ciIrrelevantPaths: cfCfg.ciIrrelevantPaths, repoRef: cfCfg.repoRef } : {}),
     });
   }
   catch (e) { console.error(`merge-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }

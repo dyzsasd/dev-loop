@@ -3,7 +3,7 @@
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deltaIsCiIrrelevant, readCiFreshness, readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
+import { deltaIsCiIrrelevant, readCiFreshness, shellArg, readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 let fails = 0;
@@ -717,8 +717,8 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
     }
     return { ok: false, stdout: "", stderr: "unexpected" };
   };
-  const read = (revFiles: string[] | "fail" | "unparseable", irrelevant?: string[], extra: Record<string, unknown> = {}) =>
-    readCiFreshness(mkExec(revFiles, extra), "o/r", 1, ["Test"], "main", irrelevant);
+  const read = (revFiles: string[] | "fail" | "unparseable", irrelevant?: string[], extra: Record<string, unknown> = {}, repoRef?: string) =>
+    readCiFreshness(mkExec(revFiles, extra), "o/r", 1, ["Test"], "main", irrelevant, repoRef);
 
   // AC1 — hint present when stale, delta known, ciIrrelevantPaths unset.
   const a1 = read(["docs/STRATEGY.md", "docs/strategy-archive/2026-08.md"], undefined);
@@ -749,6 +749,47 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(a3c.verdict === "stale", `LOOP-365 AC3(iii): stale from empty delta (got ${a3c.verdict})`);
   ok(!(a3c.reason ?? "").includes("ciIrrelevantPaths"),
     "LOOP-365 AC3(iii): no hint when delta empty (no files)");
+
+  // AC4 — the hint is a REMEDY, so what it prints must be runnable AS PRINTED.
+  //
+  // The defect this closes: the hint read `dev-loop team set repos.<ref>.ciIrrelevantPaths
+  // <comma-separated paths>`, described as the command to run. Pasted into a shell, `<ref>` and
+  // `<comma-separated paths>` are input redirections — the line does not run, and the repo ref is an
+  // operator-chosen registry key that cannot be inferred from `ghRepo`, so no reader could repair it
+  // either. The property asserted is therefore not a fixed string: WHENEVER the hint presents a
+  // command ("set it with: …"), that command carries no shell-metacharacter placeholder.
+  const cmdOf = (reason: string): string | null => {
+    const m = /set it with: (.*)$/.exec(reason);
+    return m ? m[1]! : null;
+  };
+  const a4 = read(["docs/STRATEGY.md"], undefined, {}, "dev-loop");
+  const c4 = cmdOf(a4.reason ?? "");
+  ok(c4 !== null, `LOOP-365 AC4: a resolved repoRef yields a command form (${a4.reason?.slice(0, 160)})`);
+  ok((c4 ?? "").includes("repos.dev-loop.ciIrrelevantPaths"),
+    `LOOP-365 AC4: the command names the REAL registry ref, not a placeholder (${c4})`);
+  ok(!/[<>]/.test(c4 ?? "<"),
+    `LOOP-365 AC4: the printed command carries no angle-bracket placeholder — it would redirect (${c4})`);
+
+  // AC5 — with NO resolved ref the hint must NOT pose as a command. Naming the knob is useful;
+  // handing over an unrunnable line as "the command to run" is the same defect one layer down.
+  const a5 = read(["docs/STRATEGY.md"], undefined, {}, undefined);
+  ok((a5.reason ?? "").includes("ciIrrelevantPaths"), "LOOP-365 AC5: the knob is still named without a ref");
+  ok(cmdOf(a5.reason ?? "") === null,
+    `LOOP-365 AC5: no command form is offered when the ref did not resolve (${a5.reason?.slice(0, 200)})`);
+
+  // AC6 — a ref needing shell quoting stays runnable. `team-config.ts` validates the
+  // ciIrrelevantPaths ENTRIES, not the ref, so a ref carrying a space is a config it accepts.
+  const a6 = read(["docs/STRATEGY.md"], undefined, {}, "my repo");
+  const c6 = cmdOf(a6.reason ?? "");
+  ok((c6 ?? "").includes("'repos.my repo.ciIrrelevantPaths'"),
+    `LOOP-365 AC6: a ref needing quoting is single-quoted in the printed command (${c6})`);
+
+  // shellArg, directly — the quoting rule AC4/AC6 ride on.
+  ok(shellArg("dev-loop") === "dev-loop", "LOOP-365: a shell-safe ref is left unquoted (the common hint does not grow noise)");
+  ok(shellArg("repos.a/b-c_1.d") === "repos.a/b-c_1.d", "LOOP-365: the safe charset covers a real knob path");
+  ok(shellArg("my repo") === "'my repo'", "LOOP-365: a space forces quoting");
+  ok(shellArg("a;rm -rf /") === "'a;rm -rf /'", "LOOP-365: a metacharacter forces quoting");
+  ok(shellArg("it's") === "'it'\\''s'", "LOOP-365: an embedded single quote is escaped POSIX-style");
 }
 
 
