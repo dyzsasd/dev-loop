@@ -319,7 +319,10 @@ async function handleDocWrite(action: "save" | "publish", slug: string, req: Inc
 // request so the operator can flip the flag without a daemon restart. Absent/false ⇒ these POSTs are NOT
 // matched and fall through to the read-only 405 (byte-identical to today). The same localhost CSRF /
 // DNS-rebinding guard as /roadmap/* (writeOriginOk) runs BEFORE any write.
-function humanWriteEnabled(db: DatabaseSync, projectId: string): boolean {
+// Exported for LOOP-479's regression test: the AC requires the test to flip the switch through the
+// supported command and then assert with the SHIPPED predicate. A test that re-implemented this
+// expression would pass with the gate deleted (the LOOP-429 shape), so the gate is imported, not copied.
+export function humanWriteEnabled(db: DatabaseSync, projectId: string): boolean {
   try {
     const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
     return JSON.parse(row?.settings_json ?? "{}")?.humanWrite?.enabled === true;
