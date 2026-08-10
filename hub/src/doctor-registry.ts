@@ -63,7 +63,7 @@ export interface BoardCtx extends DoctorCtx {
 /** The three values runDoctor needs back from specific checks (§6). */
 export interface DoctorReport {
   stalledRepo?: string;
-  decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number } | null;
+  decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null;
   skewResult?: { codeBehind: number; version: string } | null;
 }
 
