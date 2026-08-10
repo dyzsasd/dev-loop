@@ -92,6 +92,16 @@ try {
   const events = JSON.parse(ev.stdout.trim());
   ok(events.length === 2 && events.every((e: { id: number }, i: number) => e.id === i + 1) && events.map((e: { kind: string }) => e.kind).join(",") === "e.a,e.b", "import copies events with fresh sequential ids, order preserved (re-key)");
 
+  // The event copy must be IDEMPOTENT (PR #286 review, P1). Events get a fresh autoincrement id at
+  // the destination, so `INSERT OR IGNORE` — which deduplicates the TEXT-id tables — cannot see a
+  // duplicate: a plain re-insert duplicated the entire history on every re-run, including the re-run
+  // that recovers a partial copy. Deduplicated on content, so a second run adds nothing.
+  const impAgain = run("team", ["import", "--from", join(legacy, "projects.json"), "--hub-db", join(legacy, "old-hub.db")], { cwd: svc, extra: { DEVLOOP_DATA_DIR: legacy } });
+  const ev2 = spawnSync("node", ["-e", `import('./src/db.ts').then(d=>{const db=d.openDb(process.argv[1]);const rows=db.prepare('SELECT id,kind FROM events ORDER BY id').all();console.log(JSON.stringify(rows));db.close()})`, join(svc, ".dev-loop", "hub.db")], { cwd: hubRoot, env: env(), encoding: "utf8" });
+  const events2 = JSON.parse(ev2.stdout.trim());
+  ok(impAgain.code === 0 && events2.length === 2 && events2.map((e: { kind: string }) => e.kind).join(",") === "e.a,e.b",
+    `import --hub-db is idempotent: a re-run duplicates no events (${events2.length} rows after two runs)`);
+
   // ── import passthrough + notify handling (the blockedStateName / comms-unification fixes) ──
   {
     const svc2 = join(tmp, "svc2");
@@ -182,7 +192,8 @@ try {
     writeFileSync(join(lws, ".dev-loop", "devplatform", "pm-state.json"), '{"phase":"NEWER"}');
     const dp2 = run("team", ["import", "--into", lws, "--from", join(lgc, "projects.json")],
       { cwd: tmp, extra: { DEVLOOP_DATA_DIR: lgc } });
-    ok(/SKIP\s+project 'devplatform' already present/.test(dp2.out), "AC2 a re-run reports the project as already present");
+    ok(/SKIP\s+project 'devplatform' was already imported from 'devplatform'/.test(dp2.out),
+      "AC2 a re-run reports the project as already imported, and names the source it came from");
     ok(readFileSync(join(lws, ".dev-loop", "devplatform", "pm-state.json"), "utf8") === '{"phase":"NEWER"}',
       "AC2 a re-run does NOT overwrite newer destination content");
     ok(Object.keys(readJson(join(lws, "dev-loop.json")).projects).filter((k) => k === "devplatform").length === 1,
@@ -205,6 +216,33 @@ try {
     ok(existsSync(join(lws2, ".dev-loop", "devplatform", "pm-state.json")),
       "AC4 the classes that DID copy are kept — the state is recoverable by re-running, not restarted");
     ok(snap(lgc) === afterFirst, "AC4 a failed run still leaves the source untouched");
+
+    // A class handled by its own pass must not ALSO be counted by the tree walk (PR #286 review, P2).
+    // A clean first import reported `1 copied, 1 skipped` for lessons and explained the skip as "the
+    // destination already existed" — untrue, in the per-class report the operator reads before
+    // deleting live data.
+    ok(/REPORT devplatform lessons\s+1 copied\s*$/m.test(dp1.out),
+      `AC5 lessons is counted ONCE on a clean import — no phantom skip (${(dp1.out.match(/REPORT devplatform lessons.*/) ?? ["<none>"])[0]})`);
+
+    // A COLLIDING key is not a re-run (PR #286 review, P1). A destination project this verb did not
+    // create, sharing the key, would have received the legacy project's state files and lessons: the
+    // copy never overwrites, but it does happily ADD. Provenance decides, and it decides before any
+    // mutation.
+    const lws3 = join(tmp, "dp-ws3");
+    run("team", ["init", "--dir", lws3, "--key", "dp3-team", "--backend", "linear", "--linear-team", "DP"]);
+    const strangerCfg = readJson(join(lws3, "dev-loop.json"));
+    strangerCfg.projects.devplatform = { repos: [], linearProject: "SomebodyElse" };
+    writeFileSync(join(lws3, "dev-loop.json"), JSON.stringify(strangerCfg, null, 2) + "\n");
+    const before3 = readFileSync(join(lws3, "dev-loop.json"), "utf8");
+    const dp4 = run("team", ["import", "--into", lws3, "--from", join(lgc, "projects.json")],
+      { cwd: tmp, extra: { DEVLOOP_DATA_DIR: lgc } });
+    ok(dp4.code !== 0 && /--rename devplatform=/.test(dp4.out),
+      `P1 a key held by a project this verb did not import is a hard stop naming --rename (exit ${dp4.code})`);
+    ok(!existsSync(join(lws3, ".dev-loop", "devplatform", "pm-state.json")) && !existsSync(join(lws3, ".dev-loop", "lessons", "devplatform.md")),
+      "P1 the stranger's state dir and the lessons library received NOTHING");
+    ok(readFileSync(join(lws3, "dev-loop.json"), "utf8") === before3 && readJson(join(lws3, "dev-loop.json")).projects.devplatform.linearProject === "SomebodyElse",
+      "P1 the refusal happens before any mutation — the config is byte-identical and the stranger is intact");
+    ok(snap(lgc) === afterFirst, "P1 the refused run leaves the legacy source untouched too");
   }
 
   // ── importRepoRefs branch coverage (1.8.1: the extracted phase exposed 49% coverage —
