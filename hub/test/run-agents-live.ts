@@ -2,6 +2,8 @@
 // run-agents test passes --dry-run, so the spawn/env/log/timeout/drain/lock machinery that spends
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

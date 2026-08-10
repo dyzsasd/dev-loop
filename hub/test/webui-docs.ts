@@ -3,6 +3,8 @@
 // the DL-29 double-gated write routes (CAS save / operator publish), and the docs P6a drafts-pending
 // header chip. Seeds docs through the REAL docstore (the same CAS/publish invariants the MCP path
 // uses), then exercises everything over HTTP against in-process daemons.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";

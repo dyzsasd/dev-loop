@@ -1,4 +1,6 @@
 // team-config.ts — schema v2 validation matrix (E01–E11), resolution API, and the toLegacyView compat view.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import {
   validateTeamFile, effectiveProject, effectiveRepo, reposOfProject, primaryRepo,
   referencingProjects, inferProjectForRepo, ownerOf, toLegacyView, normalizedRel,

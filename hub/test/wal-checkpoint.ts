@@ -7,6 +7,8 @@
 // concurrent reader it returns immediately instead of stalling up to the writer's 5s busy_timeout. This
 // suite asserts BOTH: (A) the happy path truncates `-wal` to 0 loss-free; (B) under a HELD read transaction
 // the tick returns FAST (well under 5s) and never throws — the real failure mode the first version missed.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { DatabaseSync } from "node:sqlite";
 import { rmSync, statSync, existsSync } from "node:fs";
 import { openDb } from "../src/db.ts";

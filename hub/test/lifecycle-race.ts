@@ -31,6 +31,8 @@
 // every run that passed. DEVLOOP_LIFECYCLE_TRIALS raises the count for a targeted hunt.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { registerDaemonPid, launchDaemonCli, runDaemonCli } from "./daemon-harness.ts";
 import { foreignListener } from "../src/daemon-lifecycle.ts"; // LOOP-317: the decision the fix turns on

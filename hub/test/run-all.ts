@@ -1,6 +1,8 @@
 // Test runner — discovers every hub/test/*.ts suite, runs each in a subprocess,
 // collects pass/fail/crash, and exits non-zero when any suite did not pass.
 // Adding a new test file is automatically picked up; no manifest to edit.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";

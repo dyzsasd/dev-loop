@@ -6,6 +6,8 @@
 // NEWER version (99.99.99). Write a runfile pointing to that subprocess. Use async spawn (not
 // spawnSync) for `daemon up` so the fake server can respond while daemon up is probing it.
 // Assert: daemon up exits non-zero, prints direction-aware message, and does NOT kill the server.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";

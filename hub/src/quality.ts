@@ -27,6 +27,8 @@
 //
 // Exit codes: 0 ok · 1 usage/internal · 2 CRAP threshold exceeded · 3 surviving mutants
 // (with --fail-on-survivors). Machine consumption: --json.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";

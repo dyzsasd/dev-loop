@@ -7,6 +7,8 @@
 // DAILY line (remindMs), deduped per version, a NEW draft version re-announces; (5) DL-34 dry-run is
 // write-free for BOTH ticks (child process — DEVLOOP_CHANNEL_DRYRUN is read once at channel.ts import).
 // Live cases inject a stub fetchImpl (no network), the DL-26/DL-76 test style.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { openDb } from "../src/db.ts";
 import { latestForeignVersion } from "../src/docstore.ts";
 import {

@@ -21,6 +21,8 @@
 // `mode:"dry-run"` project (or `--dry-run`) prints every step and performs NONE. §16: localhost-only;
 // identity by env-var NAME; no secrets. §17: this is CODE only — it never edits skills/init/SKILL.md
 // (DL-53) and can never name/write a SKILL/conventions/code file.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -206,4 +208,4 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
     dbPath: hubDbPath(),
   });
   process.exit(code);
-}
+};

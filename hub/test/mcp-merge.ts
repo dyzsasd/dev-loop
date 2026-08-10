@@ -4,6 +4,8 @@
 // an ERROR with the original left BYTE-FOR-BYTE untouched, and the merged entry is §16 env-NAME-only (the
 // installed `dev-loop serve` command, DEVLOOP_PROJECT pinned to the key, no literal secret,
 // no nested ${...}). Legacy templates with a server.ts arg are still path-filled.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mergeMcpServer } from "../src/mcp-merge.ts";
 import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";

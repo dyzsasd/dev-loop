@@ -8,6 +8,8 @@
 // This asserts the committed template `config/mcp.example.json` (and the machine-local `.mcp.json`, if it
 // exists) carry no nested-`${...}` env value, and that with DEVLOOP_HUB_DB unset the server's HOME-relative
 // default (`~/.dev-loop/hub.db`) is what wins — on ANY interpolator. Deterministic, no DB, no network.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

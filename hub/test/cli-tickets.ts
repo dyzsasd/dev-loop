@@ -3,6 +3,8 @@
 // list columns + board ordering (priority ASC, updated_at DESC) + the --all/--state/--q narrowing, the single-
 // ticket detail + comments, the unknown-id / unseeded-project non-zero exits, and that a read writes NOTHING
 // (no tickets mutated, no events emitted — AC5).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";

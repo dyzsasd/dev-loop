@@ -13,6 +13,8 @@
 //
 // This file does NOT re-assert merge-guard's own verdicts (LOOP-407 and LOOP-242 own those); it pins
 // the verb's contract: what it issues, what it refuses to issue, and how a refusal reads.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

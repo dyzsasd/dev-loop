@@ -4,6 +4,8 @@
 //      a thrown error never carries the token.
 //  (2) tool DRYRUN tests over the stdio server — allow-list build, payload shape, the no-daemon
 //      cursor advance + dedup, secret-never-returned, ack, status, per-project isolation.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";

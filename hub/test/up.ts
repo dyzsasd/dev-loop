@@ -3,6 +3,8 @@
 // with the operator identity and WITHOUT the fire markers), CLI resolution precedence, create-only
 // brief scaffolding (an operator's own file is never clobbered), the claude trust pre-seed merge, and
 // the attach leg's DEVLOOP_HUB_URL injection + URL validation.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

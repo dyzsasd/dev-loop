@@ -1,5 +1,7 @@
 // rotation.ts — smooth weighted round-robin: exact sequences, weight/enabled handling, cursor persistence,
 // and the shared next-project picker (run + Agent View share one cursor).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdirSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -108,4 +110,4 @@ try {
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

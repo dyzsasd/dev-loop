@@ -18,6 +18,8 @@
 // doc-land, approvals-enforce) all still PASS under that mutation, so the refusal is asserted here
 // and nowhere else. (The AC2 arms fail under it too — they inject a guard result, which the mutation
 // discards; the AC4 arms are the ones that prove the REAL gate is wired in.)
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

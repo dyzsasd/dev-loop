@@ -2,6 +2,8 @@
 // Parser (quotes/comments/whitespace/export/no-interpolation), env>file precedence, absent-file no-op,
 // the resolveWorkspace hydration hook, doctor's W12 resolvable/unresolvable branches (never the value),
 // perms warning, and the end-to-end acceptance: webhook ONLY in secrets.env + clean shell ⇒ notify delivers.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -410,4 +412,4 @@ try {
   console.error(e);
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
   process.exit(1);
-}
+};

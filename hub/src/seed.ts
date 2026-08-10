@@ -1,5 +1,7 @@
 // Idempotent bootstrap: a project, the agent/operator actors, and the §4 label taxonomy.
 // Run directly (`node src/seed.ts <key> <name>`) or called by the server on first run.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { randomUUID } from "node:crypto";
 import { resolveHubDbPath } from "./workspace.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -139,4 +141,4 @@ if (isMainEntry(import.meta.url)) {
   const id = ensureSeed(db, key, name, prefix);
   console.log(`seeded project ${key} (${id}) + actors + labels in ${dbPath}`);
   db.close();
-}
+};

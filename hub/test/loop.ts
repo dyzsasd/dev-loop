@@ -2,6 +2,8 @@
 // require — dedupe (duplicateOf + body-scan query), coverage/split (append-only relatedTo),
 // blocked (labels + Bail-shape comment), sweep orphan-reset, Reflect via list_events — each
 // step as a DISTINCT actor process sharing one WAL db. Proves P2 SKILL-portability end-to-end.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { mkdtempSync, rmSync } from "node:fs";

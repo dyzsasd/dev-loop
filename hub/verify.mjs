@@ -17,6 +17,8 @@
 //      local check that reports parity while measuring nothing.
 // So: the suite runs under NODE_V8_COVERAGE and the gate reads that directory — the ratchet is never
 // allowed to collect its own coverage (the flag that would make it do so must not appear below).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";

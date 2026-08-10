@@ -3,6 +3,8 @@
 // Design: merge-review-guard §3.3 + §8-Child4.
 // LOOP-65 regression: merge-guard --apply path writes objection comment + routes ticket on trip;
 // read path (no --apply) writes nothing; no-DB degrades silently; idempotent on re-run.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";

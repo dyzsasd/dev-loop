@@ -9,6 +9,8 @@
 // The budget authority is the BUDGETS table in hub/src/context-bill.ts (not the template doc — see
 // the note there); lessons budgets stay hub/src/lessons.ts's INDEX_MAX_*/SHARD_MAX_* (cited via
 // import by context-bill.ts, deliberately not re-stated here).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";

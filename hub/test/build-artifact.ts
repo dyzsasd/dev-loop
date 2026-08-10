@@ -8,6 +8,8 @@
 // Both are invisible in-repo (the suite runs src/, and `../../config` still resolves to the repo's config/). This
 // suite (a) builds dist/, (b) smoke-runs the compiled bins, and (c) exercises those two entry points from a dist/
 // COPY in an installed-like layout (no repo config/ sibling — the exact `npm i -g dev-loop` shape).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { registerDaemonPid } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";

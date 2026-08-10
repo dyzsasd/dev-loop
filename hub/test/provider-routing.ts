@@ -2,6 +2,8 @@
 // E16 registry validation, opencode.json render/sync (create-or-merge, never clobber), the scheduler's
 // opencode lane (--variant, certified OPENCODE_PERMISSION injection, pre-spawn provider-env-missing,
 // fire-ledger provider dimension), doctor W13/W14, and claude-lane parity (no provider artifacts).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -1,4 +1,6 @@
 // team init / import / repair + doctor workspace checks — integration via the real CLI entry points.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1211,4 +1213,4 @@ esac`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

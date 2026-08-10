@@ -4,6 +4,8 @@
 // ATTRIBUTED to the X-Devloop-Actor header (confirmed via list_events on the stdio path — cross-path
 // consistency); the full endpoint pipeline (CSRF/foreign-Host → unknown/missing actor → dry-run mode gate)
 // refuses correctly; and the existing read/roadmap surfaces stay byte-for-byte unchanged through every toggle.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { rmSync } from "node:fs";

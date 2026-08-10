@@ -8,6 +8,8 @@
 // override (dev → FORBIDDEN exit 1; steward → crosses); byte-PARITY sugar ≡ `op` dispatcher ≡ the stdio MCP
 // server for list_issues/get_issue (+ field-parity for save_issue, whose updated_at necessarily differs);
 // and the daemon transport (settings_json.hub.transport="daemon" → the op POSTs to the loopback daemon).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { spawnSync, spawn } from "node:child_process";

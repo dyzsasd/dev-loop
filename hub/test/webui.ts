@@ -3,6 +3,8 @@
 // a literal radius that bypasses the scale; a link/fence rule that drops content or admits a
 // javascript: href). F1: STYLE is asserted on the EVALUATED export (views/ui.ts via the daemonviews
 // façade) — no more brittle source slicing.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { renderMarkdown, STYLE } from "../src/daemonviews.ts";
 
 let fails = 0;

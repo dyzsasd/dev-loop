@@ -1,5 +1,7 @@
 // `dev-loop hub start|stop|status` — workspace hub daemon lifecycle (service backend): start is
 // idempotent, status reports RUNNING, stop truncates the WAL + removes the runfile, linear teams refuse.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
 import { registerDaemonPid } from "./daemon-harness.ts";
@@ -121,4 +123,4 @@ try {
   // Always attempt to stop the daemon so a failed assertion never leaks a background process.
   try { hub("stop", ws); } catch { /* ignore */ }
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
-}
+};

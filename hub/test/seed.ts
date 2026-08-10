@@ -1,6 +1,8 @@
 // DL-88 — `seed --help` / `seed -h` must print usage and exit 0 WITHOUT seeding. The footgun: argv's
 // `--help` was bound to the positional `key` (no flag guard), creating a project literally keyed `--help`
 // + its actors + labels. Drives the REAL `node src/seed.ts` against ISOLATED temp DBs (never ~/.dev-loop).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { rmSync, mkdirSync, existsSync, mkdtempSync, cpSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

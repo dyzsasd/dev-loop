@@ -6,6 +6,8 @@
 // shape is `command:"dev-loop", args:["serve"]`; old source templates with a `server.ts` arg are still patched
 // in place. §17: this is a
 // data-file utility — it can only ever write the product `.mcp.json`, never a SKILL/conventions/code file.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -132,4 +134,4 @@ if (isMainEntry(import.meta.url)) {
   const r = mergeMcpServer({ mcpJsonPath, hubServerPath, projectKey, templatePath });
   if (r.ok) { console.log(`✅ ${SERVER_NAME} ${r.action} in ${mcpJsonPath} (servers: ${r.servers.join(", ")})`); process.exit(0); }
   console.error(`❌ ${r.error}`); process.exit(1);
-}
+};

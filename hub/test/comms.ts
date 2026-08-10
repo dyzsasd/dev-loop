@@ -1,4 +1,6 @@
 // comms.ts — `dev-loop notify`: payload shapes, DRYRUN (never leaks the URL), env-missing + non-2xx paths.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";

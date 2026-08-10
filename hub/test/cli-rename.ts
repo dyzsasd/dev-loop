@@ -1,6 +1,8 @@
 // LOOP-181 — CLI rename Phase A guard: the `kaizen` bin exists everywhere, the npm package name is
 // frozen (brand ≠ engine), and NO command-shaped prose has flipped to `kaizen` yet — Phase B (LOOP-182,
 // blocked on this) owns the ~176 prose occurrences. See LOOP-174's operator amendment for the phasing.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

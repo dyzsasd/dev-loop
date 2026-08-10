@@ -6,6 +6,8 @@
 // daemon + writes a runfile; a second `up` no-ops (single process); `status` reports RUNNING; a stale
 // (dead-pid) runfile does NOT read as running and `up` cleanly restarts on the SAME recorded port; `down`
 // stops + clears; and a non-service / unknown / unresolved project is a clean no-op + exit 0 (never an error).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync } from "node:child_process";
 import { createServer as netCreateServer } from "node:net";
 import { registerDaemonPid, runDaemonCli } from "./daemon-harness.ts";

@@ -1,6 +1,8 @@
 // team-edit — `team set` whitelist, E09 tolerance (init --yes → repair → add-project), add-project
 // auto-seed (service), add-repo --detect (deterministic, no LLM), the workspace fingerprint stamp
 // (mock Linear, no live calls), and the doctor NEXT line across staged workspace states.
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync, realpathSync, cpSync } from "node:fs";
@@ -1415,4 +1417,4 @@ try {
   mockLinear.close();
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
-
+;

@@ -3,6 +3,8 @@
 // registry CONTRACT the D2 multi-project routing builds on: the route table covers every HTML page,
 // the pattern grammar captures RAW (still percent-encoded) segments, GET implies HEAD (node strips
 // the body), and non-view methods/paths never match (they fall through to the daemon's own routes).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { VIEW_ROUTES, matchViewRoute } from "../src/views/registry.ts";
 import { href } from "../src/views/ui.ts";
 
