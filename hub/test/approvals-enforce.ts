@@ -424,16 +424,37 @@ try {
         `R5 enforcement OFF + a ${label} record → still silent (AC2)`);
     }
 
-    // The probe must not be what CREATES the record it is judging. On a FRESH zero-byte file (the ones
-    // above have since been through pushGuard, whose passenger axis still opens the path via openDb and
-    // does write a schema into it — that is openDb's contract, and the reason the probe has to run
-    // FIRST rather than being made safe afterwards).
+    // The probe must not be what CREATES the record it is judging.
     const untouched = join(ROOT, "untouched-zero.db");
     writeFileSync(untouched, "");
     ok(approvalsRecordUnusable(untouched) !== null && readFileSync(untouched, "utf8") === "",
       "R5 the probe is read-only — it neither creates the schema nor migrates the file it rejects");
     ok(approvalsRecordUnusable(untouched) !== null,
       "R5 …and it says so again on a second look — the first probe did not make the file usable");
+  }
+
+  // ── R6 (PR #283 review) — the refusal must not repair its own cause ─────────────────────────
+  //
+  // R5 probed before `openDb`, but the guard's OTHER two axes still opened the rejected path a few
+  // lines later, and `openDb` creates the schema. So the first `--strict` run refused while
+  // initialising the very `approvals` table it was refusing for, and the SECOND run found a usable,
+  // empty record and permitted the push. A gate that fixes its own precondition holds exactly once.
+  //
+  // Asserted by INVOKING TWICE. A single-call assertion passes against the broken code — that is the
+  // shape R5 shipped with, which is why this is an arm and not a stronger comment.
+  {
+    const selfHealing = join(ROOT, "self-healing.db");
+    writeFileSync(selfHealing, "");
+
+    const once = pushGuard(work, "dev-loop/AP-1", selfHealing, "main", { enforcePush: true, actor: "senior-dev" });
+    const twice = pushGuard(work, "dev-loop/AP-1", selfHealing, "main", { enforcePush: true, actor: "senior-dev" });
+
+    ok(once.approvals.length > 0 && once.approvals.every((a) => a.state === APPROVALS_UNVERIFIABLE),
+      "R6 first --strict invocation over a zero-byte record → REFUSED");
+    ok(twice.approvals.length > 0 && twice.approvals.every((a) => a.state === APPROVALS_UNVERIFIABLE),
+      "R6 SECOND invocation still refuses — the first did not initialise the record it rejected");
+    ok(readFileSync(selfHealing, "utf8") === "",
+      "R6 and the rejected file is byte-for-byte untouched: no axis opened it after the classification");
 
     // …and the real record still answers usable, or the check would just be refusing everything.
     ok(approvalsRecordUnusable(dbPath) === null,

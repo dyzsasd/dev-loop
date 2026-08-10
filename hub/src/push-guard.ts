@@ -311,6 +311,12 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // pre-LOOP-394 output (AC2).
   const approvalsDbFile = enforcePush ? (dbPath ?? resolveHubDbPath(repoDir)) : "";
   const recordUnusable = enforcePush ? approvalsRecordUnusable(approvalsDbFile) : null;
+  // A record classified unusable must stay untouched for the REST of the guard, not just until the
+  // next `openDb` (R6, PR #283 review). The other two axes open the same path, and `openDb` creates
+  // the schema — so a first `--strict` run refused while initialising the very table it was refusing
+  // for, and the second run found a usable, empty record and permitted the push. The refusal repaired
+  // its own cause. Null while enforcement is off, so those axes behave exactly as before (AC2).
+  const rejectedDb = recordUnusable ? approvalsDbFile : null;
 
   const passengers: PushGuardPassenger[] = [];
   let unresolvedDefaultBranch: string | undefined;
@@ -325,7 +331,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
       // which took the approvals gate down with it — a corrupt record must make the safety gate
       // REFUSE, not disappear.
       let pgConn = null;
-      if (existsSync(pgDb)) { try { pgConn = openDb(pgDb); } catch { pgConn = null; } }
+      if (existsSync(pgDb) && pgDb !== rejectedDb) { try { pgConn = openDb(pgDb); } catch { pgConn = null; } }
       try {
         for (const c of pCommits) {
           const allIds = [...new Set(c.msg.match(TICKET_RE) ?? [])] as string[];
@@ -388,7 +394,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // path an absent one already takes, instead of throwing out of the guard and taking the approvals
   // gate with it.
   let conn = null;
-  if (refs.size && existsSync(db)) { try { conn = openDb(db); } catch { conn = null; } }
+  if (refs.size && existsSync(db) && db !== rejectedDb) { try { conn = openDb(db); } catch { conn = null; } }
   if (conn) {
     try {
       for (const [id, cs] of refs) {
