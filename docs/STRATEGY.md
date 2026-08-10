@@ -248,9 +248,9 @@ system cannot enforce, report, or recover.
   is `README.md` + `CHANGELOG.md`, the 1.0 → v1.10.0 provenance is archive block A, and this section
   carries only what a fire still needs to act.
 
-- **[ARCHIVED] every build arc and fire journal through the eighty-first fire (2026-07-30 →
-  2026-08-07).** Rolled whole to
-  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–70. The
+- **[ARCHIVED] every build arc and fire journal through the one-hundred-fourteenth fire
+  (2026-07-30 → 2026-08-10).** Rolled whole to
+  [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–70 and 88. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48).
 
@@ -278,112 +278,6 @@ system cannot enforce, report, or recover.
   **LOOP-482** (P1: re-measured onto the ticket at pass 86). Consequence to carry: any per-fire
   context or cost figure that does not split by lane is averaging two delivery regimes.
 
-
-### 2026-08-09 (pm, one-hundred-sixth fire): a check that reports its own config as if it were the ledger
-
-**LOOP-406 verified Done** (`6a1709c`, PR #254). LOOP-353 had shipped the W37 soft-warning band with
-six assertions about constants; the seam it lacked is why — `checkStrategyDocBudget` resolved its own
-stat, so its only observable behaviour was whichever band this host's live doc happened to sit in.
-With the stat injected, the three fixtures now drive the real function at the band edges.
-
-Two of the four mutants that verified it were **not** in the ACs, and each closes a way the fix could
-have been cosmetic. The fixtures derive `warnAt` from a spec literal `0.8` rather than importing
-`STRATEGY_DOC_WARN_FRACTION`: change the product's fraction to 0.5 and fixture 1 lands inside the band
-and fails — had they imported the constant, all three would have moved with it and stayed green, the
-same tautology one level up. And the `ws` handed to the fixtures is a Proxy that throws on any read,
-so reverting the seam's use costs 7 assertions instead of silently falling back to measuring the
-host's own doc. **A fixture derived from the constant it is checking is not a test of that constant** —
-that is the durable rule, and it generalises past this band.
-
-**The lens finding, same shape one layer out (LOOP-482, filed).** `doctor` states
-`[W03] … boot corpus is OFF … fires run in PULL mode and the push-path byte budget is not being
-delivered against`, while `fires.jsonl` holds **38 rows carrying 5,140,642 B of pushed corpus** — the
-most recent being the fire that read the warning (140,097 B). The premise is right and the conclusion
-is false: the effective switch is `config.team.bootCorpus === true || opts.assembleBoot`, and
-`lessons.ts` documents reading only the config input, deliberately, so doctor's answer cannot depend on
-how a fire was launched. That rationale holds; the sentence does not, because it converts a statement
-about configuration into a claim about what happened. Doctor already reads that ledger. The same
-predicate also annotates the lessons-budget lines with "which is not delivering", so a real budget
-breach is triaged against an inverted premise. **Config says what is configured; the ledger says what
-was delivered** — a surface that asserts the second must read the second.
-
-Two measurements recorded rather than filed. **W38 is absent from the installed build** (present in
-source, no row in the installed doctor registry), so its silence on this workspace's unprotected
-`main` — the exact standing state its own comment cites — is the W18 skew, 31 code commits, not a
-defect; attribution came from the installed tree, never the repo. And the **landing signal moved from
-`[W22] landing stalled … base checks unknown` to `✅ … base green — nothing wedged` in three minutes**
-on an unchanged board, because one unrelated PR's checks finished. Across both readings the four PRs
-that are actually stranded — green, mergeable, untouched ~30 h, two of them with their tickets still
-in `Todo` — appear in neither. Re-measured onto LOOP-457 and LOOP-454; the stale counts in their
-titles are corrected there.
-
-### 2026-08-09 (pm, one-hundred-tenth fire): the gate stopped being a step the docs asked for and became the only path they describe
-
-**LOOP-448 verified Done** (`fba3170`, PR #281) — the first §17 operator apply this section records,
-and the first PR landed by `dev-loop pr merge` itself. LOOP-444 had shipped the atomic verb; every
-dev tier's Step 0.5 and §12c still prescribed `merge-guard --strict --apply` **then** `gh pr merge`,
-so an agent following its instructions literally still took the skippable path — `62178e6` and
-`c3454b7` are the recorded cost of that gap. All three tier Step 0.5 blocks and both §12c targets
-now name the single verb; on the merged tree **no `merge-guard --strict --apply` merge-path
-prescription survives anywhere in `skills/` or `references/`**, and the deploy-PR bullet is
-deliberately untouched.
-
-**Three deltas shipped beyond the approved proposal, and each is a correction to the proposal rather
-than a re-spec of it** — the distinction that decides whether a review may change a ticket's content.
-Re-derived against `hub/src/pr-merge.ts`, not accepted from the handoff: (1) the proposal's suggested
-bullet kept an `every green AND MERGEABLE →` pre-filter while its own detail-1 said readiness runs
-inside the verb — the code settles the contradiction (`prMergeUnlocked` runs the guard even when
-readiness holds, `holds = [...readiness.holds, ...holdsFrom(guard)]`), and keeping the pre-filter
-would have made a tier skip the verb on exactly the conflicting and pending PRs whose objections need
-to land; (2) the proposal's exit list omitted `5`, which `PR_MERGE_EXIT` defines as
-`lockUnavailable`; (3) the gate paragraph still claimed **two** axes when `holdsFrom` emits a third,
-`ciFreshness`. **A proposal that contradicts itself is settled by the implementation, and a review
-that completes an incomplete spec is not scope creep** — the test is whether the delta contradicts
-the spec's stated intent or serves it.
-
-**The verb governed its own adoption.** It held the merge three times before clearing — red CI,
-unresolved review threads, then `check-never-reported` during a dispatch race. The third hold was a
-read-timing artifact whose printed remedy (push again) cancels the run the previous push started, on
-`cancel-in-progress: true`; filed as LOOP-485. Verification ran against the MERGED tree in a
-`git archive`, after the first pass measured the shared checkout one commit behind and read the
-pre-merge text as if it were shipped.
-
-### 2026-08-10 (pm, one-hundred-fourteenth fire): the approvals verb landed, and the north star was quoting a warning
-
-**Two `sensitive` increments verified Done in the one-hundred-thirteenth fire** (recorded here a fire
-late: that fire found main's CI in flight on a code commit and deferred the §20 pass rather than cancel
-it — see LOOP-486). **LOOP-392** (`fa1a1da`, approvals C2) ships the verb surface, so *did the human
-approve THIS action?* is now askable from the CLI; its load-bearing property is that granting is the
-human's act — a fire-marked process is refused (exit 4, nothing written), which is what makes C1's
-store safe to expose. All six ACs exercised on the real CLI against the merged tree. **LOOP-408**
-(`5c02868`) collapses mode/autonomy onto one token set and gives all three projections a writer, all
-seven ACs exercised in a throwaway fixture workspace — never this one, since `team set` is a config
-mutator. **LOOP-394** (approvals C4, the first enforcing consumer) is now pickable; hold its AC6(c)
-default of an EMPTY `approvals.enforce` at verify, because that default is what bounds LOOP-489.
-
-**A multi-round PR's early measurements describe a tree that no longer exists.** LOOP-392's PR body
-reported "fire gate removed ⇒ 12 fail"; on the landed tree it is **2**, both message-text assertions.
-A later review round added a human-grantor guard that refuses the same input, and the suite's `run()`
-helper defaults `DEVLOOP_ACTOR` to `senior-dev` whenever a fire marker is set — so the two guards are
-redundant on every AC2 input and **no test drives marker + operator**. Driving that input by hand gives
-exit 4 with nothing written, so the behaviour is right and only the coverage is missing (**LOOP-488**).
-Re-run a handoff's numbers; never quote them.
-
-**A finding assigned to a sibling child by name is owned by nothing until that child's ACs say so.**
-LOOP-391 and LOOP-392 both closed noting that `team-import.ts` carries no approvals table and that "C5
-owns it". LOOP-396 *is* C5, and its ACs are entirely the consumer inventory — they say nothing about the
-bundle carry. So a bundle export/import silently dropping every approval grant was unowned for the whole
-chain, and this doc's own working notes repeated the misattribution for days. Verified in code and filed
-as **LOOP-489**. Check the named ticket's ACs before believing a hand-off.
-
-**The lens finding is one layer up from the product: this section was repeating a doctor warning as
-fact.** The corrected boot-corpus paragraph above replaces a two-day-old claim that §0a delivery "is
-and has been PULL" — the claude lane has been 36/36 PUSH since 2026-08-09. The doc did not measure
-wrongly; it inherited W03's conclusion without reading the ledger W03 declines to read. **A north star
-that quotes an instrument inherits that instrument's errors**, so a fact recorded here from a warning
-needs the warning's own evidence re-derived — which is why the correction is dated and names what it
-supersedes rather than being edited in place. `Goals` was left untouched: it is a direction section, and
-its first-program tally (2 of 5) is still accurate.
 
 ### 2026-08-10 (pm, one-hundred-fifteenth fire): the release resume is tag-anchored, and its one in-body guard is pinned by an assertion that cannot read it
 
@@ -423,6 +317,68 @@ the release path still in flight. A docs-only commit and a code commit cancel ea
 symmetrically under `cancel-in-progress`, and the docs side is the one that can silently leave a
 supply-chain change unverified on `main`. Reading `gh run list --branch main` before a doc-land is the
 working rule until that ticket lands.
+
+
+### 2026-08-10 (pm, one-hundred-sixteenth fire): the retirement reached the whole taught surface, and the deferral that had no ticket
+
+**LOOP-465 verified `Done`** (`0cac647`, PR #282) — the operator's own §17 apply of the proposal
+this loop filed. Verified against the **merged tree**, extracted with `git archive origin/main`
+because the shared checkout was two commits behind it, and rendered per agent with
+`dev-loop conventions --agent <a> --root <that tree>`.
+
+All four acceptance criteria hold. `references/backend-local.md` is gone; **zero** SKILL
+`Sections:` lines and §18's per-backend read stub still name it. Every one of the ten agents now
+renders exactly **one** line matching the proposal's own pattern, and it is the retirement sentence
+itself. The delivered saving, measured pre (`9a431d1`) → post: **pm −2,368 B**, qa −2,298,
+junior-dev −2,245, dev −2,253, ops −2,191, sweep −2,150, senior-dev −2,126, architect −2,052,
+reflect −1,998, communication −1,571. Both pinning suites pass on the merged tree
+(`CONTEXT_BUDGET_OK`, `BOOT_PREFIX_OK`). **Merged, not installed** — the corpus reaches fires at the
+next CLI reinstall, so this fire's own prompt still carried the retired spans. The win is banked,
+not yet delivered.
+
+**The over-prune check had to be a LINE diff, and a count diff would have read as damage.** The
+proposal named exactly one hazard: a prune keyed on the bare string `local` also destroys
+`machine-local`, `localhost`, `local git checkout`, and the still-live `docSystem: "backend" |
+"local"` enum. `machine-local` in the pm slice went **6 → 4**. Diffing the lines rather than the
+counts shows both losses are the backend sense — `"local"` ⇒ the machine-local file board, and §2's
+local-mode board-*directory* firewall paragraph — while the four survivors are all the
+runtime-state sense (§11's state dir, §22's three report lines). `marketplace.json` kept
+**`localhost UI`** while dropping only "a local file board, or". **The durable rule: when an
+acceptance criterion says a sense must survive a prune, a surviving COUNT is not evidence — only
+the diff of the removed lines is.**
+
+**AC3's one tension, resolved by asking who consumes the constant.** The apply touches
+`hub/src/context-bill.ts`, which reads as a runtime-code change against an AC that forbade one. Its
+`CONVENTIONS_BUDGETS` export has exactly one consumer anywhere in `hub/` — the ratchet test — so no
+doctor code and no executed path moved. Re-seeding was also not optional: at the old rows four
+agents would have carried >2 KB of slack, which the ratchet's own second assertion flags. **A
+change inside `src/` is a runtime change only if something at runtime reads it.**
+
+**The deferral that had no ticket → LOOP-492 (filed).** The apply comment recorded "boot-prefix's
+now-dead local ternary branch is left for a dev ticket"; no such ticket existed. `boot-prefix.ts` is
+now the last file in `hub/src/` naming the deleted artifact (line 230's ternary, line 10's header
+comment). It is unreachable — `team-config.ts:399` emits E02 and `validateWorkspaceFile` throws, so
+a `local` workspace never loads — and `existsSync` guards the read, so this is cleanup, not a
+defect. Its AC5 matters more than the deletion: LOOP-465 removed the branch's only test row, so the
+arm currently has **no coverage at all**. This is the third time a finding handed to a named future
+owner in a close comment turned out to be owned by nobody; the check is cheap and it keeps paying.
+
+**Direction was ratified by the operator, not by this loop** (`fc170bb`). The Vision's
+preserved-paths sentence, the repositioning arc's compatibility list, and the Glossary's Backend
+entry still mandated preserving the retired backend while Non-goals already recorded its
+retirement. That is a §20 D4 direction edit and therefore theirs; it advanced this doc's watch
+cursor, and the north star can no longer instruct restoring a backend the loader refuses.
+
+**Carried forward out of the rolled fire-114 journal:** LOOP-394 (approvals C4, the first
+enforcing consumer) is back at `Todo`. **Hold its AC6(c) default of an EMPTY `approvals.enforce` at
+verify** — that default is what bounds LOOP-489's window, and it is the kind of default a later
+round widens without anyone noticing.
+
+Board: **45 Backlog / 28 unblocked Todo (senior 15, junior 13)** — both tiers over the §5a cap of
+10, so this fire promoted nothing and groomed only, which is a valid fire. Zero non-conformant rows
+across every live ticket. §9c: eight parked tickets, all eight holding live edges with open
+blockers, zero unpark candidates and zero `blocked` labels without an edge. Decision queue: **1**
+(LOOP-463, the operator's OpenRouter credit — the cheap tier has now been dark ~37 h).
 
 ## Personas
 
@@ -676,6 +632,28 @@ working rule until that ticket lands.
      edge, not a courtesy. **And check the tier: the hand-off is where §21b gets skipped, the filer
      being busy closing something else.** Both arrived `assignee: —` — invisible to every dev pick
      query, one of them `sensitive`.
+  33. **A fixture derived from the constant it is checking is not a test of that constant.** The
+     LOOP-406 band fixtures compute `warnAt` from a spec literal `0.8` rather than importing
+     `STRATEGY_DOC_WARN_FRACTION`: change the product's fraction and a fixture lands inside the
+     band and fails, where importing the constant would have moved all three with it and kept them
+     green — the tautology one level up from asserting a constant equals itself. The general form:
+     **when a check and its test read the same source for the value under test, the test can only
+     confirm they agree, never that the value is right.** Pin the number from the SPEC, and hand
+     the check a seam (LOOP-406 injected the stat) so reverting it costs assertions instead of
+     silently falling back to measuring the host. Distilled at pass 88 from the fire-106 journal
+     before rolling it; the same shape governs §20 D4 prose that quotes a warning as fact
+     (LOOP-482).
+  34. **A finding handed to a named future owner in a close comment is owned by NOBODY until that
+     ticket's own acceptance criteria say so.** LOOP-391 and LOOP-392 both closed noting that
+     `team-import.ts` carries no approvals table and that "C5 owns it"; LOOP-396 *is* C5 and its
+     ACs are entirely the consumer inventory — so a bundle export/import silently dropping every
+     approval grant was unowned for the whole chain (LOOP-489). Re-confirmed at pass 88 on a
+     different surface: the LOOP-465 apply deferred `boot-prefix.ts`'s dead ternary "for a dev
+     ticket" that did not exist (LOOP-492). **Open the named ticket's ACs before believing a
+     hand-off** — the naming feels like routing and carries none. Its sibling: a multi-round PR's
+     early measurements describe a tree that no longer exists, so re-run a hand-off's numbers
+     rather than quoting them (LOOP-392's body said 12 fail; the landed tree measures 2 —
+     LOOP-488).
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
