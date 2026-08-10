@@ -594,6 +594,53 @@ try {
       "LOOP-379: …and the pending child is not resolved as its own slug's owner");
   }
 
+  // ── LOOP-379: a doc REDESIGNED — ownership is per increment, not per slug lifetime ────────────
+  // Raised on PR #278 as a P1, and it is the failure mode that arrives with AGE rather than with an
+  // unusual shape. §21a defines the design doc as a LIVING per-module document, so a second increment
+  // is the normal life of any doc that outlives its first feature — and the query reads the whole
+  // board (BOUND 4), so `children` holds every child of every increment while each parent back-links
+  // only the children IT staged. "Linked to every child" therefore fails for BOTH parents at once:
+  // the slug resolves to NOBODY, which reads identically to "no design here".
+  //
+  // It is distinct from the first-child case above and reproduces AFTER that fix — the shape is an old
+  // parent/child pair plus a new one, both complete. The two arms are the two consumers: predicate
+  // membership (the routing/close gate) and the inheriting write (LOOP-296's `sensitive`, which is
+  // where the tier is chosen). The second arm is what makes this a P1 rather than a display miss —
+  // a child of the CURRENT design of a sensitive module silently lands on the junior tier.
+  {
+    const create = (title: string, desc: string, labels: string[], assignee: string | null, relatedTo: string[]) =>
+      (agentOp("save_issue", db, pid, "dp", "senior-dev",
+        { title, type: "Improvement", state: "Todo", description: desc, labels, relatedTo, ...(assignee ? { assignee } : {}) }) as OpResult)
+        .body as { id: string; labels: string[]; assignee: string | null };
+
+    // Increment 1, finished: parent and child link to each other and to nothing else.
+    mk("L379I-P1", "the first cut of the loom design", "Done", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"], ["L379I-C1"]);
+    mk("L379I-C1", "Design: hubDoc:design/loom-core\n\nthe first slice", "Done", ["dev-loop"], ["L379I-P1"]);
+    // Increment 2, current: the same doc, redesigned. Nothing about either row is unusual.
+    mk("L379I-P2", "the second cut of the loom design", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"], ["L379I-C2"]);
+    mk("L379I-C2", "Design: hubDoc:design/loom-core\n\nthe second slice", "Todo", ["dev-loop"], ["L379I-P2"]);
+
+    const p6 = designParentIds(db, pid);
+    ok(p6.has("L379I-P2"),
+      "LOOP-379 increments: the CURRENT design of a redesigned doc is its parent — a lifetime-wide `every` leaves the slug with no owner at all");
+    ok(p6.has("L379I-P1"),
+      "LOOP-379 increments: …and so is the finished one, which really did decompose a design — a doc has one parent per increment, not one for all time");
+
+    // The consumer that made this a P1: the child of the CURRENT increment must still inherit.
+    const next = create("third-slice-of-loom", "Design: hubDoc:design/loom-core\n\nthe third slice",
+      ["dev-loop"], "junior-dev", ["L379I-P2"]);
+    ok(next.labels.includes("sensitive"),
+      `LOOP-379 increments: a new child of the current increment inherits sensitive from the parent IT names, however many increments the doc has had (got ${JSON.stringify(next.labels)})`);
+    ok(next.assignee === "senior-dev" || next.labels.includes("senior-dev"),
+      `LOOP-379 increments: …so the §21b senior re-tier fires, instead of staging sensitive work on the junior tier (assignee ${next.assignee})`);
+
+    // A neighbour is still kept out on a redesigned doc — the increment is read off the child's own
+    // mandatory link, so a ticket that links AT a child of any increment never becomes its owner.
+    mk("L379I-NEIGHBOUR", "a coverage follow-up related to the second slice", "In Review", ["dev-loop", "Bug", "qa"], ["L379I-C2"]);
+    ok(!designParentIds(db, pid).has("L379I-NEIGHBOUR"),
+      "LOOP-379 increments: …and a neighbour linked to one increment's child is still not a parent — partitioning does not relax the direction");
+  }
+
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }

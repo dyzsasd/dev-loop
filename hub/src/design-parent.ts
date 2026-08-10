@@ -53,9 +53,10 @@ export function designPointerOf(description: string): string | null {
  *   • `Design: hubDoc:design/<slug>`   — names the DOC; the parent is resolved through the doc slug
  *   • `Design: docs/design/<slug>.md`  — same, repo-file spelling
  *
- * For the two doc forms the parent is the ticket the board RECORDS as owning that slug: the one
- * linked to every child of the slug through `relatedTo`. That is a reverse link like the
- * `parent <id>` case, just keyed on the slug instead of on an id.
+ * For the two doc forms the parent is the ticket the board RECORDS as owning that slug: the one its
+ * children NAME through `relatedTo`. That is a reverse link like the `parent <id>` case, just keyed
+ * on the slug instead of on an id — and, because a design doc is LIVING (§21a), a slug redesigned
+ * more than once has one parent per increment rather than one for all time.
  *
  * The doc-slug route used to be an INFERENCE — it read ownership of a design out of a ticket naming
  * that design in prose — and LOOP-372 bounded it on three sides rather than removing it. LOOP-379
@@ -161,37 +162,47 @@ function resolveDesignParents(
     if (slug) slugToChildren.set(slug, [...(slugToChildren.get(slug) ?? []), t.id]);
   }
 
-  // The pending child joins the derivation ONLY when its slug has no child on the board — the exact
-  // case it exists for, and the only one in which it cannot change an answer the board already gives.
-  // Folding it in unconditionally would make it a member of `children`, and `children.every` is a
-  // CONSTRAINT: a child filed without its own `relatedTo` (non-conformant, but the shape LOOP-296's
-  // fixtures pin) would then un-own its slug for the duration of its own insert and stop inheriting a
-  // label it inherits today. So the fold is additive by construction — it can give a slug an owner it
-  // did not have, never take one away.
+  // The pending child joins the derivation for EVERY slug it points at, not only a slug with no
+  // children yet. It answers two questions the board alone cannot: a design's FIRST child resolves
+  // against a slug with no children, and a child of a LATER increment resolves against the parent it
+  // NAMES rather than against the slug's whole history (below). It is added to the board so the
+  // adjacency sees the link it declares, and kept out of the fallback's `children.every` set — that
+  // quantifier is a CONSTRAINT, so a child filed without its own `relatedTo` (non-conformant, but the
+  // shape LOOP-296's fixtures pin) would otherwise un-own its slug for the duration of its own insert
+  // and stop inheriting a label it inherits today. The fold stays additive by construction.
   const board: DesignParentRow[] = [...rows];
+  let pendingSlug: string | null = null;
   if (pending) {
     const ptr = designPointerOf(pending.description ?? "");
     const slug = ptr && !/^parent\s+\S+/i.test(unwrapCodeSpan(ptr)) ? docSlugOf(ptr) : null;
-    if (slug !== null && !slugToChildren.has(slug)) {
+    if (slug !== null) {
+      pendingSlug = slug;
       board.push({ id: PENDING_ID, description: pending.description, related_to: JSON.stringify(pending.relatedTo) });
       onBoard.add(PENDING_ID);
-      slugToChildren.set(slug, [PENDING_ID]);
+      if (!slugToChildren.has(slug)) slugToChildren.set(slug, []);
     }
   }
 
-  // Resolve each doc slug to the ticket the board RECORDS as owning it: the one linked to EVERY
-  // child of that slug through `relatedTo`, in either direction. §21a writes both sides — the child
-  // carries `relatedTo:[<parent>]` at filing (mandatory, so it survives the parent closing) and the
-  // parent back-links every child in one write — so ownership is read out of the link the process is
-  // required to record, never out of a sentence.
+  // Resolve each doc slug to the ticket(s) the board RECORDS as owning it. §21a writes both sides of
+  // the link — the child carries `relatedTo:[<parent>]` at filing (mandatory, so it survives the
+  // parent closing) and the parent back-links every child it staged in one write — so ownership is
+  // read out of the link the process is required to record, never out of a sentence.
   //
-  // EVERY child, not any: a ticket that merely neighbours a design is commonly related to one of its
-  // children. LOOP-420 is `relatedTo` LOOP-409 alone while the slug's children are LOOP-408/409/410,
-  // and that is precisely the ticket this route used to return.
+  // A slug has one owner PER INCREMENT, because a design doc is a living document (§21a) and each
+  // increment is decomposed by its own parent. The primary read is the child's own mandatory link:
+  // a child names its parent, so the children partition themselves and a ticket that merely
+  // neighbours a design never appears — LOOP-420 is `relatedTo` LOOP-409 while the slug's children
+  // are LOOP-408/409/410, but no child of that slug names LOOP-420, and that is precisely the ticket
+  // this route used to return.
   if (slugToChildren.size) {
     const { linked, declared } = relatedToAdjacency(board, onBoard);
     for (const [slug, children] of slugToChildren) {
-      const childSet = new Set(children);
+      // Every child of the slug INCLUDING the row being inserted, whose own `relatedTo` is the only
+      // record of which increment it belongs to. `children` (board rows only) stays separate because
+      // the fallback below is a quantifier over it.
+      const pendingHere = pendingSlug === slug ? PENDING_ID : null;
+      const allChildren = pendingHere ? [...children, pendingHere] : children;
+      const childSet = new Set(allChildren);
       const eligible = (t: DesignParentRow) =>
         // A CHILD of this slug is not its own parent — it points AT the doc rather than owning it.
         !childSet.has(t.id)
@@ -199,7 +210,46 @@ function resolveDesignParents(
         // links. §21a defines exactly two modes and `Mode: direct-code` is the ticket saying it is
         // code work; that is a stronger statement about the ticket than any link into it.
         && !declaresNonDesignMode(t.description ?? "");
-      const owners = board.filter((t) => eligible(t) && children.every((c) => linked.get(t.id)?.has(c)));
+      const candidates = board.filter(eligible);
+      const candidateIds = new Set(candidates.map((t) => t.id));
+
+      // OWNERSHIP IS PER INCREMENT, NOT PER SLUG LIFETIME (PR #278 review, P1).
+      // `children` is every ticket that has EVER carried a pointer to this slug, because the query
+      // deliberately reads the whole board (BOUND 4). §21a defines the design doc as a LIVING
+      // per-module document, so a second increment is the normal life of any doc that outlives its
+      // first feature — and each parent back-links only the children IT staged. Asking one ticket to
+      // be linked to every child the slug ever had therefore fails for BOTH parents once a doc is
+      // redesigned: `owners` is empty, the slug resolves to nobody, and the consumers read that as
+      // "no design here" — a new child stops inheriting `sensitive` (ticketwrite.ts) and stays on the
+      // junior tier. That is LOOP-290's shape again, arriving through the doc's second increment, and
+      // it reproduces after the first-child fix (an old parent/child pair plus a new one yields no
+      // owner at all).
+      //
+      // The increment is read off the ONE edge §21a makes MANDATORY at filing — the child's own
+      // `relatedTo:[<parent>]`. A child names its parent, and that naming is what makes a parent, so
+      // a slug has as many owners as it has increments and each owns exactly the children that name
+      // it. A child naming two eligible candidates names neither (BOUND 3 at the child level), which
+      // is what keeps an ordinary neighbour out: a neighbour is linked FROM itself, never named BY
+      // the child.
+      const declaredParentOf = (c: string): string | null => {
+        const named = [...(declared.get(c) ?? [])].filter((id) => candidateIds.has(id));
+        return named.length === 1 ? named[0] : null;
+      };
+      const ownerOfChild = new Map<string, string>();
+      for (const c of allChildren) {
+        const p = declaredParentOf(c);
+        if (p) ownerOfChild.set(c, p);
+      }
+      const declaredOwners = new Set(ownerOfChild.values());
+
+      // The undirected lifetime read is RETAINED as the fallback for a slug no child of which names
+      // an eligible candidate — the parent's back-link is a second write, and a child filed without
+      // its own link is the shape LOOP-296's fixtures pin. It keeps BOUND 3 exactly as LOOP-372 left
+      // it, and it runs over the BOARD's children only: `[].every()` is vacuously true, so a
+      // pending-only slug would otherwise hand ownership to every candidate on the board at once.
+      const undirected = children.length
+        ? candidates.filter((t) => children.every((c) => linked.get(t.id)?.has(c))).map((t) => t.id)
+        : [];
       // BOUND 3 (LOOP-372) — two tickets qualifying for one slug is an ambiguous link. Resolve it to
       // NOBODY: returning both would grant the gate to a ticket that is certainly wrong, and picking
       // one by id order would decide an authorization question by an accident of numbering.
@@ -208,25 +258,37 @@ function resolveDesignParents(
       // can no longer arise: it broke ties among tickets that NAMED a slug, and naming is no longer
       // how a candidate is found.
       //
-      // BOUND 3b — before resolving an ambiguity to nobody, narrow it by the ONE edge §21a makes
-      // MANDATORY: the child's own `relatedTo:[<parent>]`, written at filing. The undirected read
-      // above is deliberately generous (the parent's back-link is a second write that may not have
-      // landed), and generosity has a cost that grows as a slug gets SMALLER: `children.every` is
-      // vacuously satisfied by any single neighbour when a slug has exactly ONE child, so LOOP-420's
-      // shape — a ticket related to one child of a design it does not own — comes back for every
-      // one-child design and takes the real parent's routing down with it, since two candidates
-      // resolve to nobody. Narrowing is not a tie-break by preference: an arbitrary neighbour is
-      // linked FROM itself, while a parent is named BY its children, so the mandatory direction
-      // separates them structurally. Ambiguity that survives it still resolves to nobody.
+      // BOUND 3b — the narrowing that separates a parent from a neighbour is now the DERIVATION
+      // itself, not a tie-break applied after it: `declaredParentOf` reads the mandatory child→parent
+      // edge, so an arbitrary neighbour (linked FROM itself, named BY nobody) never becomes a
+      // candidate owner in the first place. That matters most as a slug gets SMALLER — the fallback's
+      // `children.every` is satisfied VACUOUSLY by any single neighbour when a slug has exactly one
+      // child, which is why the fallback runs only where no child names anyone.
       //
-      // Measured on the live 407-row board, this loses nothing and recovers three slugs the
-      // undirected read alone could not resolve — `merge-freshness-gate` → LOOP-149 (the parent this
-      // ticket was filed about: LOOP-277 is linked to all three children but named by none of them),
-      // `design-gate-close` → LOOP-310, `decision-queue-observability` → LOOP-49.
-      const resolved = owners.length === 1
-        ? owners
-        : owners.filter((t) => children.every((c) => declared.get(c)?.has(t.id)));
-      if (resolved.length === 1) { out.add(resolved[0].id); ownerBySlug.set(slug, resolved[0].id); }
+      // Measured on the live 407-row board, the mandatory edge loses nothing and recovers three slugs
+      // the undirected read alone could not resolve — `merge-freshness-gate` → LOOP-149 (the parent
+      // this ticket was filed about: LOOP-277 is linked to all three children but named by none of
+      // them), `design-gate-close` → LOOP-310, `decision-queue-observability` → LOOP-49.
+      //
+      // EVERY owner is a design parent — a redesigned module has one per increment, and each really
+      // did decompose a design. The single-owner rule survives only where it answers a question that
+      // must have ONE answer: `ownerBySlug`, whose consumer inherits `sensitive` from the parent of
+      // the child being written (ticketwrite.ts). With a pending child that answer is the parent the
+      // child ITSELF names, which is well-defined however many increments the doc has had; without
+      // one, a contested slug still resolves to NOBODY rather than to whichever sorts first.
+      //
+      // BOUND 3 still governs the UNDIRECTED fallback unchanged — two tickets each linked to every
+      // child is an ambiguity no recorded edge resolves, so it resolves to NOBODY. It does not govern
+      // the declared read, where several owners is not an ambiguity but the doc's own history: the
+      // children partition themselves, and no child is claimed twice.
+      const owners = declaredOwners.size
+        ? [...declaredOwners]
+        : (undirected.length === 1 ? undirected : []);
+      for (const id of owners) out.add(id);
+      const owner = pendingHere && ownerOfChild.has(pendingHere)
+        ? ownerOfChild.get(pendingHere)!
+        : (owners.length === 1 ? owners[0] : null);
+      if (owner !== null) ownerBySlug.set(slug, owner);
     }
   }
   return { parents: out, ownerBySlug };
