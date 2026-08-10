@@ -24,7 +24,7 @@
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
-import { openDb, STATES } from "./db.ts"; // STATES: the one legal-state list, so a directive key is checked against the board's real states
+import { openDb, STATES, listActorHandles } from "./db.ts"; // STATES: the one legal-state list, so a directive key is checked against the board's real states; listActorHandles: the ACTIVE-actor roster, the same predicate actorExists() resolves an assignTo handle against
 import { findProject } from "./seed.ts";
 import { activeFireMarker } from "./destructive-guard.ts"; // LOOP-367/417: the ONE fire-marker list, owned there
 import { resolveIdentity } from "./resolve-project.ts";     // §11 DEVLOOP_PROJECT-then-cwd ladder, shared with every hub verb
@@ -44,7 +44,12 @@ type SettingKind = "boolean" | "hours" | "count" | "ratio" | "json-object";
 // `restart` marks the keys the daemon reads ONCE at bootstrap (daemon.ts:975-984) and hands to notifier
 // timers that never re-read the row. Carried as data so the write itself can say so: an operator who tunes
 // a cadence and sees no change would otherwise conclude the command did nothing.
-type SettingSpec = { re: RegExp; kind: SettingKind; note: string; validate?: (v: unknown, path: string) => void; restart?: true };
+// A validator that needs to know what the CONSUMER will accept gets it through this context rather than
+// re-deriving it. `actorHandles` is a thunk on purpose: it is the live roster read inside the same
+// transaction as the write, so the check cannot pass against a roster that has since changed, and no
+// query runs for the keys that never ask.
+export type ValidateCtx = { actorHandles: () => string[] };
+type SettingSpec = { re: RegExp; kind: SettingKind; note: string; validate?: (v: unknown, path: string, ctx: ValidateCtx) => void; restart?: true };
 
 // `workflow.transitions` maps "<From>-><To>" → { assignTo }. Both halves are checked:
 //   · the VALUE, because `{"assignTo":true}` parses as a fine JSON object and then reaches actorExists()
@@ -62,8 +67,22 @@ type SettingSpec = { re: RegExp; kind: SettingKind; note: string; validate?: (v:
 //     lookup only on an actual state CHANGE (`agentops.ts:366` guards it with `next.state !== cur.state`).
 //     Validating the shape of a key is not validating its effect — a self-transition is refused here for
 //     exactly the reason the nonexistent state is.
+//
+// The same argument reaches the VALUE's last surviving shape. `{"assignTo":"senor-dev"}` is a nonempty
+// string, so it passes every check above, is stored, and reports success — and then `resolveAssignTo`
+// asks `actorExists(db, v)` (agentops.ts:116), misses, logs one stderr line, and returns null, leaving
+// the assignee exactly as it was. A typo'd handle is therefore not a rule that assigns the wrong actor;
+// it is a rule that never assigns anyone, which is the same permanently-inert directive the key checks
+// exist to refuse. So the handle is checked against the roster the consumer itself queries — the ACTIVE
+// actors, `listActorHandles`'s predicate being `actorExists`'s — rather than against a hand-kept list
+// here, which would drift from the roster the moment an actor is added or deactivated.
+//
+// `owner` and `self` are directive KEYWORDS, not handles, and are exempt: the consumer resolves them
+// before it ever reaches the roster lookup (`owner` → the ticket's pm/qa label, `self` → the acting
+// actor), so neither is required to name an actor at write time.
 const TRANSITION_KEY_RE = /^([^>]+)->(.+)$/;
-function validateTransitions(v: unknown, path: string): void {
+const ASSIGN_TO_KEYWORDS = ["owner", "self"];
+function validateTransitions(v: unknown, path: string, ctx: ValidateCtx): void {
   for (const [k, dir] of Object.entries(v as Record<string, unknown>)) {
     const m = TRANSITION_KEY_RE.exec(k);
     if (!m) die(`${path}: '${k}' is not a "<From>-><To>" transition key (ASCII '->', both states non-empty) — it would never match a transition`);
@@ -75,6 +94,10 @@ function validateTransitions(v: unknown, path: string): void {
     const assignTo = (dir as Record<string, unknown>).assignTo;
     if (assignTo !== undefined && assignTo !== null && typeof assignTo !== "string") die(`${path}: '${k}'.assignTo must be a string ("owner", "self", or an actor handle), got ${typeof assignTo}`);
     if (typeof assignTo === "string" && assignTo === "") die(`${path}: '${k}'.assignTo is empty — use "owner", "self", or an actor handle, or omit the key`);
+    if (typeof assignTo === "string" && !ASSIGN_TO_KEYWORDS.includes(assignTo)) {
+      const roster = ctx.actorHandles();
+      if (!roster.includes(assignTo)) die(`${path}: '${k}'.assignTo names '${assignTo}', which is not an active actor — resolveAssignTo() looks the handle up with actorExists() (agentops.ts) and leaves the assignee untouched when it misses, so this directive would be stored, reported as set, and never assign anyone. Use "owner", "self", or one of: ${roster.join(", ")}`);
+    }
   }
 }
 
@@ -82,7 +105,7 @@ export const SETTABLE_SETTINGS: ReadonlyArray<SettingSpec> = [
   // DL-29 — the human web-write surface. Off by default; this is the only switch that opens it.
   { re: /^humanWrite\.enabled$/, kind: "boolean", note: "opt-in human web-write (comment/move/assign/new-ticket/doc forms)" },
   // DL-24 — per-transition assignTo directives, keyed "<From>-><To>" (LOOP-400).
-  { re: /^workflow\.transitions$/, kind: "json-object", note: 'DL-24 assignTo directives, e.g. {"In Review->Done":{"assignTo":"owner"}}', validate: validateTransitions },
+  { re: /^workflow\.transitions$/, kind: "json-object", note: 'DL-24 assignTo directives, e.g. {"In Review->Done":{"assignTo":"owner"}} — assignTo is "owner", "self", or an ACTIVE actor handle', validate: validateTransitions },
   // DL-26 / workflows P3 — the Human-Blocked reminder cadence. 0 = explicit opt-out (NOT "absent").
   { re: /^humanBlockedReminderHours$/, kind: "hours", note: "Human-Blocked reminder cadence; 0 = explicit opt-out, absent = 24h when team.comms is set" , restart: true },
   // DL-76 — the loop no-progress circuit-breaker window.
@@ -120,7 +143,10 @@ const PLAIN_DECIMAL_RE = /^[+-]?\d+(\.\d+)?$/; // LOOP-245: Number("0x64") === 1
 const MAX_SETTING_HOURS = 87_600;
 
 // argv string → the JSON value to store. Every failure is a hard refusal, never a coercion.
-export function parseSettingValue(kind: SettingKind, raw: string, path: string, validate?: (v: unknown, path: string) => void): unknown {
+// `ctx` is REQUIRED and sits before the optional validator so no caller can reach a spec's `validate`
+// without having supplied the roster it may need: an optional context would let a future call site
+// silently skip the roster check and store the exact directive this refuses.
+export function parseSettingValue(kind: SettingKind, raw: string, path: string, ctx: ValidateCtx, validate?: (v: unknown, path: string, ctx: ValidateCtx) => void): unknown {
   switch (kind) {
     case "boolean":
       if (raw === "true") return true;
@@ -147,7 +173,7 @@ export function parseSettingValue(kind: SettingKind, raw: string, path: string, 
       try { v = JSON.parse(raw); }
       catch (e) { return die(`${path} takes a JSON object: ${(e as Error).message}`); }
       if (v === null || typeof v !== "object" || Array.isArray(v)) return die(`${path} takes a JSON OBJECT, got ${Array.isArray(v) ? "an array" : typeof v}`);
-      validate?.(v, path);
+      validate?.(v, path, ctx);
       return v;
     }
   }
@@ -371,7 +397,10 @@ export function main(argv: string[]): void {
         if (args.length !== 2) die(`set takes a path and a value\n\n${USAGE}`);
         const [path, raw] = args;
         const spec = checkSettable(path);
-        const value = parseSettingValue(spec.kind, raw, path, spec.validate);
+        // The roster is read on THIS connection, inside the BEGIN IMMEDIATE above — the same
+        // transaction that writes the row — so a directive cannot be validated against a roster that a
+        // concurrent write has already changed by the time the setting lands.
+        const value = parseSettingValue(spec.kind, raw, path, { actorHandles: () => listActorHandles(db) }, spec.validate);
         const before = getPath(settings, path);
         setPath(settings, path, value);
         writeSettings(db, key, settings);

@@ -17,7 +17,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { openDb } from "../src/db.ts";
+import { openDb, actorExists } from "../src/db.ts"; // actorExists: the SHIPPED handle predicate resolveAssignTo uses — the roster arms assert against it, never a local list
 import { ensureSeed, findProject } from "../src/seed.ts";
 import { humanWriteEnabled } from "../src/daemon.ts";
 import { resolveBlockedReminderHours, noProgressNotifyTick } from "../src/daemon-notifiers.ts";
@@ -217,6 +217,33 @@ const SELF = fileURLToPath(import.meta.url);
   ok(goodDirective.status === 0, `transitions: the valid directive is still accepted (got ${goodDirective.status}: ${goodDirective.stderr.trim()})`);
   ok(((settingsRow().workflow as { transitions?: Record<string, unknown> })?.transitions ?? {})["In Review->Done"] !== undefined,
     "transitions: …and it is stored under the workflow block");
+
+  // ── The VALUE's last inert shape: a handle no actor answers to ────────────────────────────────
+  // Every check above passes for `{"assignTo":"senor-dev"}` — nonempty string, real states, real
+  // delimiter — and the consumer still assigns nobody: resolveAssignTo misses on actorExists() and
+  // returns null. The two arms below are anchored to the SHIPPED predicate rather than to this file's
+  // opinion of who exists, so the writer's verdict is asserted to agree with the consumer's, and a
+  // roster change moves both sides at once.
+  const consumerAccepts = (handle: string): boolean => {
+    const db = openDb(dbPath);
+    try { return actorExists(db, handle); } finally { db.close(); }
+  };
+  ok(consumerAccepts("senior-dev") && !consumerAccepts("senor-dev"),
+    "transitions: (premise) the consumer's own actorExists() accepts 'senior-dev' and rejects the typo — the two arms below assert against ITS answer, not a hard-coded roster");
+  const unknownHandle = run("set", "workflow.transitions", '{"Todo->In Progress":{"assignTo":"senor-dev"}}');
+  ok(unknownHandle.status === 2 && /not an active actor/.test(unknownHandle.stderr),
+    `transitions: a misspelled actor handle is refused — it would be stored, reported as set, and never assign anyone (got ${unknownHandle.status})`);
+  ok(/senior-dev/.test(unknownHandle.stderr),
+    "transitions: …and the refusal prints the live roster read from the db, so the operator can correct the typo without guessing");
+  // The discrimination arm. Without it a validator that refused EVERY non-keyword handle — killing the
+  // entire third form the directive supports — passes the assertion above. Mutation-tested: dropping
+  // ASSIGN_TO_KEYWORDS' exemption or refusing all handles fails here.
+  const realHandle = run("set", "workflow.transitions", '{"Todo->In Progress":{"assignTo":"senior-dev"}}');
+  ok(realHandle.status === 0, `transitions: a REAL actor handle is still accepted (got ${realHandle.status}: ${realHandle.stderr.trim()})`);
+  ok(((settingsRow().workflow as { transitions?: Record<string, { assignTo?: string }> })?.transitions ?? {})["Todo->In Progress"]?.assignTo === "senior-dev",
+    "transitions: …and it is stored — the roster check narrows the third form, it does not remove it");
+  const selfKeyword = run("set", "workflow.transitions", '{"Todo->In Progress":{"assignTo":"self"}}');
+  ok(selfKeyword.status === 0, `transitions: "self" is a directive keyword, not a handle, and is not roster-checked (got ${selfKeyword.status}: ${selfKeyword.stderr.trim()})`);
 
   // ── The hours ceiling: a stored window the consumer's date arithmetic cannot represent ────────
   // Same class as everything above, one layer further out. `noProgressWindowHours` is multiplied by
