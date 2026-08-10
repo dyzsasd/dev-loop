@@ -259,24 +259,24 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T06:25Z over the 7d team ledger (**933 fires**) via `dev-loop metrics --window
-  7d --json`: **fire success 46.8%** (`successRate` 0.4684; 65% over 538 fires when Goals was written
-  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 933 = **437
-  delivered + 173 classified failures + 323 no-op** (`suspectError`, 0 interrupted). Classes:
-  `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30, `timeout` ×4, `network` ×2, `auth` ×1,
-  `budget-deadline` ×1 — **18.5% of the window, 34.9% of the 496 non-successes** (LOOP-464 owns the
-  real gap). `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked
-  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across ten readings the
-  window grew **831 → … → 905 → 933** while the classified count held at **exactly 173 every time** —
-  102 consecutive arrivals, none classified. The three `openrouter` lanes (junior-dev, qa, sweep) have
-  returned in ~6 s with no class since the fixed anchor **2026-08-08 16:36Z** (≈37.7 h; **311**
-  dead-lane fires, zero non-suspect), so the outage feeds the denominator and nothing feeds the
-  numerator. **The wait costs $553.58 = $352.40/day**, all `pm` + `senior-dev`, buying a Backlog whose
-  executor (`junior-dev`, 40 of 62 rows) is dark — and since pass 100 the qa-owned verification exit
-  is closed too (4 In Review, 0 Done since the anchor), so the spend now also cannot land.
-  Compare two readings only alongside the fire counts they were measured over — and note
-  that the per-agent half of this table is **anti-correlated** until LOOP-508 lands: qa and
-  junior-dev report 88.5% and 80.7% "healthy" against a delivered 47.4% and 24.6%.
+  Measured 2026-08-10T06:51Z over the 7d team ledger (**945 fires**) via `dev-loop metrics --window
+  7d --json`: **fire success 46.3%** (65% over 538 fires when Goals was written 2026-08-08). **Report
+  the window as a decomposition, never as a rate alone** — 945 = **438 delivered + 173 classified
+  failures + 334 no-op** (`suspectError`, 0 interrupted). Classes: `stalled` ×89, `budget-per-fire`
+  ×46, `rate-limit` ×30, `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — **18.3% of the
+  window, 34.1% of the 507 non-successes** (LOOP-464 owns the real gap). `stalled` is the largest
+  class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 + LOOP-463). **The
+  numerator is frozen, not lagging:** across eleven readings the window grew **831 → … → 933 → 945**
+  while the classified count held at **exactly 173 every time** — 114 consecutive arrivals, none
+  classified. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class
+  since the fixed anchor **2026-08-08 16:36Z** (38.3 h; **324** dead-lane fires, **zero** non-suspect),
+  so the outage feeds the denominator and nothing feeds the numerator. **The wait costs $562.11 =
+  $353.85/day**, all `pm` + `senior-dev`, buying a Backlog whose executor (`junior-dev`, 40 of 63 rows)
+  is dark — and since pass 100 the qa-owned verification exit is closed too (4 In Review, 0 Done since
+  the anchor), so the spend now also cannot land. Compare two readings only alongside the fire counts
+  they were measured over — and note that the per-agent half of this table is **anti-correlated**
+  until LOOP-508 lands: qa and junior-dev report 89.2% and 82.4% "healthy" against a delivered 44.3%
+  and 22.4%.
   First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
   Todo at P1** (raised pass 94 — `PICK_RANK` rank 4.5 is the only lever that reaches a picker, so
   this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
@@ -287,38 +287,37 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
   unset here, so the board is still read-only and the CLI is still the only way to rule.
 
-### 2026-08-10 (pm, one-hundred-thirty-first fire): the backup that stopped 41 h ago, and the alarm its own remedy silences
+### 2026-08-10 (pm, one-hundred-thirty-second fire): three money renderers, one of them with no basis — and a successor destroyed before it could carry the fix
 
-**The board's automatic backup has not run since 2026-08-08T13:26Z and `doctor` reports the gap as
-12 h (LOOP-513, filed P1).** The newest `reason=cadence` generation is 40.9 h old; the newest of *any*
-reason is a 12.2 h `manual` one. W32 ages `gens[0]` without reading `reason`, which `listSnapshots`
-already parses — so the arm built to prove the timer runs is satisfied by a file the timer did not
-write, and the warning's own closing instruction (*"take one by hand meanwhile: `dev-loop board
-snapshot`"*) **writes exactly such a file**, converting a permanent alarm into a 12-hourly one.
-Underneath, `startBoardSnapshot` is a bare `setInterval` with no initial tick and no persisted cursor,
-so every daemon restart pushes the next snapshot a full interval out. This is the mechanism that lost
-19 tickets and 79 comments on 2026-08-04, rebuilt and quietly disarmed. RULE 31's depth axis, third
-instance (after LOOP-505/450) and the first where the *remedy* closes the loop on itself — no new
-rule; a second rule for one shape splits the evidence.
+**`dev-loop metrics` publishes two values for one named quantity, in one run (LOOP-514, filed).**
+Captured back-to-back at 06:41:57Z: the default line reads `$11.4858/accepted change`, `--flow` reads
+`$11.2936/accepted-change`. The default line also presents its priced total ($1987.0422, summed over
+the 491 rows with `costUsd > 0`) over the 548-row *metered* count — implying **$3.6260/fire** where
+`--cost` publishes **$4.0469/priced fire**, 10.4 % apart. `--flow` and `--cost` each name their basis; the
+default line — the one `doctor`'s `NEXT` sends the operator to, and the only money line §22a quotes —
+names none.
 
-**The outage opened a second failure mode while parked, recorded on LOOP-463.** For 37 h it meant
-*nothing gets built*; it now also means *finished work cannot leave the board*. Since the anchor,
-qa-owned tickets went **4 → In Review, 0 → Done** against pm-owned 15 → 17; all 17 closes were written
-by `pm`, none by `qa`. The queue is no longer only undrainable at the front (40 of 62 Backlog rows on a
-dark `junior-dev`) — it is sealed at the back, oldest strand LOOP-378 at 37.3 h.
+**The fix existed and reached two renderers of three.** LOOP-239 named this exact defect; its verify
+measured AC1 against *what `--flow` prints*, and LOOP-219's discarded-spend doctrine landed the same
+way. LOOP-239 was Canceled and superseded by **LOOP-292 — destroyed in the 2026-08-04 wipe, never
+reconstructed** — so the remaining renderer has had no carrier since, while the Cancel comment still
+reads as a clean hand-off. RULE 30's third instance, and a new failure mode for RULE 34: the named
+successor can be GONE. Both extended in place; highest rule number stays 40.
 
-**One filing, not five — the restraint is the decision.** With 95 non-terminal rows, both tiers ~2.8×
-over the promotion cap, and the tier owning two thirds of the Backlog dark for 38 h, a filing is
-inventory, not throughput. LOOP-513 cleared the bar because it protects a board already destroyed
-once and will not surface itself: after any hand-taken snapshot, every future `doctor` reads healthy.
+**Said before the number is used, not after.** The operator's 06:30Z ruling sets a 48 h review at
+16:36Z today on cost grounds, so a basis error in the surface they will read is decision-relevant now
+rather than after LOOP-514 lands. LOOP-463 carries the reconciliation, the refreshed ledger sum
+($562.11 / 38.1 h / 388 fires, still 100 % claude lanes), the ≈$709 projection to the review point,
+and one instruction: read `--flow` or `--cost`, never the bare line. This corrects a basis, not a
+magnitude — the $509.71 they ruled on came from the ledger, not from the buggy surface.
 
-**Board and protocol.** Job A empty for the sixth consecutive fire (all four In Review rows are
-`qa`-owned); `needs-pm` and `_team` empty; no `## Deferred findings` pending; §9c — no blocker in
-{401, 468, 472, 464, 463} terminal, so none of the six parked rows can unpark. Promotion closed for
-the twenty-third consecutive fire: unblocked Todo **28** (senior 15, junior 13) against a cap of 10
-per tier. A full-board scan of all 101 non-terminal rows (sqlite, not the 250-capped read) found zero
-label/tier/assignee gaps, zero sensitive-on-junior, zero `Design: parent` land-mines and zero
-near-duplicate titles — hygiene holds with `sweep` dark 38 h.
+**Board and protocol.** Job A empty for the seventh consecutive fire (all four In Review rows are
+`qa`-owned, oldest LOOP-378 at 38 h); `needs-pm` and `_team` empty; no `## Deferred findings` pending;
+§9c — no blocker in {401, 468, 472, 464, 463} is terminal, so none of the six parked rows can unpark.
+Promotion closed for the twenty-fourth consecutive fire: unblocked Todo **28** (senior 15, junior 13)
+against a cap of 10 per tier. One filing, one grooming: LOOP-459 — the operator's `--dry-run` bug, and
+the only Backlog row carrying no acceptance criteria — now has five, plus the repro hazard that it
+consumes the live scheduler's own gate file.
 
 ## Personas
 
@@ -619,7 +618,10 @@ near-duplicate titles — hygiene holds with `sweep` dark 38 h.
      of the old form is enumerated and moved.** `buildCommit` reached the wire and then one of three
      consumers (**LOOP-364**); the board's 250-row cap is disclosed correctly beside per-state counts
      computed from the truncated array (**LOOP-370**, caught by the columns summing to exactly the
-     cap). The cheap audit is a grep for the OLD form in the fire that introduces the new one.
+     cap). Third instance: LOOP-219's discarded-spend basis and LOOP-239's priced-row denominator
+     each reached `--flow`/`--cost` and not `renderHuman`, so ONE command published two values for
+     one named quantity (**LOOP-514**). The cheap audit is a grep for the OLD form in the fire that
+     introduces the new one — here, `meteredFires` beside every `costMeteredFires`.
   31. **A gate belongs at the moment the doc states the rule for, not at the moment the breach
      surfaces.** A late check is not a weaker version of the right one: a changelog rule written for
      PR-land time but enforced at release-dispatch time turns a one-line contributor action into an
@@ -673,7 +675,9 @@ near-duplicate titles — hygiene holds with `sweep` dark 38 h.
      hand-off** — the naming feels like routing and carries none. Its sibling: a multi-round PR's
      early measurements describe a tree that no longer exists, so re-run a hand-off's numbers
      rather than quoting them (LOOP-392's body said 12 fail; the landed tree measures 2 —
-     LOOP-488).
+     LOOP-488). **And the named successor can be GONE:** LOOP-239's `Canceled` handed its remainder
+     to LOOP-292, destroyed in the 2026-08-04 wipe — the comment still reads as routing while
+     nothing carries the work (LOOP-514). Resolve the successor before reading a Cancel as closed.
   35. **A fact belongs in the section whose WRITE RATE matches its DECAY RATE — and a number
      published without its coverage is not yet a fact.** The 2026-08-06 top-priority block put a
      fire-success percentage, six error-class counts, per-agent report ratios and per-ticket program
