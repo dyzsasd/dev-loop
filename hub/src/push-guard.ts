@@ -262,20 +262,62 @@ function checkPushApprovals(
       if (!r.ticket_id || !r.action_key.startsWith("push:")) continue;
       byTicket.set(r.ticket_id, (byTicket.get(r.ticket_id) ?? 0) + 1);
     }
-    if (!byTicket.size) return out;
+    // The project each referenced ticket belongs to — `null` when this record has no row for it at
+    // all. `tickets.project_id` is NOT NULL, so the two answers never blur (R8, PR #283 review).
+    const ticketRow = conn.prepare("SELECT project_id FROM tickets WHERE id=?");
+    const owner = new Map<string, string | null>();
+    const projectOf = (id: string): string | null => {
+      if (!owner.has(id)) owner.set(id, ((ticketRow.get(id) as { project_id?: string } | undefined)?.project_id) ?? null);
+      return owner.get(id)!;
+    };
     const now = new Date().toISOString();
     for (const c of commits) {
       const ids = [...new Set(c.msg.match(TICKET_RE) ?? [])] as string[];
+      // No ticket ref at all: this gate keys on `ticket_id` and never had a claim on such a commit —
+      // the same silence the unreadable-record branch above keeps.
+      if (!ids.length) continue;
       const gated = ids.find((id) => byTicket.has(id));
-      if (!gated) continue;
       const key = pushApprovalKey(branch, c.sha);
+      const unverifiable = (ticketId: string, why: string): void => {
+        out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId, state: APPROVALS_UNVERIFIABLE, reason: why });
+      };
+      if (!gated) {
+        // R8 (PR #283 review) — "this ticket has no push: row" is an ANSWER only from a record that
+        // knows the ticket. `DEVLOOP_HUB_DB` (or a programmatic dbPath) can select another
+        // workspace's initialised hub: it passes the R5 probe, `listApprovals` returns rows that are
+        // not about this work, and the real record's ungranted request is never read — `--strict`
+        // exits 0 on precisely the push the gate exists to refuse. A record holding no row for ANY
+        // ticket this commit names cannot speak for it, so the verdict is unverifiable, not clean.
+        //
+        // Ticket presence is a PROXY for "is this the workspace's own record": hub.db carries no
+        // workspace identity to compare against (dev-loop.json's workspaceId has no counterpart in
+        // the schema), so the exact check does not exist yet — LOOP-496. The proxy is exact for the
+        // case that motivated it and errs toward refusing, which is this module's direction.
+        if (ids.some((id) => projectOf(id) !== null)) continue;
+        unverifiable(ids[0], `the approvals record at ${dbFile} holds no ticket ${ids.join(", ")} — it is not this work's record, so whether this work awaits approval cannot be read from it`);
+        continue;
+      }
+      // R7 (PR #283 review) — the grant lookup is SCOPED to the project of the ticket under the gate.
+      // Unscoped, `consultApproval` does its documented key-only match across every row, so in a
+      // workspace whose projects share history (an upstream and its fork) a `push:<branch>:<sha>`
+      // granted in project A authorises the identical branch+sha in project B. The scope comes from
+      // the gated TICKET rather than from the repo directory because the ticket is what carries the
+      // request, and a repo may be referenced by several projects. A workspace-scoped grant
+      // (project_id NULL) still authorises — that narrowing is consultApproval's, not re-stated here.
+      // This binds the LOOKUP, not the key: `push:<branch>:<sha>` is design §4 / AC4 and is unchanged
+      // (the repo-in-the-key question Codex also raised is a spec call — LOOP-497).
+      const projectId = projectOf(gated);
+      if (projectId === null) {
+        unverifiable(gated, `${gated} carries a push: approval row in ${dbFile} but the record holds no ticket row for it, so the scope a grant would have to match cannot be resolved`);
+        continue;
+      }
       // The attempt IS ledgered (approvals §14 decision 4: the audit line must not depend on each
       // consumer remembering to ask). A ledger write can still fail — a busy db, a read-only handle —
       // and a safety gate that CRASHES is a safety gate that got skipped, so the verdict is re-taken
       // without the audit line rather than lost. `record:false` grants nothing and skips no check.
       let v;
-      try { v = consultApproval(conn, key, now, { actor, ticketId: gated }); }
-      catch { v = consultApproval(conn, key, now, { actor, ticketId: gated, record: false }); }
+      try { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId }); }
+      catch { v = consultApproval(conn, key, now, { actor, ticketId: gated, projectId, record: false }); }
       if (v.authorises) continue;
       out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId: gated, state: v.state, reason: v.reason ?? "not authorised" });
     }

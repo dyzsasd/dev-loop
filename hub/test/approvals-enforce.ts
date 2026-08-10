@@ -461,6 +461,91 @@ try {
       "R5 a real hub record probes as usable — the gate still evaluates instead of blanket-refusing");
   }
 
+  // ── R7 (PR #283 review) — a grant authorises the project whose ticket is under the gate ─────────
+  //
+  // `consultApproval` matches on the key alone unless the caller names a scope, and the guard named
+  // none. So in a workspace whose projects share history — an upstream and its fork — where the same
+  // branch name carries the same sha, a `push:<branch>:<sha>` granted in project A authorised project
+  // B's identical push: B's ungranted request was overruled by a grant nobody made for it.
+  //
+  // The KEY is unchanged (design §4 / AC4). What the fix binds is the LOOKUP, and the scope comes from
+  // the gated TICKET rather than the repo directory — the ticket is what carries the request, and one
+  // repo may be referenced by several projects.
+  {
+    conn.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('q','k2','n2','t')").run();
+    conn.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('AP-9','q','t-AP-9','Todo',0,'[]','[]','pm','t','t')").run();
+
+    git(work, ["checkout", "-q", "main"]);
+    git(work, ["checkout", "-qb", "dev-loop/AP-9"]);
+    git(work, ["push", "-qu", "origin", "dev-loop/AP-9"]);
+    writeFileSync(join(work, "i.txt"), "i\n");
+    git(work, ["add", "i.txt"]);
+    git(work, ["commit", "-qm", "feat: work owned by the other project (AP-9)"]);
+    const key9 = pushApprovalKey("dev-loop/AP-9", git(work, ["rev-parse", "HEAD"]));
+    const guard9 = () => pushGuard(work, "dev-loop/AP-9", dbPath, "main", { enforcePush: true, actor: "senior-dev" });
+
+    requestApproval(conn, { projectId: "q", actionKey: key9, requestedBy: "senior-dev", ticketId: "AP-9" });
+    ok(guard9().approvals[0]?.state === "requested",
+      "R7 fixture premise: AP-9 (project q) is under the gate with an ungranted request");
+
+    // The whole finding, in one arm: a grant made in the OTHER project, for this exact key.
+    grantApproval(conn, { projectId: "p", actionKey: key9, grantor: "operator", ticketId: "AP-9", expires: "24h" });
+    const crossProject = guard9();
+    ok(crossProject.approvals.length === 1 && crossProject.approvals[0]?.state === "requested",
+      "R7 a grant scoped to a DIFFERENT project does not authorise this push (pre-fix: it did)");
+    ok(crossProject.approvals[0]?.key === key9,
+      "R7 …and the refusal still names this commit's own key, unchanged by the scoping");
+
+    // Over-narrowing would be the opposite bug: consultApproval's documented rule is that a
+    // WORKSPACE-scoped grant covers every project, and passing a scope must not break that.
+    grantApproval(conn, { actionKey: key9, grantor: "operator", ticketId: "AP-9", expires: "24h" });
+    ok(guard9().approvals.length === 0,
+      "R7 a workspace-scoped grant (project_id NULL) still authorises — the scope narrows, it does not exclude");
+  }
+
+  // ── R8 (PR #283 review) — a record holding none of this work's tickets is not this work's record ─
+  //
+  // R5/R6 closed "the record is unreadable". This is the case where it reads perfectly and is simply
+  // SOMEONE ELSE'S: `DEVLOOP_HUB_DB` (which outranks an explicit root — LOOP-418) or a programmatic
+  // dbPath can select another initialised hub. It passes the R5 probe, `listApprovals` returns rows
+  // about other work, no `push:` row names this ticket — and the guard read that as "nothing here is
+  // gated" and exited 0, with the real workspace's ungranted request never read.
+  //
+  // Ticket presence is a proxy for record identity (hub.db carries no workspaceId — LOOP-496); it is
+  // exact for this case and errs toward refusing.
+  {
+    conn.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('AP-8','p','t-AP-8','Todo',0,'[]','[]','pm','t','t')").run();
+    git(work, ["checkout", "-q", "main"]);
+    git(work, ["checkout", "-qb", "dev-loop/AP-8"]);
+    git(work, ["push", "-qu", "origin", "dev-loop/AP-8"]);
+    writeFileSync(join(work, "h.txt"), "h\n");
+    git(work, ["add", "h.txt"]);
+    git(work, ["commit", "-qm", "feat: ordinary work (AP-8)"]);
+
+    // A REAL, fully initialised hub that belongs to another workspace: its own project, its own
+    // tickets, an approvals table — everything except any knowledge of AP-8.
+    const foreign = join(ROOT, "foreign-hub.db");
+    const fconn = openDb(foreign);
+    fconn.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('z','other','other','t')").run();
+    fconn.prepare("INSERT INTO tickets(id,project_id,title,state,priority,labels,related_to,created_by,created_at,updated_at) VALUES('ZZ-1','z','t-ZZ-1','Todo',0,'[]','[]','pm','t','t')").run();
+    fconn.close();
+    ok(approvalsRecordUnusable(foreign) === null,
+      "R8 fixture premise: the foreign record is a real initialised hub — R5's probe accepts it, so only identity can catch it");
+
+    const wrongDb = pushGuard(work, "dev-loop/AP-8", foreign, "main", { enforcePush: true, actor: "senior-dev" });
+    ok(wrongDb.approvals.length === 1 && wrongDb.approvals[0]?.state === APPROVALS_UNVERIFIABLE,
+      "R8 enforcement ON against another workspace's record → REFUSED as unverifiable (pre-fix: exited clean)");
+    ok(wrongDb.approvals[0]?.ticketId === "AP-8" && (wrongDb.approvals[0]?.reason ?? "").includes(foreign),
+      "R8 the refusal names the work it could not verify and the record it read it from");
+
+    // The control that keeps this from being a blanket refusal: the workspace's OWN record, which
+    // knows AP-8 and carries no push: row for it, stays silent — the gate is still request-driven.
+    ok(pushGuard(work, "dev-loop/AP-8", dbPath, "main", { enforcePush: true, actor: "senior-dev" }).approvals.length === 0,
+      "R8 the real record, ticket known and no push: row → still silent (request-driven, not blanket)");
+    ok(pushGuard(work, "dev-loop/AP-8", foreign, "main", { enforcePush: false }).approvals.length === 0,
+      "R8 enforcement OFF over the same foreign record → silent (AC2)");
+  }
+
 } catch (e) {
   console.log("❌ harness error: " + (e as Error).message);
   fails++;
