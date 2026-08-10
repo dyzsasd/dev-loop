@@ -369,6 +369,52 @@ lever is LOOP-484, not the per-pass discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-first fire) — the outward goal front had never been swept, and
+  the artifact it publishes is the one nothing runs.**
+  The **strategy-gaps** lens came up at code sha `c66ac22` and was pointed deliberately at the
+  *outward* half of `Goals` — the "adoptable surface" and "certified and documented" clauses. That
+  half is where a claim can decay unnoticed, because the inward loop never exercises it: this repo's
+  own CI proves the gauntlet works *on this repo*, which is not the claim.
+  **Three checkable claims; two held.** "A reusable CI workflow any repo adopts in three lines" is
+  true — `.github/workflows/quality-reusable.yml` is a real `workflow_call` with seven inputs, and
+  its header snippet is literally three lines (`uses:` / `with:` / `threshold:`). Its `@v1.10.0` pin
+  resolves on origin and the file is byte-identical between that tag and `origin/main`.
+  **The second of those was already known, and re-deriving it is this fire's process finding.** Fire
+  ~125 killed the same candidate before filing and recorded the byte-identical check in
+  `strategy-archive/2026-08.md`. My §8 dedupe queried the BOARD and the board answered correctly —
+  **LOOP-416** — but a ticket row carries what was *filed*, never the sub-claims a prior fire
+  *measured and killed*. Only the archive carries those. **Folded into STANDING RULE 19** (the sixth
+  use of the sharpening practice; no rule 42): before spending a probe on a named artifact, grep the
+  archive for that artifact's name. The board tells you what exists; the archive tells you which
+  probes are already spent.
+  **The claim that failed, filed as LOOP-527: nothing executes the workflow.** `uses:` references —
+  **0**; tests or fixtures reading it — **0**; the four textual references are `CHANGELOG.md`, the
+  gauntlet design doc, the archive, and its own header. What gates this repo is
+  `node src/quality.ts --coverage-dir .v8cov --threshold 90 --top 15` (`test.yml:58`), reusing the
+  test step's coverage on purpose. The published artifact instead shells
+  `npx -y @dyzsasd/dev-loop@<tool-version> quality --threshold N --test-cmd C --top 20 [--diff-base …]`
+  — different entry point, different flags, neither of its two modes, none of its seven inputs. The
+  argv is compatible **today** (all seven flags have live branches at `hub/src/quality.ts:101-115`),
+  so this is **latent, not live**, and exposure here is zero — no known outward adopter, the same
+  honest caveat LOOP-480 carries. What makes it a row is the failure shape, which the default
+  `tool-version: latest` sets: an adopter pins the *workflow* and not the *CLI*, so on the day a flag
+  drifts, **nothing in this repo goes red first** — the artifact guarding adopters is the one CI never
+  runs — and every adopter breaks at once at `quality.ts:115`'s `die("unknown option")`. The ticket
+  asks for a contract test that drives the real parser with every argv the workflow can emit, with a
+  counter-fixture and a mutation-check, not a second CI job.
+  **A second re-measurement, left alone on purpose.** `team.comms` is unset here, so W12 (guarded on
+  `comms?.webhookEnv`) cannot fire and the missing outward channel is named exactly once — a trailing
+  clause on `[W20]`, which itself needs a non-empty decision queue. That is why both Human-Blocked
+  rows reach the operator through `doctor` alone. It is **LOOP-377** verbatim, ACs and all, so rule
+  19's other arm applies: its spec already covers this, no amendment, no re-file. It sits `Todo` at
+  P3 in junior's slice, which is dark.
+  **This pass is deliberately one entry and no `Current state` subsection.** The doc is 95.4 KB
+  against a 48 KB budget (W37) and LOOP-484 is the lever; nothing shipped this fire, so there is no
+  progress to record there. Board: promotion closed for the **thirty-second** consecutive fire, both
+  tiers above the per-tier cap of 10; Backlog 72 → 73. LOOP-499's close was **not** retried — its
+  two-part exit condition (a rebuilt `dist` carrying `declaredParentOf`, and a daemon pid other than
+  23716) fails on both arms, and the operator's LOOP-525 ruling says the swap is in flight.
+
 - **2026-08-10 (pm, one-hundred-fortieth fire) — a re-swept lens found its finding already filed,
   and the yield was the acceptance criterion rather than the ticket.**
   The **ux-flows** lens came round again at code sha `c66ac22`. The measurement it produced —
