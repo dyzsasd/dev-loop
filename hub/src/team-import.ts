@@ -2,9 +2,11 @@
 // `dev-loop team import` — one-shot v1→v2 migration INTO an existing workspace (design impl §4.2).
 // Runtime never reads v1 config (the 1.0 clean break); this command is the ONLY bridge. It reads a legacy
 // projects.json, folds the selected projects into the current workspace's dev-loop.json (registry + virtual
-// projects), moves their state dirs under <ws>/.dev-loop/, splits lessons.md into the lessons library, and
+// projects), COPIES their state dirs under <ws>/.dev-loop/, splits lessons.md into the lessons library, and
 // (with --hub-db) copies each project's hub rows — re-keying AUTOINCREMENT events so ids never collide.
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, cpSync, realpathSync } from "node:fs";
+// The legacy tree is never modified and never deleted: the operator keeps running against it until the
+// printed per-class report satisfies them, and removing it is a separate, explicit step (LOOP-473).
+import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, basename, isAbsolute, relative } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsProjectDir, wsLessonsDir, wsHubDb, ensureStateDirs } from "./workspace.ts";
@@ -14,7 +16,7 @@ import { projectConfigCandidates, devloopDataDir } from "./paths.ts";
 function die(msg: string, code = 2): never { console.error(`dev-loop team import: ${msg}`); process.exit(code); }
 const log = (m: string) => console.log(m);
 
-interface Opts { from?: string; projects: string[]; renames: Record<string, string>; hubDb?: string; dryRun: boolean }
+interface Opts { from?: string; into?: string; projects: string[]; renames: Record<string, string>; hubDb?: string; dryRun: boolean }
 
 function parseArgs(argv: string[]): Opts {
   const o: Opts = { projects: [], renames: {}, dryRun: false };
@@ -23,6 +25,7 @@ function parseArgs(argv: string[]): Opts {
     const next = () => argv[++i] ?? die(`${a} requires a value`);
     if (a === "--help" || a === "-h") { usage(); process.exit(0); }
     else if (a === "--from") o.from = resolve(next());
+    else if (a === "--into") o.into = resolve(next());
     else if (a === "--project") o.projects.push(next());
     else if (a === "--rename") { const [k, v] = next().split("="); if (!k || !v) die("--rename expects old=new"); o.renames[k] = v; }
     else if (a === "--hub-db") o.hubDb = resolve(next());
@@ -35,14 +38,22 @@ function parseArgs(argv: string[]): Opts {
 function usage(): void {
   console.log(`dev-loop team import — fold a legacy projects.json into the current workspace (one-shot)
 
-Usage (run from inside the workspace created by \`dev-loop team init\`):
-  dev-loop team import [--from <projects.json>] [--project <key>]... [--rename old=new]... [--hub-db <old-hub.db>] [--dry-run]
+Usage (run from inside the workspace created by \`dev-loop team init\`, or point at one with --into):
+  dev-loop team import [--from <projects.json>] [--into <workspace-root>] [--project <key>]...
+                       [--rename old=new]... [--hub-db <old-hub.db>] [--dry-run]
 
   --from <path>       legacy config (default: ~/.dev-loop/projects.json + the usual candidates)
+  --into <root>       the destination workspace root (default: discovered upward from cwd). Seed one
+                      first with \`dev-loop team init --dir <root> --backend <backend>\`; a project
+                      keeps its own backend, so a linear project needs a linear workspace.
   --project <key>     import only this project (repeatable; default: all)
   --rename old=new    import project 'old' under the new key 'new'
   --hub-db <path>     also copy the project's hub rows from this old db (events are re-keyed)
-  --dry-run           print the full plan; change nothing`);
+  --dry-run           print the full plan; change nothing
+
+The migration COPIES: the legacy tree is never modified and never deleted, an existing destination
+file is never overwritten, and a re-run over an already-migrated project is a reported skip. Delete
+the legacy tree yourself once the printed report says everything you need arrived.`);
 }
 
 interface V1Project {
@@ -52,7 +63,7 @@ interface V1Project {
   landing?: unknown; autoMerge?: unknown; mergeChecks?: unknown; build?: unknown; deploy?: unknown; ops?: unknown;
 }
 
-function readV1(from: string | undefined): { path: string; cfg: { projects?: Record<string, V1Project> } } {
+function readV1(from: string | undefined): { path: string; cfg: { projects?: Record<string, V1Project>; defaultProject?: string } } {
   const candidates = from ? [from] : projectConfigCandidates(devloopDataDir());
   for (const p of candidates) {
     if (!existsSync(p)) continue;
@@ -160,15 +171,162 @@ function importCommsBlocks(
     }
 }
 
+// ─── LOOP-472: the state migration is a COPY, per file class ─────────────────
+// The legacy tree is live data the operator still runs against until they confirm this ran, so the
+// three properties below are the whole point of the verb and are asserted, not assumed:
+//   COPY       — the source is never renamed, written or deleted (removal is LOOP-473's job).
+//   RE-RUNNABLE— an existing destination file is never overwritten; a second run is a reported skip.
+//   LOUD       — a per-file failure is recorded and reported, and the verb exits non-zero. A
+//                half-copied tree stays recoverable precisely because a re-run tops it up.
+type FileClass = "lessons" | "reports" | "state-json" | "worktrees" | "other";
+
+interface ClassStat { copied: number; skipped: number; failed: number }
+type StateReport = Record<FileClass, ClassStat> & { failures: string[] };
+
+function newReport(): StateReport {
+  const z = (): ClassStat => ({ copied: 0, skipped: 0, failed: 0 });
+  return { lessons: z(), reports: z(), "state-json": z(), worktrees: z(), other: z(), failures: [] };
+}
+
+const STATE_JSON_RE = /^[a-z0-9][a-z0-9-]*-state\.json$/;
+
+// Which class a path INSIDE a project state dir belongs to. `rel` is always POSIX-joined by the
+// walker below, so the prefix test is stable across platforms.
+function classifyStatePath(rel: string): FileClass {
+  if (rel === "lessons.md") return "lessons";
+  const [head] = rel.split("/");
+  if (head === "reports") return "reports";
+  if (head === "wt") return "worktrees";
+  if (!rel.includes("/") && STATE_JSON_RE.test(rel)) return "state-json";
+  return "other";
+}
+
+// Copy ONE file, never overwriting. Returns what happened so the caller can class-count it, and — on
+// a failure — the ORIGINAL error text: "copy failed" tells the operator nothing, while EACCES vs
+// ENOSPC is the whole difference between the two things they would do next.
+function copyFileOnce(src: string, dst: string): { outcome: "copied" | "skipped" | "failed"; error?: string } {
+  if (existsSync(dst)) return { outcome: "skipped" }; // the common case, answered without an exception
+  try {
+    mkdirSync(join(dst, ".."), { recursive: true });
+    // `errorOnExist` + `force:false` makes the never-overwrite promise ATOMIC rather than a check the
+    // filesystem can invalidate between the two calls (PR #286 review round 2). The destination
+    // workspace is LIVE — an agent can write the very file being copied in that window — and plain
+    // `cpSync` overwrites, so the check above was advisory and the guarantee was not kept under
+    // concurrency. EEXIST from the race is the same answer the check gives: skipped.
+    cpSync(src, dst, { force: false, errorOnExist: true }); // content + mode, source untouched
+    return { outcome: "copied" };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ERR_FS_CP_EEXIST" || (e as NodeJS.ErrnoException).code === "EEXIST") return { outcome: "skipped" };
+    return { outcome: "failed", error: (e as Error).message };
+  }
+}
+
+// Walk `srcDir` and copy every file into `dstDir`, classifying as it goes.
+//
+// TWO reasons a class leaves the walk, and they must not share a counter (PR #286 review, P2).
+// `notCarried` (worktrees) is left behind on purpose, so it is COUNTED — the report names the size of
+// the gap rather than letting the operator find it after deleting the source. `handledElsewhere`
+// (lessons.md, re-homed into the library by its own copy) has ALREADY been counted by that copy, so
+// counting it again reported `1 copied, 1 skipped` for a clean first import and explained the skip as
+// "the destination already existed" — untrue, and untrue in the per-class report the operator is told
+// to read before deleting live data.
+function copyClassified(srcDir: string, dstDir: string, rep: StateReport, notCarried: ReadonlySet<FileClass>, handledElsewhere: ReadonlySet<FileClass>, relBase = ""): void {
+  let entries: string[];
+  try { entries = readdirSync(srcDir); }
+  catch (e) { rep.failures.push(`${srcDir}: ${(e as Error).message}`); rep.other.failed++; return; }
+  for (const name of entries) {
+    const rel = relBase ? `${relBase}/${name}` : name;
+    const src = join(srcDir, name);
+    let isDir: boolean;
+    try { isDir = statSync(src).isDirectory(); }
+    catch (e) { rep.failures.push(`${src}: ${(e as Error).message}`); rep.other.failed++; continue; }
+    const cls = classifyStatePath(rel);
+    if (handledElsewhere.has(cls)) continue;   // already copied AND already counted by its own pass
+    if (notCarried.has(cls)) { if (!isDir) rep[cls].skipped++; else countTree(src, rep, cls); continue; }
+    if (isDir) { copyClassified(src, join(dstDir, name), rep, notCarried, handledElsewhere, rel); continue; }
+    const { outcome, error } = copyFileOnce(src, join(dstDir, name));
+    rep[cls][outcome]++;
+    if (outcome === "failed") rep.failures.push(`${cls}: ${src} → ${join(dstDir, name)}: ${error}`);
+  }
+}
+
+// Count (never copy) the files under a deliberately-skipped subtree, so the report can name the size
+// of what it left behind.
+function countTree(dir: string, rep: StateReport, cls: FileClass): void {
+  let entries: string[];
+  try { entries = readdirSync(dir); } catch { return; }
+  for (const name of entries) {
+    const p = join(dir, name);
+    let isDir: boolean;
+    try { isDir = statSync(p).isDirectory(); } catch { continue; }
+    if (isDir) countTree(p, rep, cls); else rep[cls].skipped++;
+  }
+}
+
+// The legacy layout writes a project's state under <dataDir>/<key>/, but the PRE-per-project form
+// left <agent>-state.json at the dataDir ROOT. Those root files belong to the registry's
+// `defaultProject` and to no other, so they are carried only for that project — and reported either
+// way, because LOOP-473 deletes this tree and a silent drop is unrecoverable.
+function rootStateFiles(dataDir: string): string[] {
+  try { return readdirSync(dataDir).filter((n) => STATE_JSON_RE.test(n) && !statSync(join(dataDir, n)).isDirectory()); }
+  catch { return []; }
+}
+
+// PROVENANCE — what makes a second run a RE-RUN rather than a collision (PR #286 review, P1).
+//
+// `file.projects[key]` already existing has two utterly different causes: this verb ran before (top
+// up the missing files), or the destination workspace has an UNRELATED project under the same key
+// (its state dir and lessons must not receive a stranger's files). The config alone cannot tell them
+// apart, so the first import records where the project came from and the next run reads it back.
+//
+// Written BEFORE the copies, not after: AC4's recoverable state depends on a run that dies partway
+// still being recognisable as its own on the next attempt. A marker written at the end would turn
+// every interrupted migration into a hard stop.
+const IMPORT_MARKER = ".v1-import.json";
+interface ImportProvenance { from: string; srcKey: string }
+
+function readProvenance(dir: string): ImportProvenance | null {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, IMPORT_MARKER), "utf8")) as Partial<ImportProvenance>;
+    return typeof raw.from === "string" && typeof raw.srcKey === "string" ? { from: raw.from, srcKey: raw.srcKey } : null;
+  } catch { return null; }
+}
+
+function writeProvenance(dir: string, prov: ImportProvenance): void {
+  if (existsSync(join(dir, IMPORT_MARKER))) return;   // never rewrite: the FIRST import owns the answer
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, IMPORT_MARKER), JSON.stringify(prov, null, 2) + "\n");
+}
+
+function renderReport(key: string, rep: StateReport): string[] {
+  const lines: string[] = [];
+  for (const cls of ["lessons", "reports", "state-json", "other", "worktrees"] as const) {
+    const s = rep[cls];
+    if (!s.copied && !s.skipped && !s.failed) continue;
+    const parts = [`${s.copied} copied`];
+    if (s.skipped) parts.push(`${s.skipped} skipped`);
+    if (s.failed) parts.push(`${s.failed} FAILED`);
+    const why = cls === "worktrees" ? " (not carried — a worktree is reconstructible with `git worktree add`; the branch and its commits live in the repo, not here)"
+      : s.skipped ? " (skipped = the destination file already existed and was left as-is)" : "";
+    lines.push(`REPORT ${key} ${cls.padEnd(10)} ${parts.join(", ")}${why}`);
+  }
+  return lines;
+}
+
 export function teamImport(argv = process.argv.slice(2)): number {
   const o = parseArgs(argv);
-  const ws = resolveWorkspace(); // throws WsNotFound if there is no workspace here — the operator must `team init` first
+  // --into names the destination workspace explicitly (LOOP-472: the migrated project gets its OWN
+  // workspace, so the operator is standing somewhere else when they run this); without it, the
+  // workspace is discovered upward from cwd as before. Either way there must already BE one —
+  // seeding is `dev-loop team init`, which this verb deliberately does not duplicate.
+  const ws = resolveWorkspace(o.into); // throws WsNotFound if there is no workspace there — `team init` first
   const { path: v1Path, cfg: v1 } = readV1(o.from);
   const allKeys = Object.keys(v1.projects ?? {});
   const selected = o.projects.length ? o.projects : allKeys;
   for (const k of selected) if (!(k in (v1.projects ?? {}))) die(`--project '${k}' not found in ${v1Path} (has: ${allKeys.join(", ")})`);
 
   const teamBackend = ws.file.team.backend;
+  const defaultProject = v1.defaultProject;
   const plan: string[] = [];
   const file: TeamFile = JSON.parse(JSON.stringify(ws.file)); // mutate a copy; write once at the end
   const refFor = new Map<string, string>();
@@ -183,7 +341,25 @@ export function teamImport(argv = process.argv.slice(2)): number {
     const v1Team = (v1p as { linearTeam?: string }).linearTeam;
     if (teamBackend === "linear" && v1Team && ws.file.team.linearTeam && v1Team !== ws.file.team.linearTeam)
       die(`project '${srcKey}' is linearTeam:'${v1Team}' but this workspace is team '${ws.file.team.linearTeam}' — import it into a workspace for that Linear team instead.`);
-    if (file.projects[key]) die(`project '${key}' already exists in the workspace dev-loop.json; use --rename`);
+    // AC2 — a re-run is a reported SKIP, not a failure and not a second copy. The key already being
+    // present is the normal shape of a second run over an already-migrated project; it is also how a
+    // genuine key collision looks, so the line names `--rename` for that case. Either way the config
+    // is left exactly as it is and the state copy below still runs — it never overwrites, so it tops
+    // up a run that died partway (AC4's recoverable state) instead of starting over.
+    if (file.projects[key]) {
+      // Provenance decides, and it decides BEFORE anything is written: a stranger under the same key
+      // would otherwise receive this project's state files and lessons through the copy below, which
+      // never overwrites but does happily ADD (PR #286 review, P1).
+      const prov = readProvenance(wsProjectDir(ws, key));
+      if (!prov) {
+        die(`project '${key}' already exists in ${ws.filePath} and was NOT created by this verb — it is a different project that happens to share the key, and importing '${srcKey}' into it would merge this project's state files and lessons into that one. Nothing was changed. Re-run with --rename ${srcKey}=<new-key>.`);
+      }
+      const sameSource = prov.from === v1Path || (canon(prov.from) !== null && canon(prov.from) === canon(v1Path));
+      if (prov.srcKey !== srcKey || !sameSource) {
+        die(`project '${key}' in ${ws.filePath} was imported from '${prov.srcKey}' in ${prov.from}, not from '${srcKey}' in ${v1Path} — two different legacy projects cannot share one destination key. Nothing was changed. Re-run with --rename ${srcKey}=<new-key>.`);
+      }
+      plan.push(`SKIP   project '${key}' was already imported from '${prov.srcKey}' (${prov.from}) — config left as-is; the state copy below tops up whatever is still missing`);
+    } else {
 
     const refs = importRepoRefs(v1p as never, srcKey, key, ws, file, refFor, plan);
 
@@ -200,12 +376,19 @@ export function teamImport(argv = process.argv.slice(2)): number {
 
     file.projects[key] = proj;
     plan.push(`CONFIG project '${srcKey}'${key !== srcKey ? ` → '${key}'` : ""}: ${refs.length} repo ref(s) [${refs.map((r) => r.ref).join(", ")}]`);
+    }
 
-    // State dir move: ~/.dev-loop/<srcKey>/ → <ws>/.dev-loop/<key>/ ; lessons.md → lessons/<key>.md
+    // State dir copy: <dataDir>/<srcKey>/ → <ws>/.dev-loop/<key>/ ; lessons.md → lessons/<key>.md.
+    // COPY, not move (AC3) — the operator keeps running against the legacy tree until they confirm
+    // this report, and LOOP-473 is what removes it.
     const oldStateDir = join(devloopDataDir(), srcKey);
-    if (existsSync(oldStateDir)) plan.push(`STATE  mv ${oldStateDir} → ${wsProjectDir(ws, key)}`);
+    if (existsSync(oldStateDir)) plan.push(`STATE  copy ${oldStateDir} → ${wsProjectDir(ws, key)} (source left in place)`);
     const oldLessons = join(oldStateDir, "lessons.md");
     if (existsSync(oldLessons)) plan.push(`LESSON ${oldLessons} → ${join(wsLessonsDir(ws), `${key}.md`)}`);
+    const rootState = srcKey === defaultProject ? rootStateFiles(devloopDataDir()) : [];
+    if (rootState.length) plan.push(`STATE  copy ${rootState.length} root-level ${rootState.join(", ")} → ${wsProjectDir(ws, key)} ('${srcKey}' is the legacy registry's defaultProject, so the pre-per-project state files are its own)`);
+    const strandedRoot = srcKey !== defaultProject ? rootStateFiles(devloopDataDir()) : [];
+    if (strandedRoot.length) plan.push(`WARN  ${strandedRoot.length} root-level state file(s) (${strandedRoot.join(", ")}) belong to defaultProject '${defaultProject ?? "<unset>"}', not '${srcKey}' — NOT carried by this run; import that project too before deleting the legacy tree`);
     if (o.hubDb) plan.push(`HUBDB  copy project '${srcKey}' rows from ${o.hubDb} → ${wsHubDb(ws)} (events re-keyed)`);
   }
 
@@ -218,21 +401,73 @@ export function teamImport(argv = process.argv.slice(2)): number {
 
   if (o.dryRun) { log("\n(--dry-run: nothing changed)"); return 0; }
 
-  // Execute. Config first (the source of truth), then best-effort filesystem moves.
-  writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
+  // Execute. PROVENANCE FIRST, then the config, then the classified copy (PR #286 review round 2).
+  //
+  // The order is the whole guarantee. The config is what makes the next run see the key as taken, and
+  // the marker is what tells it the key is ITS OWN — so a config written before a marker that then
+  // fails to land (an unwritable `.dev-loop`) leaves a project the next run must reject as a
+  // stranger's, with no route back except editing dev-loop.json by hand. That is the recovery-by-rerun
+  // path AC4 promises, broken by the very fix that protects the stranger.
+  //
+  // Stamping first cannot have the mirror-image failure: a marker with no config entry is simply an
+  // un-imported project whose next run creates the entry and finds the marker already there.
   ensureStateDirs(ws);
   for (const srcKey of selected) {
     const key = o.renames[srcKey] ?? srcKey;
+    try { writeProvenance(wsProjectDir(ws, key), { from: v1Path, srcKey }); }
+    catch (e) {
+      die(`cannot stamp the import marker at ${join(wsProjectDir(ws, key), IMPORT_MARKER)}: ${(e as Error).message}\nNothing was changed — ${ws.filePath} is untouched, so this run is a clean retry once the destination is writable.`);
+    }
+  }
+  writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
+  const reports: string[] = [];
+  let anyFailed = false;
+  for (const srcKey of selected) {
+    const key = o.renames[srcKey] ?? srcKey;
     const oldStateDir = join(devloopDataDir(), srcKey);
+    const rep = newReport();
+
+    // lessons.md is re-homed into the library rather than copied in place, so it is handled here and
+    // excluded from the tree walk below (classifyStatePath maps it to "lessons" either way).
     const oldLessons = join(oldStateDir, "lessons.md");
-    if (existsSync(oldLessons)) { mkdirSync(wsLessonsDir(ws), { recursive: true }); try { cpSync(oldLessons, join(wsLessonsDir(ws), `${key}.md`)); } catch { /* best-effort */ } }
-    if (existsSync(oldStateDir) && !existsSync(wsProjectDir(ws, key))) { try { renameSync(oldStateDir, wsProjectDir(ws, key)); } catch { try { cpSync(oldStateDir, wsProjectDir(ws, key), { recursive: true }); } catch { /* leave in place */ } } }
+    if (existsSync(oldLessons)) {
+      mkdirSync(wsLessonsDir(ws), { recursive: true });
+      const { outcome, error } = copyFileOnce(oldLessons, join(wsLessonsDir(ws), `${key}.md`));
+      rep.lessons[outcome]++;
+      if (outcome === "failed") rep.failures.push(`lessons: ${oldLessons} → ${join(wsLessonsDir(ws), `${key}.md`)}: ${error}`);
+    }
+    if (existsSync(oldStateDir)) copyClassified(oldStateDir, wsProjectDir(ws, key), rep, new Set<FileClass>(["worktrees"]), new Set<FileClass>(["lessons"]));
+    // The pre-per-project root state files, for the defaultProject only (see rootStateFiles).
+    if (srcKey === defaultProject) {
+      for (const n of rootStateFiles(devloopDataDir())) {
+        const { outcome, error } = copyFileOnce(join(devloopDataDir(), n), join(wsProjectDir(ws, key), n));
+        rep["state-json"][outcome]++;
+        if (outcome === "failed") rep.failures.push(`state-json: ${join(devloopDataDir(), n)} → ${join(wsProjectDir(ws, key), n)}: ${error}`);
+      }
+    }
     if (o.hubDb) copyHubRows(o.hubDb, wsHubDb(ws), srcKey, key);
+
+    reports.push(...renderReport(key, rep));
+    if (rep.failures.length) {
+      anyFailed = true;
+      reports.push(...rep.failures.map((f) => `FAIL   ${key}: ${f}`));
+    }
   }
   const movedNeeded = plan.some((l) => l.startsWith("MOVE"));
   log(`\nwrote ${ws.filePath}`);
+  // AC5 — what actually arrived, per file class, so the operator can confirm before LOOP-473.
+  for (const line of reports) log("  " + line);
+  log("  REPORT the legacy tree was NOT modified: this verb only ever copies, and never overwrites an existing destination file.");
+  // AC4 — a partial copy is reported and exits non-zero. It stays recoverable because a re-run tops
+  // up exactly the files that are missing.
+  if (anyFailed) {
+    log("\nMIGRATION INCOMPLETE — the FAIL lines above did not copy. The source is untouched and nothing was overwritten;");
+    log("fix the cause (permissions, disk space) and re-run this command: it copies only what is still missing.");
+    return 1;
+  }
   if (movedNeeded) { log("Some repos are outside the workspace — run the printed `mv` commands, then `dev-loop doctor`."); return 1; }
   log("Run `dev-loop doctor` to verify, then `/dev-loop:sync-project` to reconcile backend ids.");
+  log(`Once this report shows everything you need, remove the legacy tree yourself (${devloopDataDir()}) — this verb never deletes it.`);
   return 0;
 }
 
@@ -260,8 +495,18 @@ function copyHubRows(oldDb: string, newDb: string, srcKey: string, newKey: strin
       try { db.exec(`INSERT OR IGNORE INTO ${t} SELECT * FROM old.${t} WHERE project_id='${srcId.replace(/'/g, "''")}'`); } catch (e) { console.error(`  [hubdb] ${t}: ${(e as Error).message}`); }
     }
     try {
+      // Events re-key: their `id` is an autoincrement the destination assigns, so `INSERT OR IGNORE`
+      // — which the TEXT-id tables above rely on — cannot deduplicate them. A plain INSERT therefore
+      // duplicated the WHOLE event history on every re-run, including the re-run that recovers a
+      // partial copy (PR #286 review, P1).
+      //
+      // Deduplicated on CONTENT rather than by skipping the pass, so the two properties this verb
+      // promises both hold: a second run adds nothing, and a run interrupted halfway is repaired by
+      // the next one. `IS` (not `=`) because SQLite's `=` is unknown for NULL, and a nullable column
+      // that is null on both sides must read as the same row, not as a new one.
       const cols = (db.prepare("PRAGMA table_info(events)").all() as { name: string }[]).map((r) => r.name).filter((c) => c !== "id");
-      db.exec(`INSERT INTO events(${cols.join(",")}) SELECT ${cols.join(",")} FROM old.events WHERE project_id='${srcId.replace(/'/g, "''")}' ORDER BY id`);
+      const same = cols.map((c) => `n."${c}" IS o."${c}"`).join(" AND ");
+      db.exec(`INSERT INTO events(${cols.map((c) => `"${c}"`).join(",")}) SELECT ${cols.map((c) => `o."${c}"`).join(",")} FROM old.events o WHERE o.project_id='${srcId.replace(/'/g, "''")}' AND NOT EXISTS (SELECT 1 FROM events n WHERE ${same}) ORDER BY o.id`);
     } catch (e) { console.error(`  [hubdb] events: ${(e as Error).message}`); }
     db.exec("DETACH DATABASE old");
     console.error(`  [hubdb] copied rows for '${srcKey}' → '${newKey}'`);
