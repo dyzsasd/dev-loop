@@ -109,9 +109,14 @@ try {
   // because two of them were resolving to nothing — the exemption must cover them too.
   const linkedParentId = insertTicket(db, "p", "senior-dev",
     newFields({ description: "Design doc: hubDoc:design/l360-linked (the module doc this parent owns)\n", assignee: "senior-dev", labels: ["dev-loop", "senior-dev"] }), {});
+  // LOOP-379 — the child's link to its parent is now the `related_to` FIELD, not a sentence naming
+  // it. This fixture used to write `relatedTo <id>` in prose while the column stayed empty, and the
+  // parent resolved anyway because the derivation read bodies; it no longer does. §21a requires the
+  // child to carry the link at filing, so the fixture now carries what the process writes.
   insertTicket(db, "p", "senior-dev", newFields({
     state: "Backlog", assignee: "junior-dev", labels: ["dev-loop", "junior-dev"],
     description: `Design: hubDoc:design/l360-linked\n\nrelatedTo ${linkedParentId}\n`,
+    relatedTo: [linkedParentId],
   }), {});
   const linkedMove = updateTicketRow(db, "p", "senior-dev", linkedParentId, "In Progress",
     toInReview({ description: "Design doc: hubDoc:design/l360-linked (the module doc this parent owns)\n", labels: JSON.stringify(["dev-loop", "senior-dev"]) }));
