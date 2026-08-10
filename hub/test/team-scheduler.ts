@@ -356,6 +356,23 @@ try {
       "LOOP-83: operator-visible output survives a truncated buffer — the raw partial is echoed, never nothing (not only a JSON blob)");
   }
 
+  // ── LOOP-459: --dry-run prints promptly and writes NO scheduler-gate.json ──
+  {
+    const gateDir = join(svcWs, ".dev-loop", "team");
+    rmSync(gateDir, { recursive: true, force: true });
+    const dryOnce = runAgents(["--agents", "pm", "--once", "--dry-run", "--change-gate"], svcWs);
+    ok(dryOnce.code === 0, `LOOP-459(1): --once --dry-run --change-gate exits 0 (${dryOnce.code})`);
+    ok(dryOnce.out.includes("[dry-run]"), "LOOP-459(1): dry-run output printed");
+    ok(!existsSync(join(gateDir, "scheduler-gate.json")), "LOOP-459(1): no scheduler-gate.json written");
+  }
+  {
+    rmSync(join(svcWs, ".dev-loop", "team"), { recursive: true, force: true });
+    const dryNoOnce = runAgents(["--agents", "pm", "--dry-run", "--change-gate"], svcWs);
+    ok(dryNoOnce.code === 0, `LOOP-459(2): --dry-run (no --once) exits 0 (${dryNoOnce.code})`);
+    ok(dryNoOnce.out.includes("[dry-run]"), "LOOP-459(2): non-once dry-run prints immediately");
+    ok(!existsSync(join(svcWs, ".dev-loop", "team", "scheduler-gate.json")), "LOOP-459(2): no scheduler-gate.json written");
+  }
+
   console.log(fails === 0 ? "\nTEAM_SCHEDULER_OK" : `\n${fails} CHECK(S) FAILED`);
 } finally {
   // The service run auto-ensures the workspace hub daemon — always stop it so no process outlives the test.

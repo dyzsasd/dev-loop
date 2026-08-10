@@ -1708,7 +1708,9 @@ async function main(): Promise<void> {
           // Record the POST-fire change-key (+ the fire time, the R1a TTL anchor) so the next tick compares
           // against the state this fire left behind (an agent's own writes bump the key once, then it
           // settles → skips until the NEXT external change or, for pm/qa, the TTL).
-          if (gateActive && GATED_AGENTS.has(slot.agent)) {
+          // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
+          // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
+          if (gateActive && GATED_AGENTS.has(slot.agent) && !opts.dryRun) {
             const key = changeKey(opts, cfg, project);
             if (key !== null) { gateRecord(gateState, slot.agent, key); saveGateState(opts, project, gateState); }
           }
@@ -1803,16 +1805,15 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence, agentsWithCadence(ws.file.team.agents as Record<string, { cadence?: string }> | undefined));
   applyConfigTimeouts(opts, (agent) => ws.file.team.agents?.[agent]);
   preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
-  // LOOP-312 — the shared checkout is a mutable global that no fire owns. Copy its uncommitted
-  // TRACKED work before the first fire launches, and record which paths were already dirty, so
-  // (a) another fire's `git checkout` cannot silently destroy it, and (b) the ship guard (LOOP-320)
-  // can tell a fire's own edits from ones that were already sitting in the tree.
-  preflightTreeSnapshot(ws.root, wsStateRoot(ws), (m) => console.log(m));
+  // LOOP-459: a dry-run makes no edits, so there is no uncommitted work to snapshot.
+  if (!opts.dryRun) preflightTreeSnapshot(ws.root, wsStateRoot(ws), (m) => console.log(m));
   // LOOP-253 — record WHICH BUILD is orchestrating this loop. Node caches every module at import
   // time and never reloads, so a reinstall mid-run leaves this process executing the code it loaded
   // at boot while `doctor` (a fresh process each invocation) reports the new one. Measured: four
   // landed fixes were live for doctor and dead in the orchestrator, with DOCTOR_OK printing.
-  {
+  // LOOP-459: a dry-run must not write scheduler-build.json either — the pid would be stale
+  // moments later and a subsequent real run would read a phantom build entry.
+  if (!opts.dryRun) {
     const rec = writeSchedulerBuild(teamDirOf(wsStateRoot(ws)));
     if (rec) console.log(`dev-loop run: build ${rec.version} (pid ${rec.pid}) from ${rec.modulePath}`);
   }
@@ -1921,7 +1922,9 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const cwd = cwdFor(project);
     if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
     await runAgent(opts, cfg, agent, project, cwd);
-    if (gateActive && GATED_AGENTS.has(agent)) {
+    // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
+    // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
+    if (gateActive && GATED_AGENTS.has(agent) && !opts.dryRun) {
       const key = changeKey(opts, cfg, project);
       if (key !== null) { gateRecord(gateState, gateKey(agent, project), key); saveGateState(opts, "team", gateState); }
     }
@@ -1936,6 +1939,22 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       if (budgetReason !== null) { console.log(`[${a}] launch refused: ${budgetReason}`); continue; } // refuse, loudly (AC3)
       await fireAgentOnce(a);
     }
+    process.exit(0);
+  }
+
+  // LOOP-459 AC3: --dry-run without --once must print the resolved agent set promptly (within 5s)
+  // instead of waiting for the persistent scheduler's cadence tick to reach each slot. The dry-run
+  // branch in runAgent (line :1080-:1092) already prints the resolved command. After the preview
+  // we exit — never start the persistent scheduler or acquire the run lock.
+  if (opts.dryRun && !opts.once) {
+    for (const a of opts.agents) {
+      await fireAgentOnce(a);
+    }
+    // LOOP-459 AC3: flush before exit so the parent process sees the dry-run output (LOOP-14: the same
+    // flush the --once path uses — console.log buffers on some platforms and process.exit truncates it).
+    await flushStdio();
+    // LOOP-459 AC2: the rotation cursor and scheduler-build.json are only written by the persistent
+    // scheduler (below), which the dry-run exit bypasses. No state a later real run reads is written.
     process.exit(0);
   }
 
