@@ -335,6 +335,28 @@ absorbed, which is the whole point of the price line. Per rule
 stated a positive price instead. At this rate the 49,152 B budget is still ~61 passes away — the
 lever is LOOP-484, not the per-pass discipline.
 
+**2026-08-10, 144th fire — the observable-and-safe program, and what the board actually holds.**
+The five `operator-design-review` controls now stand at **3 `Done`** (LOOP-382 pause/resume, LOOP-383
+typed approvals, LOOP-385 release resilience), **1 `In Progress`** (LOOP-384 waiting-on discriminator,
+committed and pushed as `f9fb354`), and **1 re-opened**: LOOP-386's banner merged as `b5cfca0` but was
+verify-failed and superseded by **LOOP-532** (senior, `Mode: direct-code`, P1), which carries the
+residual — the `streamLost` guard, a real daemon-harness test, and the duplicated remedy line. The
+label marks six rows now, one of them terminal; nothing in `hub/src` counts it, so the terminal row
+corrupts no surface — checked, not assumed.
+**Board census, measured directly rather than through a capped read:** 513 tickets — 356 `Done`, 74
+`Backlog`, 26 `Todo`, 48 `Canceled`, 5 `In Progress`, 3 `Duplicate`, 1 `Human-Blocked` (LOOP-473,
+parked on the operator since 18:58Z for the migration ruling). The web board renders `showing 250 of
+513` with true per-state pills, so LOOP-370's AC3+AC5 are working in production; `dev-loop tickets
+--json` caps at the same 250 and says so on stderr with the remedy.
+**Todo depth 22 — senior 12/10, junior 10/10.** Promotion opened for the first time in 35 fires and
+closed again inside one fire: LOOP-459 promoted, junior 9 → 10.
+
+**Pass price: +7,762 B (113,891 → 121,653).** Rolled nothing. Per rule 23's corollary a bounding pass
+must roll at least what it appends; every pass since 08-06 has stated a positive price instead, and
+this is the largest of them — the fire had a superseded increment, a canceled defect and a reopened
+promotion gate to record. The lever remains LOOP-484 (Backlog, behind the cap), not the per-pass
+discipline.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -368,6 +390,71 @@ lever is LOOP-484, not the per-pass discipline.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-forty-fourth fire) — a fix satisfied every acceptance criterion and
+  reintroduced the exact failure it was written to close; and the promotion gate opened for the first
+  time in thirty-five fires.**
+  **LOOP-386 is `Canceled`, superseded by LOOP-532**, verified against the merged tree `b5cfca0` (#290)
+  — merged, not published, and the verdict says which. The three ACs each have a satisfying mechanism
+  present: the banner element ships hidden in the page shell, `h.error` renders verbatim, and
+  `es.onmessage` clears the banner on reconnect. The defect is in none of them. It is in the
+  **interaction between two writers to one banner shipped in the same increment**: `es.onerror` sets
+  `streamLost` and raises the banner, while the 15 s health poll's `else{hideBanner();}` runs on every
+  ok:true response **with no `streamLost` guard**. Stream dies, daemon stays healthy ⇒ the warning is
+  raised and then silently erased within 15 s, leaving exactly the silent stale view the ticket exists
+  to close.
+  **It is not a flicker, and the pairing that makes it permanent is deliberate.** `EventSource` retries
+  a transport failure (`retry: 3000`, `daemon.ts:675`), so `onerror` would re-fire — but a **401 closes
+  the stream permanently**: one `onerror`, no retry, no second `onerror`. And 401-on-stream paired with
+  healthy-health is designed in: `enforceBearer` (`daemon.ts:555`) exempts exactly `/api/health` from
+  `DEVLOOP_UI_TOKEN` and nothing else. With a UI token configured and a stale browser token, the banner
+  is raised once and erased for good by the token-exempt probe.
+  **This mints STANDING RULE 42 — the first new rule since 41, after six consecutive folds.** *An
+  increment can satisfy every acceptance criterion and still reintroduce the failure the ticket exists
+  to close, when the ACs enumerate MECHANISMS rather than the INVARIANT.* LOOP-386's ACs named three
+  mechanisms and got all three; the invariant they served — *a stale view always carries a warning* —
+  was never written down, so nothing tested it. When a ticket's `## Why` states a failure, the AC set
+  must contain one criterion that asserts the failure cannot recur, not only that the parts are
+  present. The escalation ticket's AC1 is written that way on purpose.
+  **The test defect folds into STANDING RULE 33** (a proxy for the property is not the property) rather
+  than opening 43. AC1 required an integration test against the daemon harness with a daemon reporting
+  the LOOP-304/LOOP-367 condition; what shipped were four HTML-substring mirrors of the source
+  (`text.includes('ok===false')`, `includes('es.onerror')`). No test drives an unhealthy daemon. They
+  survive the poll never firing, `banner` being null, or the fetch 404ing, and they break on a
+  whitespace-only edit. Routed UP to senior as `Mode: direct-code` per §21a — junior-built, real AC
+  miss, not transient.
+  **LOOP-530 is `Canceled` as not-a-defect, and the tree that made it un-rulable stopped moving.** Last
+  fire I left it with QA rather than rule, because the evidence had been sampled from a tree under
+  active edit. LOOP-384's work landed on a pushed branch at 19:18:57Z (`f9fb354`), so all three trees
+  became addressable: `origin/main` has `type` and not `waiting_on`; `f9fb354` has **both**; the working
+  tree, now clean, has `type` and not `waiting_on`. **The quoted `CREATE TABLE` block — `waiting_on`
+  present, `type` absent — matches none of them**; the `waiting_on` lines are real and came from
+  LOOP-384, and the `type` line was dropped in transcription. The whole conclusion rested on that
+  dropped line. Two further falsifications: the title's `user_version=6` exists nowhere
+  (`SCHEMA_VERSION = 5`, `db.ts:299`), and the mechanism it calls a bug is the correct pattern — a fresh
+  DB gets the current shape from `SCHEMA`, which is *why* the fresh path may stamp the version and skip
+  `migrate()`. What I did **not** do is file a replacement: a stale fixture `.db` reaches that error
+  legitimately, but I have not reproduced it, and a ticket asserting an unverified mechanism is what
+  this one was.
+  **The bounce worked, and that is worth recording because the alternative destroys work.** Fire 143
+  found LOOP-384 In Review with 125 uncommitted lines in the shared checkout and zero delivery, and
+  bounced it to `Todo` with no verdict rather than cancelling. Sixteen minutes later junior-dev
+  re-claimed it, moved the work into its worktree, committed and pushed — 8 files, 127/42, matching what
+  was measured. A `Canceled` would have thrown away the only copy.
+  **Promotion re-opened after thirty-four closed fires.** Junior's unblocked Todo depth fell to **9/10**
+  when LOOP-384 moved to In Progress. §5 pick order over the junior-tier Backlog: no junior P1 Bug
+  exists, so rank 3 is the top non-empty rank and FIFO within it selects **LOOP-459** (2026-08-09T18:18Z,
+  ahead of 502/517/518/519). Promoted unchanged — it already carried a repro, a located mechanism with
+  file:line, and a fail-before/pass-after AC. Junior returned to 10/10 immediately; senior is 12/10 and
+  promoted nothing. Exactly one, to the cap, not past it.
+  **The proactive lens filed zero, and the zero is the finding.** ux-flows, swept against the RUNNING
+  board rather than the source. Both candidates were already shipped: the board renders **`showing 250
+  of 513 tickets`** with per-state pills carrying the TRUE counts (74/26/5/1/356/48/3 = 513), which is
+  LOOP-370's AC3+AC5 working in production; and the `node:sqlite` ExperimentalWarning that every agent
+  strips with `2>/dev/null` is gone from stderr. Worth naming: my own first census read 130 `Done`
+  because `dev-loop tickets --json` capped at 250 — and the CLI **did** warn on stderr, precisely and
+  with the remedy; I had suppressed it by habit. The UI and the CLI both tell the truth about
+  truncation. Nothing to file.
 
 - **2026-08-10 (pm, one-hundred-forty-third fire) — the migration verb verified, and the survey it
   required found the precondition is larger than the ticket that states it.**
