@@ -827,10 +827,18 @@ export function checkApprovalsHealth(ctx: DoctorCtx): void {
     // (approvals.ts: "reading the board is not an event on it"), which is why doctor may call it.
     const rows = listApprovals(db, {});
     if (!rows.length) return;                            // nobody uses the feature ⇒ nothing to say
+    // Per CLASS, not per list. The switch is per action class, so a workspace enforcing `reopen` while
+    // holding `push:` rows is in exactly the inert state this code exists to name — and a check that
+    // only fires on a wholly empty list reports that workspace as healthy. Compare the classes the
+    // rows actually represent against the enabled set and name the uncovered ones.
     const enforce = ctx.ws.file.team.approvals?.enforce ?? [];
-    if (!enforce.length) {
-      const classes = [...new Set(rows.map((r) => r.action_key.split(":")[0]))].sort();
-      ctx.out.warn(`[W40] ${rows.length} approval row(s) exist (classes: ${classes.join(", ")}) but team.approvals.enforce is empty — every one of them is a record that gates nothing, and a fire can still take the action they describe. Turn enforcement on for the classes you meant: dev-loop team set team.approvals.enforce ${classes.join(",")}`);
+    const byClass = new Map<string, number>();
+    for (const r of rows) { const c = r.action_key.split(":")[0]; byClass.set(c, (byClass.get(c) ?? 0) + 1); }
+    const uncovered = [...byClass.keys()].filter((c) => !enforce.includes(c)).sort();
+    if (uncovered.length) {
+      const n = uncovered.reduce((s, c) => s + (byClass.get(c) ?? 0), 0);
+      const scope = enforce.length ? `not in team.approvals.enforce (${enforce.join(", ")})` : `team.approvals.enforce is empty`;
+      ctx.out.warn(`[W40] ${n} approval row(s) exist in class(es) ${uncovered.join(", ")} but ${scope} — every one of them is a record that gates nothing, and a fire can still take the action they describe. Turn enforcement on for the classes you meant: dev-loop team set team.approvals.enforce ${[...new Set([...enforce, ...uncovered])].join(",")}`);
     }
     const forever = rows.filter((r) => r.state === "granted" && r.granted_at && r.expires_at === null);
     if (forever.length) {

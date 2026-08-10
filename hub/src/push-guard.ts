@@ -15,8 +15,8 @@ import { isMainEntry } from "./is-entry.ts";
 import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
-import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
-import { resolveDefaultBranchForPath, approvalsEnforced } from "./team-config.ts";
+import { resolveHubDbPath, tryResolveWorkspace, findWorkspaceRoot } from "./workspace.ts";
+import { resolveDefaultBranchForPath, approvalsEnforced, loadWorkspace } from "./team-config.ts";
 import { listApprovals, consultApproval, actionClasses } from "./approvals.ts"; // LOOP-394 — the record this guard consults
 
 export interface PushGuardFinding { sha: string; subject: string; ticket: string; state: string }
@@ -69,6 +69,18 @@ export interface PushGuardApproval {
   reason: string;       // consultApproval's verdict reason, printed verbatim
 }
 
+/**
+ * The `state` of an entry the guard could NOT evaluate, as opposed to one it evaluated and refused.
+ *
+ * An unavailable record is not an empty record. With enforcement on and the hub db missing — moved,
+ * deleted, or resolved to the wrong path — the guard cannot tell an ungranted request from no request
+ * at all, and reporting "no findings" would turn exactly that misconfiguration into a silent bypass of
+ * the gate that exists to refuse. So the class degrades toward REFUSING, and it rides `approvals[]`
+ * rather than a new result field on purpose: every consumer that already blocks on that array blocks
+ * on this too, with nothing new to remember.
+ */
+export const APPROVALS_UNVERIFIABLE = "unverifiable";
+
 export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; governance: PushGuardGovernance[]; approvals: PushGuardApproval[]; unresolvedDefaultBranch?: string; note?: string }
 
 /** The key grammar for this class, in ONE place — the guard, the refusal, and the tests all read it. */
@@ -84,8 +96,11 @@ export const pushApprovalKey = (branch: string, sha: string): string => `push:${
  * being guarded is a suggestion, not a gate.
  */
 export const approvalRefusalLine = (a: PushGuardApproval): string =>
-  `⛔ approval required: ${a.sha} "${a.subject}" is work ${a.ticketId} marked as awaiting human approval — ${a.reason}. ` +
-  `The operator authorises this exact end state with: dev-loop approve ${a.key}`;
+  a.state === APPROVALS_UNVERIFIABLE
+    ? `⛔ approval unverifiable: ${a.sha} "${a.subject}" carries work ${a.ticketId} and enforcement is on, but ${a.reason}. ` +
+      `The record must be readable before this push can be evaluated: dev-loop doctor`
+    : `⛔ approval required: ${a.sha} "${a.subject}" is work ${a.ticketId} marked as awaiting human approval — ${a.reason}. ` +
+      `The operator authorises this exact end state with: dev-loop approve ${a.key}`;
 
 // §17's governed surface. `skills/**` and the ONE conventions file — the two the invariant names.
 const GOVERNED_RE = /^(references\/conventions\.md|skills\/.+)$/;
@@ -152,6 +167,22 @@ export function touchesOutsideCheatsheet(diff: string, newContent = "", oldConte
 
 const TICKET_RE = ticketIdScanRe("g"); // the ONE canonical <PREFIX>-<n> id shape (§3 ticketPrefix; ticket-id.ts, LOOP-264)
 
+/**
+ * The `team` block governing a repo directory, or undefined when the path is in no workspace.
+ *
+ * Best-effort by design: an unregistered or unreadable workspace resolves to "no config", which reads
+ * as enforcement OFF. That is the correct direction here and only here — a path that is in no
+ * workspace cannot have opted into a gate, so refusing it would block every caller outside a
+ * workspace. It is NOT the same question as an enabled gate whose record is unreadable, which fails
+ * closed (APPROVALS_UNVERIFIABLE).
+ */
+function readTeamBlockFor(repoDir: string) {
+  try {
+    const root = findWorkspaceRoot(repoDir);
+    return root ? loadWorkspace(root).file.team : undefined;
+  } catch { return undefined; }
+}
+
 // Extract the ticket id from a dev-loop/<id> branch name. Returns undefined for other branch shapes.
 const branchTicketId = (br: string): string | undefined => {
   const m = br.match(/^dev-loop\/(.+)$/);
@@ -178,7 +209,22 @@ function checkPushApprovals(
   actor: string,
 ): PushGuardApproval[] {
   const out: PushGuardApproval[] = [];
-  if (!commits.length || !existsSync(dbFile)) return out;
+  if (!commits.length) return out;
+  // Fail CLOSED when the record is unreadable (APPROVALS_UNVERIFIABLE above). Only a commit carrying a
+  // ticket ref can ever be under this gate — it keys on `ticket_id` — so the refusal names those and
+  // stays silent about the rest rather than blanket-refusing a range it never had a claim on.
+  if (!existsSync(dbFile)) {
+    for (const c of commits) {
+      const id = ([...new Set(c.msg.match(TICKET_RE) ?? [])] as string[])[0];
+      if (!id) continue;
+      out.push({
+        sha: c.sha.slice(0, 7), subject: c.subject, key: pushApprovalKey(branch, c.sha), ticketId: id,
+        state: APPROVALS_UNVERIFIABLE,
+        reason: `the approvals record is unavailable at ${dbFile}`,
+      });
+    }
+    return out;
+  }
   const conn = openDb(dbFile);
   try {
     // One read of the (small) table, indexed by ticket: the question "is this ticket under the gate"
@@ -267,9 +313,19 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const range = hasUpstream ? `origin/${br}..${br}`
     : gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`]) ? `origin/${defaultBranch}..${br}`
     : null;
+  // Whether the class is enforced is a property of the WORKSPACE, not of who called this function.
+  // Left unspecified it resolves from the repo's own config, so a programmatic caller — doc-land's
+  // ff-only push is the one that exists today — cannot fall outside an enabled gate by omitting an
+  // argument, and the next such caller inherits the gate instead of having to remember it. An explicit
+  // boolean still wins: the CLI passes the switch it already resolved, and the tests pin both states.
+  // Resolution is lazy so the default-off path opens no workspace and keeps AC2's byte-identity.
+  // Read the config, don't RESOLVE the workspace: resolveWorkspace hydrates secrets into process.env
+  // and upserts the machine-global index, and neither belongs in a guard this module documents as
+  // read-only. findWorkspaceRoot + loadWorkspace answer the same question with no side effect.
+  const enforcePush = opts.enforcePush ?? approvalsEnforced(readTeamBlockFor(repoDir), "push");
   // Default-OFF (design §8): with the class absent from `approvals.enforce` nothing below runs, no db
   // handle is opened, and the result is byte-identical to the pre-LOOP-394 output (AC2).
-  const approvals = opts.enforcePush && range
+  const approvals = enforcePush && range
     ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, dbPath ?? resolveHubDbPath(repoDir), opts.actor ?? "unknown")
     : [];
 

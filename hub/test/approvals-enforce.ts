@@ -13,12 +13,13 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
-import { pushGuard, pushApprovalKey, approvalRefusalLine } from "../src/push-guard.ts";
+import { pushGuard, pushApprovalKey, approvalRefusalLine, APPROVALS_UNVERIFIABLE } from "../src/push-guard.ts";
 import { grantApproval, requestApproval, actionClasses } from "../src/approvals.ts";
 import { approvalsEnforced, validateTeamFile } from "../src/team-config.ts";
 import { SETTABLE } from "../src/team-edit.ts";
 import { DOCTOR_CODE_SET } from "../src/doctor-codes.ts";
 import { DOCTOR_CHECKS } from "../src/doctor-registry.ts";
+import { checkApprovalsHealth } from "../src/doctor.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -229,6 +230,129 @@ try {
     ok(/dev-loop team set team\.approvals\.enforce/.test(help),
       "AC6b push-guard --help names the exact command that turns enforcement on");
   }
+  // ── R1 (PR #283 review) — an UNAVAILABLE record is not an empty one: the gate fails CLOSED ──────
+  //
+  // The pre-fix code returned no approval findings when the db file was missing, so --strict exited 0
+  // and the push went through: a moved or mis-resolved hub.db silently disabled the one gate that
+  // exists to refuse. Both directions are asserted, because "fail closed" is only correct while
+  // enforcement is ON — an unreadable record must not start refusing a workspace that never opted in.
+  {
+    const gone = join(ROOT, "moved-away-hub.db");
+    const on = pushGuard(work, "dev-loop/AP-1", gone, "main", { enforcePush: true, actor: "senior-dev" });
+    ok(on.approvals.length > 0, "R1 enforcement ON + unreadable record → the push is REFUSED, not waved through");
+    ok(on.approvals.every((a) => a.state === APPROVALS_UNVERIFIABLE),
+      "R1 the refusal is reported as UNVERIFIABLE — distinct from an evaluated 'not granted'");
+    ok(on.approvals.every((a) => a.reason.includes(gone)),
+      "R1 the reason names the path that could not be read, so the operator can fix the cause");
+    ok(on.approvals.some((a) => a.key === pushApprovalKey("dev-loop/AP-1", git(work, ["rev-parse", "HEAD"]))),
+      "R1 the entry carries this commit's real push key — nothing about it is fabricated");
+
+    const off = pushGuard(work, "dev-loop/AP-1", gone, "main", { enforcePush: false });
+    ok(off.approvals.length === 0,
+      "R1 enforcement OFF + unreadable record → still silent (AC2's byte-identity survives the fix)");
+
+    // The refusal an agent READS must not send it down the wrong road: approving a key cannot help
+    // when the record itself is unreadable, and AC5's no-bypass rule binds this line too.
+    const line = approvalRefusalLine(on.approvals[0]!);
+    ok(!/dev-loop approve /.test(line), "R1 the unverifiable line does NOT tell the agent to approve a key that cannot be recorded");
+    ok(/dev-loop doctor/.test(line), "R1 it names the diagnostic that finds the real cause instead");
+    ok(!/--force|--no-verify|--skip|--allow|bypass|override|disable/i.test(line), "R1 and it still names NO bypass");
+  }
+
+  // ── R2 (PR #283 review) — the switch is a property of the WORKSPACE, not of the caller ──────────
+  //
+  // `enforcePush` was an optional argument that defaulted to OFF, so every programmatic caller was
+  // outside the gate until it remembered to opt in — doc-land calls pushGuard and then ff-only pushes
+  // to defaultBranch, and did exactly that. The default now resolves from config, so forgetting the
+  // argument inherits the gate instead of escaping it. Asserted with NO opts, which is the caller
+  // shape that was broken.
+  {
+    const mkWs = (enforce: string[]): string => {
+      const root = join(ROOT, `ws-${enforce.join("-") || "none"}`);
+      mkdirSync(root, { recursive: true });
+      execFileSync("git", ["clone", "-q", origin, join(root, "repo")]);
+      const r = join(root, "repo");
+      git(r, ["checkout", "-qb", "dev-loop/AP-1", "origin/dev-loop/AP-1"]);
+      writeFileSync(join(r, "w.txt"), "w\n");
+      git(r, ["add", "w.txt"]);
+      git(r, ["commit", "-qm", "feat: work needing approval (AP-1)"]);
+      writeFileSync(join(root, "dev-loop.json"), JSON.stringify({
+        schemaVersion: 2,
+        team: { key: "apx", backend: "service", ...(enforce.length ? { approvals: { enforce } } : {}) },
+        repos: { repo: { path: "repo" } },
+        projects: { ap: {} },
+      }));
+      return r;
+    };
+
+    const enforcedRepo = mkWs(["push"]);
+    requestApproval(conn, {
+      projectId: "p", actionKey: pushApprovalKey("dev-loop/AP-1", git(enforcedRepo, ["rev-parse", "HEAD"])),
+      requestedBy: "senior-dev", ticketId: "AP-1",
+    });
+    const inherited = pushGuard(enforcedRepo, "dev-loop/AP-1", dbPath, "main");   // NO opts — the broken shape
+    ok(inherited.approvals.length === 1,
+      "R2 a caller that passes no opts INHERITS the configured gate (the doc-land bypass is closed)");
+    ok(inherited.approvals[0]?.ticketId === "AP-1" && inherited.approvals[0]?.state === "requested",
+      "R2 and it is the real evaluated refusal, not an unverifiable fallback");
+
+    const plainRepo = mkWs([]);
+    const notEnforced = pushGuard(plainRepo, "dev-loop/AP-1", dbPath, "main");    // same shape, switch off
+    ok(notEnforced.approvals.length === 0,
+      "R2 the same call in a workspace that did NOT opt in stays silent — config decides, not the call site");
+
+    // An explicit argument still wins, or the CLI (which resolves the switch itself) and every test
+    // above would be overridden by whatever workspace the repo happens to sit in.
+    ok(pushGuard(enforcedRepo, "dev-loop/AP-1", dbPath, "main", { enforcePush: false }).approvals.length === 0,
+      "R2 an explicit enforcePush:false still overrides the resolved default");
+
+    // doc-land is the caller the finding named: it must treat the gate as a STOP, not a warning.
+    const docLandSrc = readFileSync(join(hubRoot, "src", "doc-land.ts"), "utf8");
+    const step3 = docLandSrc.slice(docLandSrc.indexOf("Step 3: push-guard"), docLandSrc.indexOf("Step 4: ff-only push"));
+    ok(/guard\.approvals\.length/.test(step3) && /return \{ ok: false/.test(step3.slice(step3.indexOf("guard.approvals.length"))),
+      "R2 doc-land returns a BLOCK on guard.approvals — it does not annotate and push anyway");
+  }
+
+  // ── R3 (PR #283 review) — W40 is per CLASS: enforcing one class does not silence the others ─────
+  //
+  // The check compared the enforce list against EMPTY, so a workspace enforcing `reopen` while holding
+  // `push:` rows reported clean — the exact inert state the code exists to name, hidden by the only
+  // configuration in which someone had already started using the feature.
+  // Asserted by CALLING the shipped check and reading what it emits. An earlier draft of this block
+  // re-modelled the class comparison locally and grepped doctor.ts for the word "uncovered"; both
+  // survived reverting the fix, which is the whole failure mode a regression test exists to prevent.
+  {
+    // A `reopen:` row alongside the `push:` rows the fixture already created, so the two classes can
+    // diverge — with only one class present, per-class and per-list are indistinguishable.
+    requestApproval(conn, { projectId: "p", actionKey: "reopen:AP-2", requestedBy: "senior-dev", ticketId: "AP-2" });
+
+    const w40For = (enforce: string[]): string[] => {
+      const warns: string[] = [];
+      checkApprovalsHealth({
+        ws: { root: ROOT, file: { team: { key: "apx", backend: "service", ...(enforce.length ? { approvals: { enforce } } : {}) } } },
+        opts: {}, boardDb: dbPath,
+        out: { warn: (m: string) => warns.push(m) },
+        openBoardDb: () => conn,
+      } as unknown as Parameters<typeof checkApprovalsHealth>[0]);
+      return warns.filter((w) => w.startsWith("[W40]"));
+    };
+
+    const none = w40For([]);
+    ok(none.length === 1 && /push/.test(none[0]!) && /reopen/.test(none[0]!),
+      "R3 nothing enforced → W40 names both classes (the pre-existing behaviour, preserved)");
+
+    const partial = w40For(["reopen"]);
+    ok(partial.length === 1, "R3 enforcing ONLY reopen still WARNS — the case the emptiness check reported clean");
+    // Read the UNCOVERED-class segment specifically: the enforced class legitimately appears later in
+    // the same sentence ("not in team.approvals.enforce (reopen)"), so a bare /reopen/ scan of the
+    // whole line would pass however wrong the classification was.
+    const uncoveredSegment = (m: string) => /class\(es\) (.+?) but /.exec(m)?.[1];
+    ok(uncoveredSegment(partial[0]!) === "push",
+      "R3 and it names push — and ONLY push — as the uncovered class, not the one already enforced");
+
+    ok(w40For(["push", "reopen"]).length === 0, "R3 every class covered → W40 stays silent");
+  }
+
 } catch (e) {
   console.log("❌ harness error: " + (e as Error).message);
   fails++;
