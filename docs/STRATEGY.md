@@ -273,17 +273,18 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T03:15Z over the 7d team ledger (831 fires) via `dev-loop metrics --window
-  7d`: **fire success 50%** (`successRate` 0.5042; 65% over 538 fires when Goals was written
+  Measured 2026-08-10T03:10Z over the 7d team ledger (838 fires) via `dev-loop metrics --window
+  7d`: **fire success 50%** (`successRate` 0.5012; 65% over 538 fires when Goals was written
   2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover 173 of 831 fires; the other
-  **658 carry `errorClass: null`** (LOOP-464), so the classes describe 21% of the window. `stalled`
+  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover 173 of 838 fires; the other
+  **665 carry `errorClass: null`** (LOOP-464), so the classes describe 21% of the window. `stalled`
   is the largest class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 +
-  LOOP-463). **Coverage decays while an outage runs.** Against the 01:57Z reading 78 minutes
-  earlier, the window's net growth was +24 fires and +23 `errorClass: null` rows: the three
-  `openrouter` lanes (junior-dev, qa, sweep) have fired every ~5 min for **34.6 h**, each returning
-  in ~6 s carrying no class. This percentage therefore tracks the outage's length as much as the
-  taxonomy's reach — compare two readings only alongside the fire counts they were measured over.
+  LOOP-463). **Coverage decays while an outage runs, and the cleanest demonstration is this pass:**
+  against the 03:15Z reading the window grew 831 → 838 fires while the classified count held at
+  **exactly 173** — every one of the +7 arrivals carried `errorClass: null`. The three `openrouter`
+  lanes (junior-dev, qa, sweep) have fired every ~5 min for **35.4 h**, each returning in ~6 s with
+  no class, so the denominator is fed by the outage while the numerator stands still. Compare two
+  readings only alongside the fire counts they were measured over.
   First program: **3 of 5 shipped** — LOOP-382 Done · LOOP-383 Done · LOOP-385 Done (`6a4977d`,
   verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo.
 
@@ -323,6 +324,31 @@ Human-Blocked), zero unpark candidates, zero zero-edge rows. `needs-pm` empty on
 empty — the four In Review rows are all `qa`-owned and belong to a verifier that has not fired in
 34.6 h. Promotion stayed closed: unblocked Todo 27 (senior 14, junior 13) against the default cap of
 10 per tier.
+
+### 2026-08-10 (pm, one-hundred-twenty-second fire): three checks on one file, none asking whether it is current
+
+**The `consistency` lens filed one ticket, LOOP-498.** The lessons library — the loop's only
+cross-fire learning mechanism, loaded into every fire's boot corpus — has not been written since
+2026-08-01T02:19Z, and `dev-loop doctor` reports `DOCTOR_OK`. `reflect` is its sole writer and has
+fired **6 times all-time, last 218.7 h ago**. It is not down with the `openrouter` lanes: it runs
+`claude`/`claude-opus-5`, the lane pm and senior-dev are firing on now, and is simply absent from
+`core` (`agent-roster.ts:21`) — the set this workspace launches — while
+`team.agents.reflect.cadence: "1d"` stays live config naming a schedule nothing runs. The three
+guards on that file each test a real property and none tests currency, distilled as **STANDING
+RULE 40** above. It degrades rather than stalls: §14 expires a rule whose pattern has not recurred
+in ~2 weeks, every rule in the library is dated 2026-07-31 or 08-01, so past ~2026-08-14 the file
+serves every fire rules its own governing rule says should be gone, with no agent able to prune them.
+
+**One candidate killed on inspection — do not re-derive.** W03 also emitting for `team.bootCorpus`
+(`lessons.ts:85`) looked like a second instance of LOOP-440's two-unrelated-checks-one-code defect.
+It is not: same module, same budget namespace, and a documented invariant — *"an ABSENT W03 must not
+read as 'the push budget is honoured'"* (`lessons.ts:81`). A code shared deliberately inside one
+module is not a code collided across two.
+
+**Board and protocol, unchanged.** §9c: eight parked tickets, all eight holding live edges to open
+blockers, zero unpark candidates, zero zero-edge rows. `needs-pm` empty on both scans. Job A empty —
+the four In Review rows remain `qa`-owned behind a verifier dark 35.4 h. Promotion stayed closed:
+unblocked Todo 27 (senior 14, junior 13) against the default cap of 10 per tier; Backlog 49.
 
 ## Personas
 
@@ -645,6 +671,16 @@ empty — the four In Review rows are all `qa`-owned and belong to a verifier th
      that had then been dead 34.6 h. The error inverted the finding into a clean bill of health and
      cost a second full read to catch. One `tail -1 | python3 -m json.tool` before the aggregate
      settles the field names and their units. Distilled at pass 90 from the fire it happened in.
+  40. **A check that tests whether a thing EXISTS cannot report whether it is CURRENT.** W30 was
+     built precisely because *"absent and healthy were the same output"* for the lessons library —
+     and its predicate is `existsSync(P.index)`, so with the file present and nine days stale,
+     stale and healthy are now the same output: the identical shape, one rung up. The library's
+     other two guards miss it from the other side — W35 builds its findings from agents that FIRED
+     in the window, so an agent at zero fires yields no row at all, and W03 fires when the file is
+     OVER budget, which a frozen file never is. Three checks, three real properties, none of them
+     currency (LOOP-498; `reflect` is the sole writer and is absent from the `core` run set this
+     workspace launches). Ask of any freshness-dependent artifact: which check fails if this stops
+     being updated — and if every answer tests presence, size, or activity, the answer is none.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -668,83 +704,44 @@ empty — the four In Review rows are all `qa`-owned and belong to a verifier th
     independently correct and does not depend on it. Recorded here because a proposal that lives only
     in a fire report dies with the fire.
 
-- **📚 ARCHIVE INDEX — where the rolled provenance lives.** §20 R2 keeps one line per archived
-  period here; the searchable per-fire recaps are the table of contents at the head of each pass in
-  the archive file (pass 41, blocks F and G, carries every recap this section used to hold).
+- **📚 ARCHIVE INDEX — where the rolled provenance lives.** §20 R2 keeps **one line per archived
+  period**; the searchable per-fire recaps are the table of contents at the head of each pass in the
+  archive file (pass 41, blocks F and G). Per-span *open-finding* ID lists are deliberately NOT kept
+  here — the board is their system of record, and a hand-copied list decays exactly the way the
+  numbers LOOP-494 retired from `Goals` did (at pass 91's compression, several rows still listed as
+  "still open" had closed, and one named a ticket the same sentence called closed). What each span
+  contributes to doctrine is already distilled into the STANDING RULES above.
   - **2026-06-14 → 06-27** — the 2026-06 milestone arc (daemon foundation; the standalone-daemon +
     multi-CLI repositioning; hub buildout; the two-tier Dev split) →
     [`2026-06.md`](strategy-archive/2026-06.md).
-  - **2026-07-30 → 07-31** — ~110 rulings and method notes (board search and ownership contracts;
+  - **2026-07-30 → 07-31** — ~110 rulings and method notes (board search/ownership contracts;
     send-back-vs-verify-fail; §9c's `Canceled`-is-not-satisfied asymmetry; the validate-then-drop
     family; the brand decisions; R2 passes 1–8) → [`2026-07.md`](strategy-archive/2026-07.md).
-  - **2026-08-01 → 08-05 (pm, sixth → forty-eighth fires)** — ~70 rulings across R2 passes 13–29,
-    plus every fire journal and the full-text rulings of the thirty-second through forty-seventh
-    fires, rolled by **§20 R2 pass 41** → [`2026-08.md`](strategy-archive/2026-08.md), blocks B–I.
-    What still governs from that span is STANDING RULES 15–22 above.
-  - **2026-08-06 (pm, forty-ninth → fifty-eighth fires)** — every journal and full-text ruling of
-    that span, plus the local-source-build pin retirement record and both release-axes entries,
-    rolled by **§20 R2 passes 42 and 45–49** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks A–D, M, O–U3 and V–V2. What still governs is
-    STANDING RULES **23–32** above, plus the clauses folded into RULES 8, 10 and 15; the pin's second
-    clause is superseded by W36. The findings that span produced and left open are **LOOP-380**,
-    **LOOP-387** and **LOOP-388** → **LOOP-390**.
-  - **2026-08-06 → 08-07 (pm, fifty-ninth → seventy-eighth fires)** — those fires' journals and full-text
-    rulings (the deleted-handler and asserted-null pair behind **LOOP-397**; the ADDS-not-REMOVES
-    ruling and the writer-less-knob pair behind **LOOP-399**/**LOOP-400**/**LOOP-405**; the
-    presence-vs-coverage check behind **LOOP-412**; the self-derived-inventory ruling behind
-    **LOOP-417**; the parity-claim pair behind **LOOP-419**; the cited-precedent ruling behind
-    **LOOP-420**; the scope filter that reached the predicate and not the count behind **LOOP-425**),
-    rolled by **§20 R2 passes 50–69** →
-    [`2026-08.md`](strategy-archive/2026-08.md), blocks W–Z, AA–AP. Findings still open from that
-    span: **LOOP-406**, **LOOP-407**, **LOOP-412**, **LOOP-416**, **LOOP-417**, **LOOP-419**,
-    **LOOP-429**, **LOOP-426**, **LOOP-436**. Extended by **pass 70** with the eighty-first fire's
-    journal and its supersession-narrows-scope ruling (fires 79–80 wrote nothing — the shared
-    checkout was diverged) → block **AQ**, and by **pass 71** with the eighty-second fire's journal
-    and its scope-boundary-is-a-claim ruling → block **AR**; still open from the two: **LOOP-440**,
-    **LOOP-442**, **LOOP-443**. Extended by **pass 72** with the eighty-FOURTH fire's journal and
-    ruling, plus the eighty-second fire's ruling — which pass 71's line claimed but did not roll —
-    → block **AS**; still open from that fire: **LOOP-444**, **LOOP-445**, **LOOP-446**. Extended by
-    **pass 73** with the eighty-FIFTH fire's journal and its containment-hides-the-condition ruling
-    → block **AT**; still open from it: **LOOP-447**. Extended by **pass 74** with the
-    eighty-SIXTH fire's journal and its verify-the-render ruling → block **AU**; still open
-    from it: **LOOP-449**.
-  - **2026-08-09 (pm, ninety-second · ninety-fourth · ninety-ninth · one-hundred-fifth fires)** — four
-    fire journals, each recording a verified-Done increment: the `~/.dev-loop` retirement direction and
-    the malformed-intake finding (**LOOP-458**/**LOOP-460**); the fire-refused `secret set`
-    (**LOOP-417**, closed in source before the running CLI); the honest budget-kill classification
-    (**LOOP-445**); and approvals C1's store, with the end-state-naming key rule (**LOOP-391**). Rolled
-    by **§20 R2 pass 86** → [`2026-08.md`](strategy-archive/2026-08.md). Live residuals at roll time,
-    all carried on tickets: **LOOP-473** (the `paths.ts` seam), **LOOP-461** with
-    **LOOP-462**/**LOOP-466**/**LOOP-476** (the deadline that still kills working fires), and
-    **LOOP-489** (the bundle carry that C1's un-gated `approve`/`revoke` made real once LOOP-392
-    shipped the verb).
-  - **2026-08-10 (pm, one-hundred-fifteenth fire)** — the tag-anchored release resume (**LOOP-385**
-    verified Done, `6a4977d`): a `bump: explicit` resume publishes `refs/tags/v<version>`, never the
-    branch tip, and `release-mode.ts` excludes the defect by type rather than by a remembered rule.
-    Rolled by **§20 R2 pass 89** → [`2026-08.md`](strategy-archive/2026-08.md). What still governs
-    from it: **STANDING RULE 36** (read `gh run list --branch main` before a doc-land), distilled
-    above before the roll. Live residuals at roll time, both on tickets: **LOOP-490** (the
-    pre-publish gate whose in-body guard no assertion can observe) and **LOOP-486** (docs and code
-    pushes cancelling each other's runs on `main`).
-  - **2026-08-10 (pm, one-hundred-sixteenth fire)** — the `local` backend's retirement verified
-    across the whole taught surface (**LOOP-465** Done, `0cac647`/#282): zero `Sections:` lines name
-    the deleted contract, every agent renders one retirement sentence, and the per-agent delivered
-    saving was measured pre→post (pm −2,368 B … communication −1,571 B) as **merged, not installed**.
-    Rolled by **§20 R2 pass 89** → [`2026-08.md`](strategy-archive/2026-08.md). What still governs
-    from it: **STANDING RULES 37 and 38**, distilled above before the roll. Live residual carried
-    forward on its ticket: **LOOP-394** (approvals C4) — **hold its AC6(c) default of an EMPTY
-    `approvals.enforce` at verify**; that default is what bounds **LOOP-489**'s window, and it is the
-    kind of default a later review round widens unnoticed.
-  - **2026-08-10 (pm, one-hundred-twentieth fire)** — the north star stops carrying facts it cannot
-    keep (**LOOP-494** approved and landed, `b310dd0`): a direction section writable only by an
-    approval round cannot hold state that decays in hours, so the measurements moved to
-    `Current state` under a PM-re-measured bullet while `Goals` kept the three gap classes, the
-    through-line and the five controls. Rolled by **§20 R2 pass 90** →
-    [`2026-08.md`](strategy-archive/2026-08.md), block AX. What still governs from it: **STANDING
-    RULE 35**, distilled above before the roll, and the operator's second instruction — the W37 byte
-    ceiling is **LOOP-484**'s problem and direction prose is never trimmed to offset it. Live
-    residual: an In Review@operator park is worth re-reading late in a fire, not only at Job A; the
-    fire-120 ruling landed twenty-five minutes in, after the ticket had already been read once.
+  - **2026-08-01 → 08-05** (fires 6–48; R2 passes 13–29, 41) — ~70 rulings plus every fire journal →
+    [`2026-08.md`](strategy-archive/2026-08.md), blocks **B–I**. Doctrine: RULES 15–22.
+  - **2026-08-06** (fires 49–58; R2 passes 42, 45–49) — journals and full-text rulings, the
+    local-source-build pin retirement, both release-axes entries → blocks **A–D, M, O–U3, V–V2**.
+    Doctrine: RULES 23–32, plus clauses folded into 8, 10 and 15; the pin's second clause is
+    superseded by W36.
+  - **2026-08-06 → 08-07** (fires 59–86; R2 passes 50–74) — journals and full-text rulings (the
+    deleted-handler/asserted-null pair; ADDS-not-REMOVES; presence-vs-coverage; self-derived
+    inventory; the parity-claim pair; cited-precedent; supersession-narrows-scope;
+    scope-boundary-is-a-claim; containment-hides-the-condition; verify-the-render) → blocks
+    **W–Z, AA–AU**.
+  - **2026-08-09** (fires 92, 94, 99, 105; R2 pass 86) — four verified-Done increments: the
+    `~/.dev-loop` retirement direction, the fire-refused `secret set`, the honest budget-kill
+    classification, and approvals C1's store with the end-state-naming key rule → `2026-08.md`.
+  - **2026-08-10** (fires 115, 116, 120; R2 passes 89–90) — the tag-anchored release resume
+    (LOOP-385), the `local` backend's retirement verified across the taught surface (LOOP-465), and
+    the north star shedding facts it cannot keep (LOOP-494) → `2026-08.md`, incl. block **AX**.
+    Doctrine: RULES 35–38.
+  - **⚠️ LIVE HOLDS carried out of these rolls** — the residuals that are *instructions*, not ticket
+    IDs a board query already returns. **(1)** At LOOP-394's verify, hold its **AC6(c) default of an
+    EMPTY `approvals.enforce`** — that default is what bounds LOOP-489's window, and it is the kind
+    a later review round widens unnoticed. **(2)** The W37 byte ceiling is **LOOP-484**'s problem;
+    direction prose is never trimmed to offset it (the operator's second LOOP-494 instruction).
+    **(3)** Re-read an In Review@operator park LATE in a fire, not only at Job A — the fire-120
+    ruling landed twenty-five minutes in, after the ticket had already been read once.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
