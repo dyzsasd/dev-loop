@@ -369,6 +369,78 @@ lever is LOOP-484, not the per-pass discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-third fire) — the migration verb verified, and the survey it
+  required found the precondition is larger than the ticket that states it.**
+  **LOOP-472 is `Done`, verified against the merged tree `da33e32`** — merged, not published, and the
+  verdict says so. Two surfaces, neither of them the hand-off comment: `node hub/test/team-cli.ts` on
+  the merged tree returned `TEAM_CLI_OK` at exit 0 with **0 failures in the file** and all **28**
+  LOOP-472 arms green; then the verb itself, run by hand on a fixture registry and a `team init`-seeded
+  workspace. Observed rather than inferred: `state-json 2 copied` (the per-project file and the
+  root-level one, carried because the project is the registry's `defaultProject`), `worktrees 0
+  copied, 1 skipped` with its reason inline, the source tree unchanged after both the run and the
+  re-run, and the re-run reporting `SKIP … already imported from …` with every class at `0 copied, N
+  skipped`. Stage-1 triage clean. The additions past the five ACs — the `.v1-import.json` provenance
+  marker, the colliding-key hard stop, content-dedup on the event copy — each defend an AC that was
+  otherwise only nominally met, so they are in scope rather than creep.
+  **One reading ruled rather than left open.** The operator's constraint said "seed a NEW workspace and
+  import into it"; what shipped is `--into <root>` with seeding left to `team init`. Accepted: the
+  capability the decision bought is delivered, the ACs never asked the verb to seed, and the design's
+  own cost line for option A priced it as one `team init` plus an explicit root. Two commands instead
+  of one is an ergonomic follow-up if the operator wants it, not a rework.
+  **The survey the verification required is the finding.** LOOP-472 framed the live data as one
+  project. `~/.dev-loop` holds **three** registered projects (`devplatform` linear/`defaultProject`,
+  `jinko-backoffice` and `platform-api` both service), **five** root `*-state.json` files, a legacy
+  central `hub.db` carrying **52 tickets, 125 comments, 359 events** (37 tickets `jinko-backoffice`,
+  15 `platform-api`), and a **16 MB** `loop/` directory that is not a key in the registry at all.
+  `teamImport()` iterates the registry's keys; the only reads of the data dir itself are the config
+  candidates and `rootStateFiles()`. Nothing enumerates the directories, so the per-class report — the
+  artifact AC5 exists to give the operator before they delete — is complete with respect to the
+  registry and silent about the disk. Filed as **LOOP-531**, `sensitive`/senior. Severity stated
+  honestly on the ticket: the `loop/` instance is stale by construction, so the defect is the
+  completeness claim rather than a confirmed loss; the hub.db instance has real content behind it.
+  **A resolved edge would have released a destructive ticket, and this sharpens RULE 34.** LOOP-473 is
+  the only child of the state-locality set that DELETES. It carried `Blocked-by: LOOP-472`, and its
+  body carried a second precondition in prose: *the operator has confirmed on this ticket that the
+  migration ran on their machine.* Closing LOOP-472 resolved the edge; §9c unparks a ticket whose
+  blockers are all terminal, so the next §9c pass — mine or Sweep's backstop — would have moved a
+  ticket that deletes `~/.dev-loop` back into the senior pick set on a precondition nobody had met.
+  Moved to **`Human-Blocked` assigned `operator`** with the `Unblocked-by: LOOP-472` retirement line,
+  so it holds zero live edges and cannot auto-unpark, and it now sits in the decision queue where the
+  operator reads it, carrying the runbook this fire verified by hand plus the three-project choice
+  LOOP-531 exposed. RULE 34 says a wait is routed only when it lands in a set someone else queries;
+  the sharpening is that **a precondition written only in a ticket body has no carrier either** — the
+  edge discharges the half it names and the board reads the whole park as cleared.
+  **LOOP-384 arrived `In Review` carrying no delivery — the third recorded instance of this shape**
+  (LOOP-31 and LOOP-294 → LOOP-309). Measured three ways: `gh pr list --search LOOP-384 --state all`
+  empty, `git ls-remote --heads origin 'dev-loop/LOOP-384'` empty, and
+  `git rev-list --count origin/main..dev-loop/LOOP-384` = **0**. The whole increment — **125
+  insertions, 43 deletions across 8 files** — is unstaged in the SHARED checkout, which is also a §7
+  violation flagged advisory on that ticket at 18:42Z and no longer advisory once the work was handed
+  off from there. Bounced to `Todo` with no verdict on the code, because there is nothing deployed,
+  merged or proposed to verify it against; the comment names the eight files and says do not start
+  over, since a Step 0 artifact scan finds no PR and no origin branch and reads exactly like
+  not-started. The late `queue` re-read caught it — six consecutive fires now.
+  **The shared checkout produced a SECOND failure the same hour, and this one reached the board as a
+  filed defect.** `qa` filed **LOOP-530** at 18:54Z — a `sensitive`/senior P2 Bug asserting that
+  `db.ts` creates the `tickets` table without a `type` column, crashing every fixture db built through
+  `openDb()`. Measured at 19:0xZ: `type TEXT NOT NULL DEFAULT 'Feature'` is present in `origin/main`
+  **and** in the working tree, and `hub/test/team-cli.ts` — which builds service workspaces through
+  exactly that path — returned `TEAM_CLI_OK` at 0 failures twice this fire, in the same dirty tree.
+  The CREATE TABLE block the ticket quotes carries `waiting_on`/`waiting_on_hint`, so it was sampled
+  from LOOP-384's uncommitted edits, and matches neither tree: main has no `waiting_on`, the working
+  tree has `waiting_on` AND `type`. One agent's unlanded work in a shared tree is not only at risk of
+  being lost — it is a moving reference that another agent can measure and file against. Left in
+  `Backlog` with the falsification and a re-derivation route (read `git show origin/main:…`, or a
+  clean worktree; never `git stash`, which would take LOOP-384's only copy with it). Not cancelled:
+  the crash may be real, and a stale fixture db on disk reproduces that exact error against correct
+  source, because `CREATE TABLE IF NOT EXISTS` is a no-op on a pre-existing file. Not re-tiered
+  either — the premise is what is in question.
+  **Board.** Promotion closed for the thirty-fourth consecutive fire: Todo depth **23** (12 senior /
+  11 junior), both tiers over the per-tier cap of 10, Backlog **76**. Job B2 is groom-only until the
+  cap clears. Five parks re-checked and all still hold live edges to open tickets (LOOP-469→468,
+  LOOP-483→464, LOOP-404/403/402→401); no `external-prereq` row exists, so the §9c query returns zero
+  candidates for the fifteenth fire running.
+
 - **2026-08-10 (pm, one-hundred-forty-second fire) — the four-fire refusal ended on a machine
   action, and the lens that swept the retention half found the one artifact class nobody bounds.**
   **LOOP-499 is `Done`.** Its §21a design-gate verdict passed at fire 138; the *close* was refused
