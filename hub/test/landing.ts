@@ -777,6 +777,18 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(cmdOf(a5.reason ?? "") === null,
     `LOOP-365 AC5: no command form is offered when the ref did not resolve (${a5.reason?.slice(0, 200)})`);
 
+  // AC4, the case quoting cannot reach (PR #273 review): a ref the MUTATOR cannot address.
+  // `team set` matches `^repos\.[^.]+\.ciIrrelevantPaths$` and splits its path on dots, while
+  // `validateRepoRegistry` → `validateName` → `KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/` accepts a
+  // dot in a repo ref. `repos.web.app.ciIrrelevantPaths` is therefore a legal knob with no runnable
+  // command, and the failure is inside the tool, not in the shell — so the AC4 property ("if a
+  // command is printed, it runs") needs this arm, which the angle-bracket check above passes.
+  const aDot = read(["docs/STRATEGY.md"], undefined, {}, "web.app");
+  ok(cmdOf(aDot.reason ?? "") === null,
+    `LOOP-365 AC4: a dotted repo ref offers NO command — team set cannot address it (${aDot.reason?.slice(0, 220)})`);
+  ok((aDot.reason ?? "").includes("repos.web.app") && (aDot.reason ?? "").includes("ciIrrelevantPaths"),
+    `LOOP-365 AC4: …while still naming the knob and the real ref, so the operator knows what is unset (${aDot.reason?.slice(0, 220)})`);
+
   // AC6 — a ref needing shell quoting stays runnable. `team-config.ts` validates the
   // ciIrrelevantPaths ENTRIES, not the ref, so a ref carrying a space is a config it accepts.
   const a6 = read(["docs/STRATEGY.md"], undefined, {}, "my repo");
