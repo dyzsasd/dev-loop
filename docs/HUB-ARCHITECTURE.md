@@ -30,7 +30,7 @@ This doc is deliberately conservative. It folds in three independent critiques (
 
 ## 0. How to read this — the headline decisions up front
 
-1. **The `local` file board (§18) already delivers ~80% of this.** We steelman and keep it (§2). The "per-agent identity" win is a small additive field, not a 16-table daemon.
+1. **The `local` file board delivered ~80% of this at design time.** We steelmanned it (§2; the backend has since been retired at E02). The "per-agent identity" win is a small additive field, not a 16-table daemon.
 2. **Identity is attribution + accident-prevention, NOT an anti-spoof boundary.** On one machine, one OS user, one operator, any agent can read another pane's env or open the DB file directly. Every "cannot impersonate" claim from the facets is **deleted**. The threat model is honest-but-buggy agents + prompt-injection, not a hostile co-tenant (§4).
 3. **Transport = stdio shim + shared SQLite-WAL, NO daemon, for the MVP.** Claude Code speaks stdio to our shim; identity rides a launcher-set env var, never an HTTP header — this dodges the confirmed Claude Code headless header-drop regressions (§6). The daemon arrives only when background work needs it (P5).
 4. **The hub MIMICS the §18 op-contract verbatim** (REPLACE-style labels, verify-after-write). Agent SKILL bodies run unchanged via the existing §18 indirection. "Footguns designed out" is **not** an MVP win — it is a later, operator-driven, §17-gated SKILL rewrite with its own effort line (§12, §21).
@@ -345,7 +345,7 @@ the MCP server remaining the sibling transport.)*
 §18 already abstracts "every ticket operation maps to one backend, defined once." The hub is the **third value**:
 
 ```jsonc
-"backend": "service",                 // "linear" (default, absent ⇒ this) | "local" | "service"
+"backend": "service",                 // "linear" (default, absent ⇒ this) | "service"
 "hub": {                              // required only when backend:"service"
   "transport": "stdio",               // stdio throughout (P2–P6 are all daemon-free); "http" only if a PUSH-webhook channel is ever added
   "project": "monpick",
@@ -353,7 +353,7 @@ the MCP server remaining the sibling transport.)*
 }
 ```
 
-`backend` absent ⇒ `"linear"`, so **every existing project is byte-for-byte unchanged**; `"local"` still works. §18 gains a third operation-mapping column (the table in §12) so each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — is the **only** thing that resolves differently. The agent SKILL bodies are untouched (§21). *(As shipped, the `hub` block's transport values are direct-db by default with `"daemon"` as the opt-in loopback op-API — not `"http"` — and the block gained `hub.agentInterface` (D8, per-coding-agent `"cli"`/`"mcp"`); see `references/config-schema.md`.)*
+`backend` absent ⇒ `"linear"`, so **every existing project is byte-for-byte unchanged**; `"local"` still worked at ship time (since retired at E02). §18 gains a third operation-mapping column (the table in §12) so each agent's single §0 line — "all ticket operations go through the configured backend (§18)" — is the **only** thing that resolves differently. The agent SKILL bodies are untouched (§21). *(As shipped, the `hub` block's transport values are direct-db by default with `"daemon"` as the opt-in loopback op-API — not `"http"` — and the block gained `hub.agentInterface` (D8, per-coding-agent `"cli"`/`"mcp"`); see `references/config-schema.md`.)*
 
 ---
 

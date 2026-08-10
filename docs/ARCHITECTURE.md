@@ -175,7 +175,7 @@ from verified, public-safe facts. None of them implements or publishes externall
 
 ### 7. Human-park & notify
 A genuinely human-only block (a credential, a legal sign-off, an external prerequisite) parks
-the ticket — `Human-Blocked` on the hub, or `blocked`+`needs-pm` on Linear/local — and an
+the ticket — `Human-Blocked` on the hub, or `blocked`+`needs-pm` on Linear — and an
 optional **Slack/Lark webhook** pings you out-of-band so it never sits unseen.
 
 ### 8. Mirror — hub → Linear *(hub backend)*
