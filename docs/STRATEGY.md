@@ -273,21 +273,26 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T03:54Z over the 7d team ledger (**860 fires**) via `dev-loop metrics --window
-  7d`: **fire success 49%** (`successRate` 0.4930; 65% over 538 fires when Goals was written
+  Measured 2026-08-10T04:14Z over the 7d team ledger (**868 fires**) via `dev-loop metrics --window
+  7d`: **fire success 49%** (`successRate` 0.4896; 65% over 538 fires when Goals was written
   2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 860** fires; the other
-  **687 carry `errorClass: null`** (LOOP-464), so the classes describe **20%** of the window.
+  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 868** fires; the other
+  **695 carry `errorClass: null`** (LOOP-464), so the classes describe **19.9%** of the window.
   `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked behind
   LOOP-464 + LOOP-463). **The numerator is now demonstrably frozen, not merely lagging:** across
-  four readings this morning the window grew **831 → 838 → 851 → 860** fires while the classified count
-  held at **exactly 173 every time** — twenty-nine consecutive arrivals, none classified, coverage
-  21% → 20.1%. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no
+  five readings the window grew **831 → 838 → 851 → 860 → 868** fires while the classified count
+  held at **exactly 173 every time** — thirty-seven consecutive arrivals, none classified, coverage
+  21% → 19.9%. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no
   class since the fixed anchor **2026-08-08 16:36Z** (≈35 h; trailing sub-60 s streaks 114 / 113 /
   20), so the outage feeds the denominator and nothing feeds the numerator. Compare two readings
   only alongside the fire counts they were measured over.
   First program: **3 of 5 shipped** — LOOP-382 Done · LOOP-383 Done · LOOP-385 Done (`6a4977d`,
-  verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo.
+  verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo. **Both survivors are junior-tier, so both sit
+  in the lane that has produced nothing since the 2026-08-08 16:36Z anchor** — the program cannot
+  advance while that outage holds, whatever their rank. Their rank was nonetheless the wrong shape and
+  is fixed: raised P3/P2 → **P1** on 2026-08-10 (pass 94), which is the only lever that reaches
+  `PICK_RANK` 4.5 and therefore the only way this section's "outranks the current queue" is legible
+  to a picker. They are now 2nd and 3rd in junior's served slice, behind LOOP-365.
 - **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`).**
   Verified 2026-08-10 on the installed tree and on the corpus of the fire that verified it: the
   installed and merged renders are byte-identical for all ten agents (1,011,186 B total; pm
@@ -295,45 +300,44 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
   This is the third rung — source, installed `dist/`, observed effect — reached for this change.
 
-### 2026-08-10 (pm, one-hundred-twenty-fourth fire): the gate shipped, and its switch turned out to have an ungated writer
+### 2026-08-10 (pm, one-hundred-twenty-fifth fire): the operator's stated ranking reached no reader, and the trail's only writer is the process that dies
 
-**approvals C4 is verified and Done (LOOP-394, `d9adbc7`).** The approvals record now has its first
-ENFORCING consumer. All seven ACs were checked against the merged tree, not the handoff comment: the
-`push` gate refuses an ungranted commit and `--strict` exits non-zero; the key is `push:<branch>:<sha>`
-and a grant for a DIFFERENT sha — or the same sha on another branch — does not authorise, which is the
-one pair that separates an end state from a capability; `team.approvals.enforce` ships default-EMPTY
-and opens no db handle at all when off; `W40`/`W41` reach the operator through a `DOCTOR_CHECKS`
-registry row rather than an inline branch in `doctorWorkspace`. The suite runs **87 checks, 0
-failures** on a `git archive origin/main` extract. **The one AC that required a live probe got one:**
-AC5 is safe only while `approve` itself is fire-refused, so it was tested rather than read — inside
-this fire `dev-loop approve …` exits **4** with *"Nothing has been read or written."*
-Merged, not yet published: the installed build is `0cac647`, so `W40`/`W41` are not claimed live.
+**The top-priority program's two unshipped controls were in the FIFO tail (LOOP-384, LOOP-386 → P1).**
+`Goals` says of the observable-and-safe program *"this outranks the current queue"*; the board has
+exactly ONE lever that can express that for an `Improvement`, and it is `priority=1` — LOOP-254
+shipped `PICK_RANK` rank **4.5** for this case under an operator ruling that DECLINED the larger
+variant (full priority as a secondary sort across rank 5) on anti-starvation grounds. So P2 and P3
+are indistinguishable to the pick order, and the two remaining controls carried P3 and P2:
+LOOP-384 was **7th of 13** in junior's slice, LOOP-386 **8th**, both behind five P3 rows filed the
+same day. Program membership was never the gap — the `operator-design-review` label marks exactly
+those five tickets and nothing else. The gap was that PM had not spent the one lever the operator
+ruled into existence for it. Both raised to P1; verified against a prediction rather than a re-read —
+junior's served order is now `365, 384, 386, 468`, then rank 5.
 
-**Then the same probe found the hole (LOOP-503, filed).** `approve` is fire-refused because a fire
-must not grant itself the authorization that gates it. But the SWITCH deciding which classes are
-gated is written by `dev-loop team set`, and that verb asks no fire question at all: inside this fire
-`dev-loop team set team.budget.perFireUsd -1` returned exit **2** from the VALUE validator — a valid
-value would have been written. `hub/src/team-edit.ts` imports no fire marker; the four importers are
-`approvals-cli`, `board`, `cli-agentops`, `secret-cli`. So a fire cannot obtain an approval and does
-not need one — it can clear the class instead. **This is not LOOP-368's ground:** that sweep covered
-the verbs that DESTROY operator data, and a field mutator destroys nothing, it changes the controls.
-`dev-loop.json` was byte-identical before and after both probes (`dfeb113c39e8852f`, 3849 B) — the
-finding is the reachability of the write path, not a write. The approvals lever arrives the moment
-C4 is published, which is why this is a before-the-release item rather than an after-it one.
+**LOOP-504 filed: the §22 trail hole has detection three times over and no remedy.** `Goals` names
+gap 1's two exits — *"only surviving to close, or writing the trail incrementally"*. Detection is
+LOOP-412 / LOOP-425 / LOOP-388; survival is partly LOOP-461 / LOOP-462 / LOOP-476 / LOOP-483; the
+incremental half had **no ticket at all**. Measured on the claude lane only (the opencode lane is
+dark and would confound it), 2026-08-03 → 08-10: **311 fires, 80 killed, 161 narrated entries**. On
+both zero-kill pm days the trail is complete (0.95, 0.96); on the two heaviest-kill days narrated
+equals `fires − killed` EXACTLY (18−10 → 8; 15−12 → 3). LOOP-412's day-granularity instrument
+certifies pm and senior-dev at **0 untraced days** while both lose a quarter of their fires, because
+the day's FILE exists as soon as one fire that day survived. `grep` confirms **no code writes a daily
+report** — `views/reports.ts` only serves the tree — while `recordFire()` (`run-agents.ts:784`)
+outlives every fire and already holds `fireId`/`exitCode`/`timedOut`/`errorClass`. Code-only by
+construction: §22's write-at-close rule is conventions, so changing it would be a §17 proposal.
 
-**One row groomed instead of a duplicate filed.** The consumer-less-class gap I would have filed from
-this lens is already **LOOP-495**. It gained an AC6 instead: its AC4 was going to hard-code `push` as
-safe *because it has a consumer*, and `push` is precisely the counterexample — the consumer exists and
-no `landing:"pr"` ship path calls it (verified independently: `push-guard` appears in exactly ONE
-skill file in the merged tree, the pm-agent `doc-land` line). A check that certifies consumer
-EXISTENCE while reporting it as coverage would put a green tick over the inert state W40 exists to
-name.
+**Three candidates killed before filing.** The quality-gauntlet discoverability gap is already
+LOOP-416 (and its `@v1.10.0` adoption pin is not stale — `quality-reusable.yml` is byte-identical
+between that tag and `origin/main`). Priority-inertness for Improvements is not a defect but the
+operator's explicit LOOP-254 ruling. Program membership is already queryable via
+`operator-design-review`. Filing any of the three would have contradicted a ruling or duplicated a row.
 
-**Board and protocol.** §9c: LOOP-394 going Done resolved LOOP-396's only blocker edge, so C5 was
-unparked and the edge RETIRED in the same write — the remaining seven parked rows all still hold live
-edges to open blockers. `needs-pm` empty on both scans; `external-prereq` is LOOP-463 alone (the
-operator's credit park). Promotion stayed closed: unblocked Todo 28 → 29 (senior 16 after the unpark,
-junior 13) against the default cap of 10 per tier; Backlog 53 → 54.
+**Board and protocol.** Job A empty — the four In Review rows are all `qa`-owned and that verifier is
+dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is Done/Canceled, so none of the seven parked
+rows can unpark — one state read answers all seven. `needs-pm` empty on both scans. Promotion closed
+for the eighteenth consecutive fire: unblocked Todo **28** (senior 15, junior 13) against the default
+cap of 10 per tier; Backlog 54 → 55.
 
 ## Personas
 
@@ -368,6 +372,24 @@ junior 13) against the default cap of 10 per tier; Backlog 53 → 54.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-twenty-fifth fire) — direction stated in prose is not a ranking; the
+  filer must spend the lever the ruling created.** `Goals` has said since 2026-08-06 that the
+  observable-and-safe program *"outranks the current queue"*. Nothing on the board read that sentence.
+  For an `Improvement` — 52 of this board's 55 Backlog rows — the pick order consumes `priority` in
+  exactly one place: `PICK_RANK` rank **4.5**, `priority=1` only, shipped by LOOP-254 under an operator
+  ruling that DECLINED the fuller variant (priority as a secondary sort across rank 5) on
+  anti-starvation grounds. So P2 and P3 are one bucket ordered by creation date, and the program's two
+  unshipped controls sat 7th and 8th of 13 behind five P3 rows filed the same day. **The call: this is
+  PM's grooming debt, not a product defect, and the remedy is the priority field — not a re-tier, not a
+  re-type, and emphatically not re-opening a ruling the operator already made.** LOOP-384 and LOOP-386
+  raised to P1; junior's served order verified against a prediction (`365, 384, 386, 468`, then rank 5)
+  rather than a re-read. **The rule this generalizes: when a direction section states a ranking, the
+  same fire must name the board field that carries it — a priority, a label, an assignee — or the
+  sentence is decoration.** Program membership was never the gap here: `operator-design-review` already
+  marks exactly the five controls. Honest limit: both survivors are junior-tier and that lane has been
+  dark since 2026-08-08 16:36Z, so the correct rank changes nothing until the credit park clears.
+  LOOP-384, LOOP-386, LOOP-254, LOOP-463.
 
 - **2026-08-09 (pm, one-hundred-fourth fire) — a routing MARKER is not prose, and the fix for a
   false marker is the marker, never the gate.** Verifying LOOP-455 (`In Review → Done`) was REFUSED
