@@ -204,10 +204,16 @@ try {
     `fireHealth.threshold 0 is refused and names the opt-out the daemon DOES honour (got ${zeroThreshold.status})`);
   ok(run("set", "fireHealth.threshold", "0.25").status === 0, "…while a real threshold in (0,1] is still accepted");
   // The cadence keys are read once at daemon bootstrap, so the write says so at the point of use.
-  ok(/hub restart/.test(run("set", "humanBlockedReminderHours", "6").stdout),
+  // The hint must name a RUNNABLE command. `dev-loop hub restart` does not exist (hub.ts accepts
+  // start|stop|status|ensure), and printing an unrunnable procedure is this ticket's own defect class —
+  // the reason it was filed was a doc naming three enablement paths that did not exist.
+  const cadenceOut = run("set", "humanBlockedReminderHours", "6").stdout;
+  ok(/restart the daemon: dev-loop hub stop && dev-loop hub start/.test(cadenceOut),
     "a restart-required key prints the restart hint on write (the daemon never re-reads the row)");
-  ok(!/hub restart/.test(run("set", "humanWrite.enabled", "true").stdout),
-    "…and a per-request key does NOT — the hint distinguishes the two, it is not boilerplate");
+  ok(!/hub restart\b/.test(cadenceOut),
+    "…and the hint does NOT name `hub restart`, which is not a subcommand — an unrunnable hint is the defect this ticket exists to remove");
+  ok(!/restart the daemon/.test(run("set", "humanWrite.enabled", "true").stdout),
+    "…and a per-request key prints no restart hint at all — the hint distinguishes the two, it is not boilerplate");
   run("unset", "humanWrite.enabled");
 
   // ── The project ladder: --project, else DEVLOOP_PROJECT, else cwd (§11) ───────────────────────

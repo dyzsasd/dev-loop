@@ -218,7 +218,9 @@ Writes are ADDITIVE — every other key in the row survives untouched.
 WHEN A CHANGE TAKES EFFECT differs by key, so this verb reports it rather than promising one rule:
   humanWrite.enabled, workflow.transitions   take effect immediately — read per request/per write.
   humanBlockedReminderHours, noProgressWindowHours, fireHealth.*
-                                             need 'dev-loop hub restart': the daemon reads these ONCE at
+                                             need a daemon restart ('dev-loop hub stop && dev-loop hub
+                                             start' — there is no 'hub restart' subcommand): the daemon
+                                             reads these ONCE at
                                              bootstrap and passes the numbers into the notifier timers,
                                              which never re-read the row.
 
@@ -316,7 +318,7 @@ export function main(argv: string[]): void {
         writeSettings(db, key, settings);
         console.log(`${key}: ${path} = ${JSON.stringify(value)}${before === undefined ? "" : ` (was ${JSON.stringify(before)})`}`);
         if (Object.keys(settings).length > 1) console.log(`  ${Object.keys(settings).length - 1} other settings_json key(s) preserved: ${Object.keys(settings).filter((k) => k !== path.split(".")[0]).join(", ") || "(same block)"}`);
-        if (spec.restart) console.log(`  ⚠️  takes effect on the next 'dev-loop hub restart' — the daemon reads ${path} once at bootstrap and the notifier timers never re-read the row.`);
+        if (spec.restart) console.log(`  ⚠️  not in effect yet — restart the daemon: dev-loop hub stop && dev-loop hub start. ${path} is read once at bootstrap and the notifier timers never re-read the row.`);
         break;
       }
       case "unset": {
@@ -326,7 +328,7 @@ export function main(argv: string[]): void {
         if (!removed) { console.log(`${key}: ${args[0]} was already absent — nothing written`); break; }
         writeSettings(db, key, settings);
         console.log(`${key}: ${args[0]} unset`);
-        if (spec.restart) console.log(`  ⚠️  takes effect on the next 'dev-loop hub restart' — the daemon reads ${args[0]} once at bootstrap and the notifier timers never re-read the row.`);
+        if (spec.restart) console.log(`  ⚠️  not in effect yet — restart the daemon: dev-loop hub stop && dev-loop hub start. ${args[0]} is read once at bootstrap and the notifier timers never re-read the row.`);
         break;
       }
       default: die(`unknown subcommand '${sub}'\n\n${USAGE}`);

@@ -102,7 +102,7 @@ Usage: dev-loop <command> [args]
   settings list|get|set|unset the hub project's runtime switchboard (projects.settings_json): humanWrite.enabled
                               (the web-write forms), workflow.transitions, the notifier cadences. Additive by
                               path. humanWrite/workflow take effect immediately (read per request); the
-                              cadences need a hub restart (read once at daemon bootstrap)
+                              cadences need a daemon restart (hub stop && hub start; read once at bootstrap)
   up [--cli claude|opencode] [--dry-launch]   one-click: scaffold-if-needed + board daemon + EXEC an
                               interactive operator-console chat (setup happens by talking, not shell);
                               --bundle <f> = headless remote load → run; --attach <url> = console → remote hub
