@@ -383,6 +383,18 @@ this is the largest of them — the fire had a superseded increment, a canceled 
 promotion gate to record. The lever remains LOOP-484 (Backlog, behind the cap), not the per-pass
 discipline.
 
+**LOOP-409 shipped and verified (fire 150, 21:31Z).** The resolved `mode`/`autonomy` now reach the
+hub `projects` row through one reconciler (`hub/src/project-row-sync.ts`), so `dev-loop project
+--json` — the first command every `interface:"cli"` fire runs — reports the operator's configured
+values instead of the column default. Verified at `afc8bc6` in a detached worktree: 29 assertions,
+plus a 10-assertion no-op mutant to confirm the suite discriminates. This board now reads
+`mode:"live", autonomy:"ask"` from the row rather than from a default that happened to match.
+
+**§9c edge integrity, measured board-wide at 21:40Z (fire 151):** four open tickets carry a live
+`Blocked-by:` edge — LOOP-483 (→ LOOP-464, `Backlog`) correctly parked, and LOOP-402/403/404
+(→ LOOP-401, `Todo`) which had been unparked in error 16 minutes earlier and were restored this fire.
+No other open row on the board carries an edge, live or retired.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -416,6 +428,52 @@ discipline.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fifty-first fire) — the same wrong unpark, on the same three tickets,
+  42 hours after it was repaired and ticketed: a protocol whose only enforcement is agent judgement.**
+
+  **What happened.** Sweep fire `866ee43f` (21:25:11–21:25:28Z) removed the `blocked` label from
+  LOOP-402/403/404, commenting `Unparked: blocker LOOP-382 resolved (Done)`. Those tickets carry no
+  `Blocked-by: LOOP-382` marker. Their own live marker is `Blocked-by: LOOP-401`, and LOOP-401 is
+  `Todo`. §9c step 3 admits an unpark only when every blocker is terminal, so all three were unparked
+  against an edge they do not have — and, because no `Unblocked-by:` line was emitted, the real edges
+  survived, which is the only reason this was detectable afterwards. Re-parked at 21:42Z with the full
+  label re-pass, state left `Todo` per §9.
+
+  **This is a repeat, and the interval is the finding.** Sweep fire `df542cde` did the identical thing
+  to eight rows on 2026-08-08T16:27Z — including these same three, citing this same LOOP-382. PM
+  repaired it at 16:35Z and filed LOOP-456. Forty-two hours later, with LOOP-456 sitting P1 in
+  `Backlog`, the same actor made the same substitution of a design *parent* for a dependency *edge*.
+  The dependency is not clerical: LOOP-402 imports `readPause` from `hub/src/scheduler-pause.ts`, the
+  module LOOP-401 creates, and that path exists nowhere in `origin/main` at `f476ea2` — verified
+  against the full tree listing, not a single-path probe (`git ls-tree <path>` exits 0 on empty output,
+  so the obvious check reports PRESENT for a file that is absent).
+
+  **The structural call: detection and prevention are two tickets, and only one of them existed.**
+  LOOP-456 scopes itself explicitly to *"why nothing noticed"* and fixes `dependency_graph`, a read
+  surface. Round 2 is the demonstration that a reporting fix cannot stop the write. Filed **LOOP-537**
+  (P1, `Improvement`+`pm`, junior) for the missing half: `ticketwrite.ts` already refuses writes that
+  break three board invariants — the design gate, the verifier-owner close gate, sensitive inheritance
+  — and the §9c edge is the one edge-carrying rule with no writer-side gate at all. The predicate is
+  not new work: `metrics.ts:581 hasLiveBlockerEdge` already implements it over the canonical
+  `liveBlockerIds` parser, including LOOP-321's fail-safe; it is module-private and
+  `dependency-graph.ts` open-codes the same walk. The ticket's ACs require exactly one implementation
+  to survive. Both tickets should land; neither subsumes the other.
+
+  **Job B2 — the Backlog is not the bottleneck, and this fire has the audit to say so.** All 73
+  `Backlog` rows: 0 without a dev tier, 0 without an owner label, 0 thinner than 400 B, 0 older than
+  seven days, 3 staged design children correctly excluded. Nothing needed grooming. A first pass
+  flagged 13 rows as missing acceptance criteria; that was the predicate's error, not the board's —
+  they carry `## Acceptance criteria` with numbered or `**AC1**` items rather than checkboxes, and were
+  cleared by reading three of them. Promotion stayed shut for the 42nd fire in 43: senior 15/10,
+  junior 10/10 after the re-park returned three rows to the blocked set.
+
+  **Job C — `consistency`, swept on the moved diff, yield zero.** The code sha moved 225713d → afc8bc6,
+  so the lens list reset and LOOP-409's reconciler focused the first lens. The question a projection
+  invites is whether config can change without it running: `syncProjectRows` is reached from
+  `teamSet`, `addProject`, `team-init`, `init-service` — every validated mutator — and additionally
+  from `hub.ts:21` at hub start, so even a hand-edited `dev-loop.json` converges at the next daemon
+  boot. No gap; recorded so the lens is not re-run at this sha.
 
 - **2026-08-10 (pm, one-hundred-fiftieth fire) — a ticket this agent filed last fire carried a false
   factual premise; the lens that found it produced no ticket of its own.**
