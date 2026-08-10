@@ -369,6 +369,61 @@ lever is LOOP-484, not the per-pass discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-second fire) — the four-fire refusal ended on a machine
+  action, and the lens that swept the retention half found the one artifact class nobody bounds.**
+  **LOOP-499 is `Done`.** Its §21a design-gate verdict passed at fire 138; the *close* was refused
+  four fires running, byte-identically, by a stale installed build. Fire 141 spent nothing on it and
+  recorded a two-part exit condition instead — `declaredParentOf` present in the installed
+  `dist/design-parent.js` **and** a daemon pid other than 23716, because a reinstall does not reach a
+  live process. The operator's swap landed at 10:08Z; this fire checked both arms first (**3** grep
+  hits, **pid 69754**), then closed on the first attempt. **LOOP-525** (the operator-parked build
+  swap) verified `Done` on its own three ACs.
+  **The pass was discriminating, which is the part worth recording.** The refusal named five tickets;
+  all five — LOOP-495/496/497/500/501 — are still in `Backlog`, untouched. The child set did not
+  move, the board did not move, and the only variable that changed was the installed build. Had any
+  of the five been promoted to satisfy the gate, the close would have proved nothing. Declining to
+  promote them across four fires is what made the eventual pass evidence.
+  **LOOP-521 landed mid-fire and the late queue re-read caught it** — `5ef007b`, PR #287, the
+  `dev-loop push` verb that owns the guard and the push in one call. Re-reading `queue` late has now
+  earned its keep at five consecutive fires; a fire that read the board only at Job A would have
+  filed its report while a `sensitive` senior increment sat unclaimed in its own verify queue.
+  **The conversion-retention lens came up at code sha `c66ac22`, pointed at RETENTION rather than
+  conversion** — not "does a new operator start" but "does the workspace stay movable once they keep
+  it running", because the copy-the-folder migration contract (§27 I4, README *Moving to another
+  machine*) is unconditional and nothing bounds what the folder accumulates. Measured: `.dev-loop` is
+  **1.6 GB after 11 days** (~143 MB/day). Board snapshots have retention by embedded timestamp,
+  reports have D6 tails, design docs have D6 archive — the two largest consumers after worktrees have
+  none: `run.log` **342 MB**, opened `openSync(path, "a")` and rotated by nothing, and
+  `runner-logs/` **260 MB**. Both got the §16 perms posture (LOOP-93) and no lifetime at all. Filed
+  as **LOOP-529**, `sensitive`/senior — a pruner that unlinks inside the directory holding
+  `secrets.env`, `hub.db` and the fire ledger is deletion work, whatever its size.
+  **Two candidates died in dedupe, both by opening the sibling's ACs rather than stopping at the
+  hit** (RULE 19 arm 1). The funnel never offers a comms step — `init-wizard.ts` asks workspace, team
+  key, backend, project, repo, and nothing else — so a new adopter's daily digest silently never
+  fires; but **LOOP-377**'s AC1 is already *"on a clean board with an empty queue, the operator still
+  learns the outward channel is off"*, and `init` ends with the doctor verdict, so its fix reaches the
+  funnel. No amendment. The 798 MB of worktrees is **LOOP-487**, whose ACs are the reap classifier's
+  dry-run/run parity and the no-force invariant — adjacent, and not a lifetime. Naming which half a
+  sibling owns is what let LOOP-529 be filed as the residue instead of a fourth ticket on one
+  directory.
+  **Process finding, and it is the same shape three times in one fire: a probe can fail OPEN.** To
+  test whether the README's verbs resolve I ran `dev-loop <verb> --help` and passed anything whose
+  output did not contain "unknown". That predicate cannot discriminate: `doctor`/`metrics` silently
+  accept unknown flags at exit 0, so an "ok" may mean *the verb ran*, and `run`/`up` were in that
+  list. Nothing was disturbed — checked immediately, the only scheduler was the one that launched
+  this fire — but the probe was not entitled to that outcome. Twice more the same fire, two greps
+  returned empty because a `cd` earlier in the same call had moved the cwd out from under a relative
+  path, and empty read exactly like the clean result being hunted for. **A probe's pass-condition
+  must be a positive assertion about what the command DID, never the absence of an error string** —
+  the sibling of the line-oriented-grep and `grep -c` traps already in this log. `ticket`/`tickets`
+  do reject `--help` (exit 2, "unknown flag"), but the top-level `--help` documents their full flag
+  surface, so it is an ergonomic wart and was not filed.
+  **Board:** Todo 23 unblocked (12 senior / 11 junior), both tiers over the per-tier cap of 10, so
+  Job B2 promoted nothing for the thirty-third consecutive fire; Backlog 74. The credit prerequisite
+  behind **LOOP-463** cleared at ~17:2xZ, and the operator found a second outage masked behind it —
+  a restart PATH omitting `~/.opencode/bin` had killed every opencode fire from 10:08Z to 18:23Z, so
+  the cheap tiers were dead for eight hours *after* the 402s stopped being the reason.
+
 - **2026-08-10 (pm, one-hundred-forty-first fire) — the outward goal front had never been swept, and
   the artifact it publishes is the one nothing runs.**
   The **strategy-gaps** lens came up at code sha `c66ac22` and was pointed deliberately at the
