@@ -283,106 +283,38 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo.
 
 
-### 2026-08-10 (pm, one-hundred-fifteenth fire): the release resume is tag-anchored, and its one in-body guard is pinned by an assertion that cannot read it
+### 2026-08-10 (pm, one-hundred-twentieth fire): the north star stops carrying facts it cannot keep
 
-**LOOP-385 verified Done** (`6a4977d`) — the third `sensitive` increment closed in three fires, and the
-one with the widest blast radius: it decides which tree becomes the published artifact of a public npm
-package. A `bump: explicit` resume now checks out `refs/tags/v<version>` and publishes that tree. The
-branch tip is not consulted, so a commit landing after the tag no longer breaks every future resume
-dispatch — the failure that cost release 1.15.1 and produced the hand-pushed `release/v1.15.1-resume`
-workaround branch. `hub/src/release-mode.ts` makes the decision once for the whole job from four facts,
-and carries no input for a branch tip, so the defect is now excluded by the type rather than by a rule
-someone has to remember. All four ACs verified against the merged tree; state established is **merged,
-not yet published** (the resume path is exercised by the next dispatch, and no fire may cut a release).
+**LOOP-494 approved and landed** (`b310dd0`) — the first §9a investigation this doc has run against
+its own WRITE POLICY rather than against the product. The finding was not that `Goals (north star)`
+held wrong numbers; it was that `Goals` is the wrong place for numbers at all. A direction section
+writable only by an operator approval round cannot carry state that decays in hours, so it goes stale
+by construction — and it had, four assertions of seven, while contradicting `Current state` inside one
+published version on whether the first program was 2 of 5 or 3 of 5. The board said 3.
 
-**Two design choices in it are worth carrying.** The two `HEAD == tag` assertions were kept rather than
-deleted: after the tag checkout they hold by construction, which is a stronger guarantee than the branch
-still matching. And AC2 needed no code change — the existing single `git push --atomic` of branch+tag
-already bounds the fresh-release race, because a rejected branch update takes the tag with it and leaves
-no half-tagged state. That claim is now falsifiable: de-atomising the push into two commands turns a
-named assertion red. `docs/RELEASING.md` records both, and states explicitly that the workaround branch
-should not be re-invented.
+**The precedent is what made it structural rather than another correction.** LOOP-446 had already
+fixed exactly this section by VALUE, at the cost of an investigation plus an approval round, and it
+was falsified again in roughly a day. Proposing the same remedy a second time would have bought the
+same day. The applied change moves the measurements to `Current state` under a named bullet PM
+re-measures each pass, and leaves `Goals` holding what a direction section is for: three gap CLASSES,
+the through-line, and the five named controls (LOOP-382..386) with no shipped count. Distilled as
+**STANDING RULE 35**.
 
-**A workflow-shape test that reads step-level gates is blind to a guard inside a step body
-(LOOP-490).** Four steps carry the fix on their `if: env.RELEASE_MODE` and are pinned. One step —
-`Verify remote release refs before publish` — must run on both paths, so its fix is an
-`if [ "$RELEASE_MODE" = "fresh" ]` around the remote-branch comparison *inside* the body. Its only
-assertion checks that `REMOTE_TAG` appears and that no step-level gate does; neither term can observe
-the conditional. Unwrapping it on a scratch copy restores this ticket's exact defect in the last gate
-before an irrevocable publish, and the suite stays green at exit 0. Two controls establish that the
-harness works and this one arm does not: flipping `resume` to `fresh` in the decision module fails, and
-de-atomising the push fails with its own message. The shipped workflow is correct, so this is a
-regression guard rather than an AC failure — the standing rule that acceptance criteria pin additions
-and not removals, measured once more.
+**The operator's ruling added the half I had not seen.** Approving as proposed, they attached the
+coverage requirement: wherever the moved values are re-measured, the unclassified share rides with
+them. The live bullet therefore reads *172 of 807 fires classified — 21%*, naming the 635
+`errorClass: null` rows (LOOP-464) as the reason the class sizes are not the error profile. That is
+the sharper statement of the original defect: `Goals` was falsified not only because its numbers aged
+but because a 21% sample was presented as the whole. Their second instruction was a refusal — the
++226 B stays LOOP-484's ceiling problem; direction prose is not to be trimmed to offset a byte count.
 
-**LOOP-486 is now observed in both directions.** Pass 86's own docs-only push to `main` was cancelled
-by the code push that followed it eight minutes later, and this fire found `6a4977d`'s verification of
-the release path still in flight. A docs-only commit and a code commit cancel each other's runs
-symmetrically under `cancel-in-progress`, and the docs side is the one that can silently leave a
-supply-chain change unverified on `main`. Reading `gh run list --branch main` before a doc-land is the
-working rule until that ticket lands.
-
-
-### 2026-08-10 (pm, one-hundred-sixteenth fire): the retirement reached the whole taught surface, and the deferral that had no ticket
-
-**LOOP-465 verified `Done`** (`0cac647`, PR #282) — the operator's own §17 apply of the proposal
-this loop filed. Verified against the **merged tree**, extracted with `git archive origin/main`
-because the shared checkout was two commits behind it, and rendered per agent with
-`dev-loop conventions --agent <a> --root <that tree>`.
-
-All four acceptance criteria hold. `references/backend-local.md` is gone; **zero** SKILL
-`Sections:` lines and §18's per-backend read stub still name it. Every one of the ten agents now
-renders exactly **one** line matching the proposal's own pattern, and it is the retirement sentence
-itself. The delivered saving, measured pre (`9a431d1`) → post: **pm −2,368 B**, qa −2,298,
-junior-dev −2,245, dev −2,253, ops −2,191, sweep −2,150, senior-dev −2,126, architect −2,052,
-reflect −1,998, communication −1,571. Both pinning suites pass on the merged tree
-(`CONTEXT_BUDGET_OK`, `BOOT_PREFIX_OK`). **Merged, not installed** — the corpus reaches fires at the
-next CLI reinstall, so this fire's own prompt still carried the retired spans. The win is banked,
-not yet delivered.
-
-**The over-prune check had to be a LINE diff, and a count diff would have read as damage.** The
-proposal named exactly one hazard: a prune keyed on the bare string `local` also destroys
-`machine-local`, `localhost`, `local git checkout`, and the still-live `docSystem: "backend" |
-"local"` enum. `machine-local` in the pm slice went **6 → 4**. Diffing the lines rather than the
-counts shows both losses are the backend sense — `"local"` ⇒ the machine-local file board, and §2's
-local-mode board-*directory* firewall paragraph — while the four survivors are all the
-runtime-state sense (§11's state dir, §22's three report lines). `marketplace.json` kept
-**`localhost UI`** while dropping only "a local file board, or". **The durable rule: when an
-acceptance criterion says a sense must survive a prune, a surviving COUNT is not evidence — only
-the diff of the removed lines is.**
-
-**AC3's one tension, resolved by asking who consumes the constant.** The apply touches
-`hub/src/context-bill.ts`, which reads as a runtime-code change against an AC that forbade one. Its
-`CONVENTIONS_BUDGETS` export has exactly one consumer anywhere in `hub/` — the ratchet test — so no
-doctor code and no executed path moved. Re-seeding was also not optional: at the old rows four
-agents would have carried >2 KB of slack, which the ratchet's own second assertion flags. **A
-change inside `src/` is a runtime change only if something at runtime reads it.**
-
-**The deferral that had no ticket → LOOP-492 (filed).** The apply comment recorded "boot-prefix's
-now-dead local ternary branch is left for a dev ticket"; no such ticket existed. `boot-prefix.ts` is
-now the last file in `hub/src/` naming the deleted artifact (line 230's ternary, line 10's header
-comment). It is unreachable — `team-config.ts:399` emits E02 and `validateWorkspaceFile` throws, so
-a `local` workspace never loads — and `existsSync` guards the read, so this is cleanup, not a
-defect. Its AC5 matters more than the deletion: LOOP-465 removed the branch's only test row, so the
-arm currently has **no coverage at all**. This is the third time a finding handed to a named future
-owner in a close comment turned out to be owned by nobody; the check is cheap and it keeps paying.
-
-**Direction was ratified by the operator, not by this loop** (`fc170bb`). The Vision's
-preserved-paths sentence, the repositioning arc's compatibility list, and the Glossary's Backend
-entry still mandated preserving the retired backend while Non-goals already recorded its
-retirement. That is a §20 D4 direction edit and therefore theirs; it advanced this doc's watch
-cursor, and the north star can no longer instruct restoring a backend the loader refuses.
-
-**Carried forward out of the rolled fire-114 journal:** LOOP-394 (approvals C4, the first
-enforcing consumer) is back at `Todo`. **Hold its AC6(c) default of an EMPTY `approvals.enforce` at
-verify** — that default is what bounds LOOP-489's window, and it is the kind of default a later
-round widens without anyone noticing.
-
-Board: **45 Backlog / 28 unblocked Todo (senior 15, junior 13)** — both tiers over the §5a cap of
-10, so this fire promoted nothing and groomed only, which is a valid fire. Zero non-conformant rows
-across every live ticket. §9c: eight parked tickets, all eight holding live edges with open
-blockers, zero unpark candidates and zero `blocked` labels without an edge. Decision queue: **1**
-(LOOP-463, the operator's OpenRouter credit — the cheap tier has now been dark ~37 h).
+**Two working facts from the fire itself.** The operator ruled at 02:30:22Z, twenty-five minutes into
+a fire that had already read the ticket and found no verdict — an In Review@operator park is worth
+re-reading late, not only at Job A. And the tell that caught it was a false alarm honestly chased: the
+decision queue returned two rows on a 24h window and one on 7d, which reads exactly like a window bug.
+`decisionQueue` has no window predicate at all (`metrics.ts:675`); re-running every window returned one
+row uniformly, and the real cause was the operator's own mid-fire write flipping `assignee` off
+`operator`. One extra command separated a state change from a defect and kept a ticket unfiled.
 
 ## Personas
 
@@ -658,6 +590,45 @@ blockers, zero unpark candidates and zero `blocked` labels without an edge. Deci
      early measurements describe a tree that no longer exists, so re-run a hand-off's numbers
      rather than quoting them (LOOP-392's body said 12 fail; the landed tree measures 2 —
      LOOP-488).
+  35. **A fact belongs in the section whose WRITE RATE matches its DECAY RATE — and a number
+     published without its coverage is not yet a fact.** The 2026-08-06 top-priority block put a
+     fire-success percentage, six error-class counts, per-agent report ratios and per-ticket program
+     status inside `Goals (north star)`: state that decays in hours, held in the one section whose
+     only legal writer is a §9a approval round (days). Staleness was therefore STRUCTURAL, not an
+     oversight — four of seven assertions were false at re-measure, and the same file contradicted
+     itself on whether LOOP-385 had shipped. Correcting the values was already tried and did not
+     hold: **LOOP-446** spent an investigation plus a full approval round on three numbers and the
+     section was falsified again within about a day. **LOOP-494** moved the measurements to
+     `Current state`, which PM re-measures every pass under the D4 autonomous policy, and left
+     `Goals` holding the gap CLASSES, the through-line and the five named controls. The operator's
+     ruling attached the corollary: the classified counts now ride with the population they describe
+     (**172 of 807 fires — 21%**; the other 635 are `errorClass: null`, LOOP-464), because *a number
+     without its coverage is how `Goals` got falsified the first time*. Ask of any recorded fact:
+     **who may write this, how often, and how fast does it go wrong?** A correction round is the
+     wrong instrument for a fact that decays faster than the round takes.
+  36. **Read `gh run list --branch main` before a doc-land.** `test.yml` is
+     `concurrency: test-${{ github.ref }}` with `cancel-in-progress: true` and no `paths-ignore`, so
+     pushes to `main` cancel each other's runs — and the docs-only side is the one that can silently
+     leave a code change unverified on `main`. Observed in both directions: pass 86's docs push was
+     cancelled by the code push eight minutes later, and pass 88's docs run was cancelled by
+     `e6b5477`. In force until **LOOP-486** lands. Distilled at pass 89 from the fire-115 journal
+     before rolling it.
+  37. **When an acceptance criterion says a SENSE must survive a prune, a surviving COUNT is not
+     evidence — only the diff of the removed lines is.** LOOP-465 pruned the retired `local` backend
+     from the taught surface, and the named hazard was that a prune keyed on the bare string also
+     destroys `machine-local`, `localhost` and the still-live `docSystem` enum. `machine-local` in
+     the pm slice went 6 → 4, which reads as damage until the removed LINES are read: both losses
+     were the backend sense, all four survivors the runtime-state sense. A count answers *how many*
+     and the criterion asked *which*. Distilled at pass 89 from the fire-116 journal before rolling
+     it; the same shape as RULE 33 one level down — a proxy for the property is not the property.
+  38. **A change inside `src/` is a RUNTIME change only if something at runtime reads it.** LOOP-465
+     edited `hub/src/context-bill.ts` under an AC forbidding runtime-code changes; its
+     `CONVENTIONS_BUDGETS` export has exactly one consumer in all of `hub/` — the ratchet test — so
+     no doctor code and no executed path moved, and re-seeding was not optional because the old rows
+     would have tripped the ratchet's own slack assertion. Resolve "is this a code change?" by
+     naming the CONSUMER, never by the file's directory. Its converse is the live hazard the loop
+     keeps re-learning: code that IS in the installed build can still sit behind a flag or a caller
+     that never runs, so shipped is not running. Distilled at pass 89 from the fire-116 journal.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -731,6 +702,23 @@ blockers, zero unpark candidates and zero `blocked` labels without an edge. Deci
     **LOOP-462**/**LOOP-466**/**LOOP-476** (the deadline that still kills working fires), and
     **LOOP-489** (the bundle carry that C1's un-gated `approve`/`revoke` made real once LOOP-392
     shipped the verb).
+  - **2026-08-10 (pm, one-hundred-fifteenth fire)** — the tag-anchored release resume (**LOOP-385**
+    verified Done, `6a4977d`): a `bump: explicit` resume publishes `refs/tags/v<version>`, never the
+    branch tip, and `release-mode.ts` excludes the defect by type rather than by a remembered rule.
+    Rolled by **§20 R2 pass 89** → [`2026-08.md`](strategy-archive/2026-08.md). What still governs
+    from it: **STANDING RULE 36** (read `gh run list --branch main` before a doc-land), distilled
+    above before the roll. Live residuals at roll time, both on tickets: **LOOP-490** (the
+    pre-publish gate whose in-body guard no assertion can observe) and **LOOP-486** (docs and code
+    pushes cancelling each other's runs on `main`).
+  - **2026-08-10 (pm, one-hundred-sixteenth fire)** — the `local` backend's retirement verified
+    across the whole taught surface (**LOOP-465** Done, `0cac647`/#282): zero `Sections:` lines name
+    the deleted contract, every agent renders one retirement sentence, and the per-agent delivered
+    saving was measured pre→post (pm −2,368 B … communication −1,571 B) as **merged, not installed**.
+    Rolled by **§20 R2 pass 89** → [`2026-08.md`](strategy-archive/2026-08.md). What still governs
+    from it: **STANDING RULES 37 and 38**, distilled above before the roll. Live residual carried
+    forward on its ticket: **LOOP-394** (approvals C4) — **hold its AC6(c) default of an EMPTY
+    `approvals.enforce` at verify**; that default is what bounds **LOOP-489**'s window, and it is the
+    kind of default a later review round widens unnoticed.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
