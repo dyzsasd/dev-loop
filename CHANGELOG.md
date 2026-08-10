@@ -3,6 +3,23 @@
 All notable changes to the dev-loop plugin. Most of these landed from **live-loop
 experience** — a real failure observed while the agents ran, then hardened into a rule.
 
+## Unreleased
+
+- **An app reviewer is not a person, and the merge gate now knows it without being told
+  (LOOP-491).** On 2026-08-10 every open feature PR — 6 of 6 — was held by `dev-loop pr merge` on
+  `forgeReview: unresolved objection from @chatgpt-codex-connector`, and loop landing throughput was
+  zero. The axis exists so the loop may not merge over a **person's** objection (§12c), but it
+  decided who counted as a person by membership in `team.agentReviewers`, a hand-typed login list.
+  The workspace had that list set — to two other bots — so the one reviewer that actually reviews
+  this repo read as a human and blocked everything, while the hold text named the reviewer without
+  naming what would clear it. `readPrReviewState` now selects `author.__typename` in the GraphQL
+  call it already sends, on both the review and review-thread arms, and `mergeGuard` excludes actors
+  GitHub itself types as `Bot` as a **union** with the configured list — the list still covers a bot
+  posting through a User-shaped account, which no forge field betrays. `latestReviews` keeps deciding
+  who requested changes; the new selection only types them. When the GraphQL call fails the bot set
+  is empty and the axis holds exactly as before: the degrade direction is "treat everyone as a
+  person", never "merge anyway".
+
 ## 1.15.1
 
 **Four guards that could not see, and one that a fire walked straight through.** Every entry here is

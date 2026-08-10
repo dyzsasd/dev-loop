@@ -582,8 +582,19 @@ export function mergeGuard(
         // Forge failure (gh missing/unauth/offline/timeout/no-PR) → degrade (§3.4)
         forgeReview = { trip: false, skipped: true, skipReason: "forge-unreachable", changeRequesters: [], unresolvedThreadAuthors: [] };
       } else {
-        // Agent-reviewer exclusion (§3.2): ignore any reviewer whose login is in the agent set.
-        const agentSet = new Set(opts.agentReviewers ?? resolveAgentReviewers(repoDir));
+        // Agent-reviewer exclusion (§3.2): ignore any reviewer that is not a person.
+        // TWO sources, unioned — never one replacing the other (LOOP-491 AC1/AC2):
+        //   · `team.agentReviewers` — the operator's login list. Still required for a bot that
+        //     posts through a User-shaped account (a PAT-driven bot), which no forge field betrays.
+        //   · `prState.botLogins` — actors GitHub itself types as `Bot`. Config alone made the
+        //     exclusion depend on the operator having hand-typed a login they may never have seen:
+        //     an app reviewer nobody enumerated read as a person and held every PR, which is the
+        //     inverse of what this axis is for (§12c — the loop may not merge over a PERSON's
+        //     objection). An empty botLogins (GraphQL down) degrades to the old, holding behaviour.
+        const agentSet = new Set([
+          ...(opts.agentReviewers ?? resolveAgentReviewers(repoDir)),
+          ...prState.botLogins,
+        ]);
         const humanChangeRequesters = prState.changeRequesters.filter((l) => !agentSet.has(l));
         const humanThreadAuthors = prState.unresolvedThreadAuthors.filter((l) => !agentSet.has(l));
         const forgeTrip = humanChangeRequesters.length > 0 || humanThreadAuthors.length > 0;
