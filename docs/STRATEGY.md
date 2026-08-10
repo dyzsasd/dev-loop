@@ -51,7 +51,8 @@ ever wanted. The operator has decided the daemon IS the destination — it is wh
 UI turnkey and lets the daemon own coordination. The reversal is bounded and honest: the
 daemon is **localhost-only**, agents stay **stateless per fire**, and **the existing
 daemon-free paths keep working byte-for-byte** — the stdio MCP server, the read-only web
-daemon, and the `linear` / `local` / `service` backends are all preserved. The new
+daemon, and the `linear` / `service` backends are all preserved. (The `local` file
+board has since been retired — LOOP-465, ratified by the operator 2026-08-10.) The new
 daemon-primary path is **strictly additive and opt-in**: a project that doesn't enable it is
 unaffected.
 
@@ -84,7 +85,7 @@ bridge (DL-1 / DL-2 / DL-3 / DL-4) — all Done.
 
 **Top priority (operator, 2026-06-24): the STANDALONE-DAEMON + MULTI-CLI repositioning** (Vision
 above). Build it as an additive, phased arc — each phase independently shippable, the loop runnable
-throughout, every current path (stdio MCP, read-only daemon, `linear`/`local`/`service` backends,
+throughout, every current path (stdio MCP, read-only daemon, `linear`/`service` backends,
 the Claude plugin) unbroken byte-for-byte. **Full design + critique-folded decisions:
 `docs/design/daemon-multicli-repositioning.md`.** PM drives the backlog from these phases:
 
@@ -437,7 +438,8 @@ working rule until that ticket lands.
 ## Glossary
 
 - **Fire** — one run of an agent; agents are stateless per fire (re-read ground truth).
-- **Backend** — the coordination substrate: `linear` / `local` / `service` (hub).
+- **Backend** — the coordination substrate: `linear` / `service` (hub); the `local`
+  file board is retired (LOOP-465).
 - **Hub** — the `node:sqlite` MCP system-of-record (`backend:"service"`); gives real
   per-agent identity (`DEVLOOP_ACTOR`).
 - **点评 (operator review)** — a `<report>.review.md` critique an agent distills into a
