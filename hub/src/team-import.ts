@@ -205,12 +205,20 @@ function classifyStatePath(rel: string): FileClass {
 // a failure — the ORIGINAL error text: "copy failed" tells the operator nothing, while EACCES vs
 // ENOSPC is the whole difference between the two things they would do next.
 function copyFileOnce(src: string, dst: string): { outcome: "copied" | "skipped" | "failed"; error?: string } {
-  if (existsSync(dst)) return { outcome: "skipped" }; // AC2 — destination content is never replaced
+  if (existsSync(dst)) return { outcome: "skipped" }; // the common case, answered without an exception
   try {
     mkdirSync(join(dst, ".."), { recursive: true });
-    cpSync(src, dst); // cpSync on a file: content + mode, source untouched
+    // `errorOnExist` + `force:false` makes the never-overwrite promise ATOMIC rather than a check the
+    // filesystem can invalidate between the two calls (PR #286 review round 2). The destination
+    // workspace is LIVE — an agent can write the very file being copied in that window — and plain
+    // `cpSync` overwrites, so the check above was advisory and the guarantee was not kept under
+    // concurrency. EEXIST from the race is the same answer the check gives: skipped.
+    cpSync(src, dst, { force: false, errorOnExist: true }); // content + mode, source untouched
     return { outcome: "copied" };
-  } catch (e) { return { outcome: "failed", error: (e as Error).message }; }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ERR_FS_CP_EEXIST" || (e as NodeJS.ErrnoException).code === "EEXIST") return { outcome: "skipped" };
+    return { outcome: "failed", error: (e as Error).message };
+  }
 }
 
 // Walk `srcDir` and copy every file into `dstDir`, classifying as it goes.
@@ -393,18 +401,31 @@ export function teamImport(argv = process.argv.slice(2)): number {
 
   if (o.dryRun) { log("\n(--dry-run: nothing changed)"); return 0; }
 
-  // Execute. Config first (the source of truth), then the classified copy.
-  writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
+  // Execute. PROVENANCE FIRST, then the config, then the classified copy (PR #286 review round 2).
+  //
+  // The order is the whole guarantee. The config is what makes the next run see the key as taken, and
+  // the marker is what tells it the key is ITS OWN — so a config written before a marker that then
+  // fails to land (an unwritable `.dev-loop`) leaves a project the next run must reject as a
+  // stranger's, with no route back except editing dev-loop.json by hand. That is the recovery-by-rerun
+  // path AC4 promises, broken by the very fix that protects the stranger.
+  //
+  // Stamping first cannot have the mirror-image failure: a marker with no config entry is simply an
+  // un-imported project whose next run creates the entry and finds the marker already there.
   ensureStateDirs(ws);
+  for (const srcKey of selected) {
+    const key = o.renames[srcKey] ?? srcKey;
+    try { writeProvenance(wsProjectDir(ws, key), { from: v1Path, srcKey }); }
+    catch (e) {
+      die(`cannot stamp the import marker at ${join(wsProjectDir(ws, key), IMPORT_MARKER)}: ${(e as Error).message}\nNothing was changed — ${ws.filePath} is untouched, so this run is a clean retry once the destination is writable.`);
+    }
+  }
+  writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
   const reports: string[] = [];
   let anyFailed = false;
   for (const srcKey of selected) {
     const key = o.renames[srcKey] ?? srcKey;
     const oldStateDir = join(devloopDataDir(), srcKey);
     const rep = newReport();
-    // Stamped first, so a run that dies mid-copy is still recognisable as this verb's own work on the
-    // next attempt (AC4) rather than reading as a foreign project under the same key.
-    writeProvenance(wsProjectDir(ws, key), { from: v1Path, srcKey });
 
     // lessons.md is re-homed into the library rather than copied in place, so it is handled here and
     // excluded from the tree walk below (classifyStatePath maps it to "lessons" either way).

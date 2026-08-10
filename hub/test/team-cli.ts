@@ -204,14 +204,19 @@ try {
     // half-migration. The lessons library is made read-only so exactly one class fails.
     const lws2 = join(tmp, "dp-ws2");
     run("team", ["init", "--dir", lws2, "--key", "dp2-team", "--backend", "linear", "--linear-team", "DP"]);
-    const lessonsDir = join(lws2, ".dev-loop", "lessons");
-    mkdirSync(lessonsDir, { recursive: true });
-    chmodSync(lessonsDir, 0o500); // r-x: mkdir succeeds (it exists), the file write inside cannot
+    // The obstruction is a FILE standing where the `reports/` tree must be created, NOT a chmod
+    // (PR #286 review round 2). Mode 0500 does not stop root, so in a root-based CI container the
+    // import succeeded and this arm failed for a reason that had nothing to do with the code. A
+    // regular file in the path of a `mkdir -p` is ENOTDIR/EEXIST for every uid, and it lands inside
+    // `copyFileOnce`, which is where AC4's contract lives: one class FAILS and is named, the others
+    // still copy, the exit is non-zero.
+    const blockedDir = join(lws2, ".dev-loop", "devplatform");
+    mkdirSync(blockedDir, { recursive: true });
+    writeFileSync(join(blockedDir, "reports"), "not a directory\n");
     const dp3 = run("team", ["import", "--into", lws2, "--from", join(lgc, "projects.json")],
       { cwd: tmp, extra: { DEVLOOP_DATA_DIR: lgc } });
-    chmodSync(lessonsDir, 0o700); // restore before any later assertion reads it
     ok(dp3.code !== 0, "AC4 an unwritable destination exits non-zero");
-    ok(/FAIL\s+devplatform:.*lessons/.test(dp3.out) && /MIGRATION INCOMPLETE/.test(dp3.out),
+    ok(/FAIL\s+devplatform:.*reports/.test(dp3.out) && /MIGRATION INCOMPLETE/.test(dp3.out),
       "AC4 the failure names the file class and says the migration is incomplete");
     ok(existsSync(join(lws2, ".dev-loop", "devplatform", "pm-state.json")),
       "AC4 the classes that DID copy are kept — the state is recoverable by re-running, not restarted");
