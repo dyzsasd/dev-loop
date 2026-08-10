@@ -755,6 +755,123 @@ try {
     }
   }
 
+  // ══ LOOP-443: Step 1's early return claims "nothing to land" without establishing it ══════════
+  // LOOP-369 fixed the clobber and declared this one early return safe — "the one place that
+  // genuinely means 'entered with nothing to land'". It does not mean that: it reads
+  // origin/<db>...<db> and nothing else, so it means "<db> has nothing ahead of origin". Those
+  // differ the moment PM's doc commit is on another branch, which is the SAME mechanism LOOP-369
+  // measured with the order reversed — the checkout is moved to a ticket branch BEFORE PM commits,
+  // so `git commit` puts the doc commit there and origin/main...main is empty.
+  {
+    const o4 = join(ROOT, "origin4.git");
+    const ws4 = join(ROOT, "ws4");
+    const r4 = join(ws4, "dev-loop");
+    mkdirSync(o4, { recursive: true });
+    mkdirSync(ws4, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", o4]);
+    execFileSync("git", ["clone", "-q", o4, r4]);
+    writeFileSync(join(ws4, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "test-doc-land-443",
+      team: { key: "test", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { "dev-loop": { path: "dev-loop", remote: o4, landing: "pr" } },
+      projects: { test: { repos: [{ ref: "dev-loop" }], strategyDoc: { path: STRATEGY_PATH } } },
+    }, null, 2));
+    mkdirSync(join(ws4, ".dev-loop", "locks"), { recursive: true });
+    openDb(join(ws4, ".dev-loop", "hub.db")).close();
+
+    mkdirSync(join(r4, "docs"), { recursive: true });
+    writeFileSync(join(r4, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n");
+    git(r4, ["add", "docs/STRATEGY.md"]);
+    git(r4, ["commit", "-qm", "docs(strategy): base"]);
+    git(r4, ["push", "-qu", "origin", "main"]);
+
+    // ── (443-a) AC1/AC6: the checkout is on a feature branch cut from origin/main and PM's doc
+    // commit landed THERE. `main` is byte-identical to origin/main, so Step 1's input is empty.
+    // The suite's constant — every fixture holds the checkout on `main` — is deliberately broken
+    // here, and that branch is the ONLY variable between a land and a silent no-op.
+    git(r4, ["fetch", "-q", "origin", "main"]);
+    git(r4, ["checkout", "-q", "-b", "dev-loop/LOOP-998", "origin/main"]);
+    writeFileSync(join(r4, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nPM's journal entry (LOOP-443).\n");
+    git(r4, ["add", "docs/STRATEGY.md"]);
+    git(r4, ["commit", "-qm", "docs(strategy): journal entry stranded off main (LOOP-443)"]);
+    const strandedSha = git(r4, ["rev-parse", "HEAD"]);
+
+    ok(git(r4, ["diff", "--name-only", "origin/main...main"]) === "",
+      "(443-a) precondition: Step 1's own input is empty — main has nothing ahead of origin/main");
+    ok(git(r4, ["rev-parse", "refs/heads/main"]) === git(r4, ["rev-parse", "refs/remotes/origin/main"]),
+      "(443-a) precondition: the doc commit is NOT on main — it is only on the feature branch");
+
+    // AC4: the pre-state the detection must not disturb.
+    const beforeHead = git(r4, ["rev-parse", "HEAD"]);
+    const beforeBranch = git(r4, ["branch", "--show-current"]);
+    const beforeMain = git(r4, ["rev-parse", "refs/heads/main"]);
+    const beforeOrigin = git(r4, ["rev-parse", "refs/remotes/origin/main"]);
+    const beforeStatus = execFileSync("git", ["-C", r4, "status", "--porcelain"], { encoding: "utf8" });
+
+    const resA = run(["--repo", "dev-loop"], ws4);
+    ok(resA.status !== 0,
+      `(443-a) AC1: an unlanded doc commit off '<db>' exits NON-zero (got status ${resA.status}: ${resA.stdout.trim().slice(0, 160)})`);
+    ok(!/already up to date/.test(resA.stdout + resA.stderr),
+      "(443-a) AC1: …and NEVER prints the 'already up to date — nothing to land' line in that state");
+    ok(/dev-loop\/LOOP-998/.test(resA.stderr),
+      `(443-a) AC1/AC6: …it names the branch the commit is on (got: ${resA.stderr.replace(/\(node:.*/g, "").slice(0, 200)})`);
+    ok(resA.stderr.includes(strandedSha.slice(0, 12)),
+      "(443-a) AC1: …names the commit, so the operator can move it without re-deriving it");
+    ok(new RegExp(STRATEGY_PATH.replace(/\//g, "\\/")).test(resA.stderr),
+      "(443-a) AC1: …and names the doc path the finding is scoped to");
+    ok(/not on 'main'|cannot be landed/.test(resA.stderr),
+      "(443-a) AC1: …and says the commit is not on <db>, so it cannot be landed from here");
+
+    // AC4: read-only. The detection runs before the fetch and before the lock; nothing it does may
+    // write HEAD, a ref, the index or the working tree (LOOP-325's property, re-asserted).
+    ok(git(r4, ["rev-parse", "HEAD"]) === beforeHead && git(r4, ["branch", "--show-current"]) === beforeBranch,
+      "(443-a) AC4: HEAD and its branch are untouched by the detection");
+    ok(git(r4, ["rev-parse", "refs/heads/main"]) === beforeMain,
+      "(443-a) AC4: refs/heads/main is untouched — this verb never rewrites the branch it lands");
+    ok(git(r4, ["rev-parse", "refs/remotes/origin/main"]) === beforeOrigin,
+      "(443-a) AC4: origin/main is untouched — no fetch was added ahead of the existing one");
+    ok(execFileSync("git", ["-C", r4, "status", "--porcelain"], { encoding: "utf8" }) === beforeStatus,
+      "(443-a) AC4: the index and working tree are untouched");
+    ok(!existsSync(join(r4, ".git", "rebase-merge")) && !existsSync(join(r4, ".git", "rebase-apply")),
+      "(443-a) AC4: no rebase state — the refusal happens before the lock and before any rebase");
+
+    // ── (443-b) AC5: --dry-run reports the SAME verdict the live path enforces (LOOP-290) ────────
+    const resB = run(["--repo", "dev-loop", "--dry-run"], ws4);
+    ok(resB.status === resA.status && /dev-loop\/LOOP-998/.test(resB.stderr),
+      `(443-b) AC5: --dry-run reaches the same verdict from the same facts (got status ${resB.status})`);
+    ok(!/already up to date/.test(resB.stdout),
+      "(443-b) AC5: …and the preview never claims 'nothing to land' either");
+
+    // ── (443-c) AC3: a code commit on a feature branch is the NORMAL state of every dev worktree
+    // and must not trip the check. Same branch, same checkout — only the paths differ.
+    git(r4, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(join(r4, "feature.ts"), "// a dev fire's work\n");
+    git(r4, ["add", "feature.ts"]);
+    git(r4, ["commit", "-qm", "feat: unrelated dev work (LOOP-998)"]);
+    const resC = run(["--repo", "dev-loop"], ws4);
+    ok(resC.status === 0 && /already up to date/.test(resC.stdout),
+      `(443-c) AC3: a code-only feature branch does NOT trip the check (got status ${resC.status}: ${resC.stderr.replace(/\(node:.*/g, "").slice(0, 200)})`);
+
+    // ── (443-d) AC2: the genuinely-nothing case — checkout on <db>, no local doc commit anywhere ──
+    git(r4, ["checkout", "-q", "main"]);
+    const resD = run(["--repo", "dev-loop"], ws4);
+    ok(resD.status === 0 && /already up to date — nothing to land/.test(resD.stdout),
+      `(443-d) AC2: genuinely nothing to land is unchanged — exit 0, same line (got ${resD.status}: ${resD.stdout.trim().slice(0, 160)})`);
+
+    // ── (443-e) AC6 control: the SAME commit, made with the checkout on <db>, still lands ────────
+    // The branch of the shared checkout is the only variable between this and (443-a).
+    writeFileSync(join(r4, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nPM's journal entry (LOOP-443).\n");
+    git(r4, ["add", "docs/STRATEGY.md"]);
+    git(r4, ["commit", "-qm", "docs(strategy): journal entry on main (LOOP-443 control)"]);
+    const resE = run(["--repo", "dev-loop"], ws4);
+    ok(resE.status === 0 && /landed 1 commit\(s\)/.test(resE.stdout),
+      `(443-e) AC6 control: with the checkout on main the same commit lands (got ${resE.status}: ${resE.stdout.trim().slice(0, 160)} ${resE.stderr.replace(/\(node:.*/g, "").slice(0, 160)})`);
+    ok(pathOnRef(r4, "origin/main", STRATEGY_PATH)
+      && /LOOP-443/.test(execFileSync("git", ["-C", r4, "show", `origin/main:${STRATEGY_PATH}`], { encoding: "utf8" })),
+      "(443-e) AC6 control: …and origin/main actually carries the increment, not just a success line");
+  }
+
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
