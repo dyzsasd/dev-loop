@@ -67,6 +67,8 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W37", name: "strategy doc over its byte budget — every §20 R2 reader pays it each fire", source: "doctor.ts" },
   { code: "W38", name: "mergeChecks configured on an unprotected default branch — only merge-guard enforces them", source: "doctor.ts" },
   { code: "W39", name: "secrets.env readable by group/others — live provider keys exposed to every local account", source: "doctor.ts" },
+  { code: "W40", name: "approval rows exist but approvals.enforce is empty — the record gates nothing", source: "doctor.ts" },
+  { code: "W41", name: "never-expiring approval grant — an end-state authorization with no horizon", source: "doctor.ts" },
 ] as const;
 
 export const DOCTOR_CODE_SET: ReadonlySet<string> = new Set(DOCTOR_CODES.map((c) => c.code));

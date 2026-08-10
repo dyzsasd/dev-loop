@@ -14,6 +14,7 @@ import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } f
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { isCanonicalTicketPrefix } from "./ticket-id.ts";
+import { actionClasses } from "./approvals.ts"; // LOOP-394 — the ONE action-class registry (design §4)
 import { snapshotBeforeDestructive, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-339 trigger 2
 import { provisionClaudePermissions } from "./team-init.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
@@ -65,6 +66,11 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.backup\.dir$/, kind: "string" },
   // LOOP-335 — repos.<ref>.ciIrrelevantPaths, through the validated mutator like every other tunable.
   { re: /^repos\.[^.]+\.ciIrrelevantPaths$/, kind: "string-list" },
+  // LOOP-394 (design approvals §8) — the per-action-class enforcement enable list, default EMPTY.
+  // Members are checked against the ACTION_CLASSES registry at the set gate below, not just at load:
+  // an operator turning enforcement ON must learn about a typo now, not from a fire that was never
+  // refused. Clear it with the empty string.
+  { re: /^team\.approvals\.enforce$/, kind: "string-list" },
   { re: /^projects\.[^.]+\.enabled$/, kind: "boolean" },
   { re: /^projects\.[^.]+\.weight$/, kind: "number" },
   { re: /^projects\.[^.]+\.devSplit$/, kind: "boolean" },
@@ -104,7 +110,7 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},agents.<a>.{codingAgent,model,effort}}, " +
+  "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,agents.<a>.{codingAgent,model,effort}}, " +
   "projects.<key>.{enabled,weight,devSplit,scratch,mode,autonomy,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
@@ -182,6 +188,19 @@ export async function teamSet(argv: string[]): Promise<number> {
     // budget.perFireUsd must be strictly positive (the "number" kind accepts any finite number).
     if (path === "team.budget.perFireUsd" && (coerced as number) <= 0)
       die(`team.budget.perFireUsd must be a positive number (got '${value}')`);
+    // LOOP-394 — approvals.enforce members are action-class NAMES, checked against the registry here
+    // and not only at load. The load-time E18 would catch a typo eventually; catching it at the set
+    // gate is what the operator needs, because the failure mode of an unknown class is silence — the
+    // consumer looks it up, does not find it, and enforces nothing, which reads exactly like "on".
+    if (path === "team.approvals.enforce") {
+      const legal = new Set(actionClasses());
+      const seen = new Set<string>();
+      for (const cls of coerced as string[]) {
+        if (!legal.has(cls)) die(`team.approvals.enforce: unknown action class '${cls}' — legal classes: ${actionClasses().join(", ")}`);
+        if (seen.has(cls)) die(`team.approvals.enforce: action class '${cls}' is listed more than once`);
+        seen.add(cls);
+      }
+    }
     // strategyDoc validation: must be a repo-relative path (no absolute paths, no Linear document URLs).
     if (segs[0] === "projects" && segs[2] === "strategyDoc") {
       const v = coerced as string;
