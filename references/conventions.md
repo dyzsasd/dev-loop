@@ -1539,10 +1539,8 @@ project returns exactly today's values.
 
 ### The repo target is a label: `repo:<name>` (both backends)
 Each multi-repo ticket carries exactly one **`repo:<name>`** label naming its target
-repo (the `name` from `repos[]`). This reuses §4/§18's single abstraction: in the
-**Linear** backend it is a Linear label in the ticket's label set; in the **local**
-backend it is a string in the ticket file's `labels:[]` frontmatter array — repo-as-
-label **is** the local frontmatter; there is no dedicated frontmatter field. The
+repo (the `name` from `repos[]`). This reuses §4/§18's single abstraction: the label
+lives in the ticket's label set on either backend. The
 existing label-in-`labels[]` filter and the REPLACE-style full-set discipline (§10 #1,
 §18) apply unchanged: to set or keep the repo target, re-pass the **full** label set.
 Single-repo projects carry **no** `repo:*` label — the sole repo is implicit.

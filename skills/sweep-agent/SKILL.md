@@ -69,7 +69,7 @@ against the §4 taxonomy:
   data-migration) ⇒ `senior-dev` ALWAYS (§21b override — never downgrade sensitive work);
   else default `junior-dev`; `senior-dev` only when the title/body clearly describe a new
   module/feature needing design ("when borderline, junior", §21b). BOTH tier labels
-  (possible on `linear`/`local`, where both pick-queries match) ⇒ concurrent
+  (possible on `linear`, where both pick-queries match) ⇒ concurrent
   double-implementation — keep the §21b-correct tier, drop the other. Comment every fix.
   Legacy single-dev projects carry no tier labels — skip.
 A ticket stuck `In Review` is usually this bug — fixing its owner label is what lets PM/QA
@@ -154,7 +154,7 @@ back); dedup rides a machine-local acted-ledger (re-polls are cheap + idempotent
 cleanly when no docs have been pushed yet. These intakes are the ONE sanctioned exception
 to "file no new work" — they carry a human's words, not yours. Never block on the mirror: a
 failed push/poll (`failed > 0`) is logged + retried next fire, not a fire failure. Absent
-the `mirror` config, or under `linear`/`local` ⇒ skip entirely (fail-closed). Report
+the `mirror` config, or under `linear` ⇒ skip entirely (fail-closed). Report
 `created/updated/skipped/failed`, the `docs` counts, and the poller's `filed/divergences`.
 In `dry-run` (§12) the hub's `DEVLOOP_MIRROR_DRYRUN` makes the push a no-network preview;
 the poll still READS Linear but only previews the would-file tickets — no ticket filed, no

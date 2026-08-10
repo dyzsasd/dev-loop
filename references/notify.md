@@ -13,7 +13,7 @@ invariants — live in §9; this file is the wire-level detail, read at the park
 > trigger is the **`Human-Blocked` state** and the persistent **daemon is the single emitter** —
 > it fires over a registered `channels` row (bot *or* webhook, DL-52) **or** this §9 `notify`
 > webhook block as the fallback (DL-59), so a webhook-only `service` project is still covered;
-> on `linear`/`local` (no daemon, no real state) the trigger is the **label park** below and
+> on `linear` (no daemon, no real state) the trigger is the **label park** below and
 > **PM** is the emitter. `§9 notify` is **not** superseded — it is the cross-backend one-way
 > floor; the bot `channel` is the service-only richer-transport superset. All opt-in; absent ⇒ no
 > pinging.

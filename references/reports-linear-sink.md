@@ -13,8 +13,8 @@ defense-in-depth layer, so **prefer files whenever the operator's machine is rea
 
 **Config.** `reports.sink: "files" | "linear"` — **absent ⇒ `"files"`** (§22 byte-for-byte;
 single-repo / unconfigured / either §18 backend unchanged). The sink is **decoupled from the
-§18 `backend`** — a `linear` backend does NOT auto-route reports to Linear, and a `local`
-backend MAY still use Linear reports for remote review. Related keys (linear sink only):
+§18 `backend`** — a `linear` backend does NOT auto-route reports to Linear. Related keys
+(linear sink only):
 `reports.linearProject` / `reports.linearInitiative` (the **dedicated** reports container —
 never the §20 doc-base project), `reports.localOnlyAgents` (agents that stay on files
 unconditionally — **defaults to `ops-agent` + `dev-agent`**, the
