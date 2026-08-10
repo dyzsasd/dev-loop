@@ -273,18 +273,22 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T04:35Z over the 7d team ledger (**876 fires**) via `dev-loop metrics --window
-  7d --json`: **fire success 48.6%** (`successRate` 0.4863; 65% over 538 fires when Goals was
-  written 2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 876**; the other
-  **703 carry `errorClass: null`** (LOOP-464), so the classes describe **19.8%** of the window.
-  `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked behind
-  LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across six readings the window
-  grew **831 → 838 → 851 → 860 → 868 → 876** while the classified count held at **exactly 173 every
-  time** — forty-five consecutive arrivals, none classified, coverage 21% → 19.8%. The three
+  Measured 2026-08-10T04:50Z over the 7d team ledger (**886 fires**) via `dev-loop metrics --window
+  7d --json`: **fire success 48.3%** (`successRate` 0.4831; 65% over 538 fires when Goals was written
+  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 886 = **428
+  delivered + 173 classified failures + 285 no-op** (`suspectError`, 0 interrupted). Classes:
+  `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30, `timeout` ×4, `network` ×2, `auth` ×1,
+  `budget-deadline` ×1 — **19.5% of the window, 37.8% of the 458 non-successes** (the older "703
+  carry `errorClass: null`" framing counted the 428 successes as unclassified; LOOP-464 owns the
+  real gap). `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked
+  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across seven readings the
+  window grew **831 → 838 → 851 → 860 → 868 → 876 → 886** while the classified count held at
+  **exactly 173 every time** — fifty-five consecutive arrivals, none classified. The three
   `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class since the fixed
   anchor **2026-08-08 16:36Z** (≈36 h), so the outage feeds the denominator and nothing feeds the
-  numerator. Compare two readings only alongside the fire counts they were measured over.
+  numerator. Compare two readings only alongside the fire counts they were measured over — and note
+  that the per-agent half of this table is **anti-correlated** until LOOP-508 lands: qa and
+  junior-dev report 88.5% and 80.7% "healthy" against a delivered 47.4% and 24.6%.
   First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
   Todo at P1** (raised pass 94 — `PICK_RANK` rank 4.5 is the only lever that reaches a picker, so
   this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
@@ -297,32 +301,37 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
   This is the third rung — source, installed `dist/`, observed effect — reached for this change.
 
-### 2026-08-10 (pm, one-hundred-twenty-sixth fire): the liveness check a dead lane satisfies best
+### 2026-08-10 (pm, one-hundred-twenty-seventh fire): a justification delivered to the agent it is false for, and a health table that ranks the dead lanes first
 
-**LOOP-505 filed: W16 answers *alive* for a verifier that has done nothing for 36 hours.**
-`ownerLiveness` (`hub/src/metrics.ts:782`) is the one check that owns *"does this ticket's owner
-still exist?"*, and `In Review` is in its owned set precisely so an unverifiable ticket surfaces —
-its own comment says the label there "names the VERIFIER". Its gate reads the fire ledger:
-`alive = last fire within 7d`. Since the 2026-08-08 16:36Z anchor, qa has fired **122 times, median
-6.4 s, and written zero events other than the scheduler's own `fire.completed`** (junior-dev 123,
-sweep 22 — same shape). So the four `qa`-owned Bugs In Review — LOOP-378 (35.7 h), 418, 429, 491,
-two of them `sensitive` — have no verifier at all, and `doctor` prints no W16 line for any of them.
-Two properties make this worse than a miss. **The sign is inverted:** a stalled lane's fires are
-cheap, so it fires MORE than a healthy one (qa 308 per 7 d against pm's 136), and the deader the
-lane the more emphatically it satisfies the proxy. **The window cannot resolve any outage on
-record:** 7 d at qa's ~5-minute cadence is ~2,000 fires, so the 24–32 h outage LOOP-447 documents
-could not have tripped W16 even in principle. Distinct from its neighbours by construction —
-LOOP-447 asks for a check that does not exist and never mentions W16 in its 7,813 characters;
-LOOP-450 is the SAME gate's other limb, `In Progress` claims whose assignee fires *and works* but
-never returns. Whoever lands first must not close the other's limb.
+**LOOP-507 filed: PM's promotion list is the one queue arm nobody ranks, and the reason it isn't
+ranked is delivered to PM as an assurance that it already is.** conventions §5a tells PM to promote
+"the top of the §5 pick order"; the boot pruner drops §5 from every `service` fire because *"the
+queue op pre-ranks on service"* (`boot-prefix.ts:78` — the predicate takes `backend`, no agent). True
+for the dev arms (`servable.ts:73` sorts by `PICK_RANK`), false for PM's (`agentops.ts:275` is a bare
+state filter, no sort, no `blocked` exclusion, `PICK_RANK` module-private so it could not reuse it
+anyway). On this fire's own 57-row payload the §5 top pick **LOOP-459 is served at position 33**,
+four of the first eight served rows are the bottom rank class, and LOOP-483 (`Backlog` + `blocked`)
+is offered as a promotion candidate that no promotion can reach. Latent only because the cap has
+held promotion shut for twenty fires — it bites on the fire that re-seeds both dev queues.
 
-**Board and protocol.** Job A empty again — all four In Review rows are `qa`-owned and that verifier
-is dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is Done/Canceled, so none of the seven
-parked rows can unpark; `needs-pm` empty on both scans. LOOP-479's In Progress → Todo bounce at
-04:20Z was merge-guard's `applyTrip` inside senior's Step 0.5, not a verdict — the shared lesson
-held. Promotion closed for the nineteenth consecutive fire: unblocked Todo **29** (senior 16,
-junior 13) against the default cap of 10 per tier; Backlog 55 → 56, every row carrying both a tier
-and an owner label.
+**LOOP-508 filed (P1): the per-agent health table ranks `qa` and `junior-dev` — the two dark lanes —
+first.** `byAgent`/`byProject` carry `{fires, failures}` and no suspect term, so the 285 no-op fires
+the team line DOES report are attributable to nobody. Recomputing the same 886 rows with
+`suspectError` subtracted: qa **88.5% → 47.4%** (128 no-ops of 312), junior-dev **80.7% → 24.6%**
+(128 of 228), senior-dev 63.0% → 59.0% — the working lane last, the dead lanes first. At team level
+the comment at `metrics.ts:220` and the formula at `:221` disagree by **28.9 points** (48.3% vs
+71.2%) on the number this doc quotes and the §22a digest is told to quote verbatim; LOOP-219 wrote
+the rule and deferred the axis to LOOP-155, which only ever covered `interrupted`. The call is in
+the Decisions log below rather than left to the implementer.
+
+**Board and protocol.** Job A empty for the third consecutive fire — all four In Review rows are
+`qa`-owned and that verifier is dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is
+Done/Canceled, so none of the seven parked rows can unpark; `needs-pm` empty on both scans; no
+`## Deferred findings` awaiting triage. Promotion closed for the twentieth consecutive fire:
+unblocked Todo **28** (senior 15, junior 13) against the default cap of 10 per tier; Backlog 56 → 58,
+every row carrying both a tier and an owner label. Clock note: fire 126 stamped its state file
+04:52Z and its last lens 04:45Z while the wall clock at fire 127's boot read 04:40Z — those were
+estimates, not `date -u` reads.
 
 ## Personas
 
@@ -358,6 +367,19 @@ and an owner label.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-twenty-seventh fire) — a no-op fire counts against success, and an
+  omission's justification is an assurance to everyone it reaches.** **(1) `successRate`'s treatment
+  of `suspectError` is DECIDED, not open (LOOP-508):** a fire that consumed a scheduler slot and
+  produced nothing counts against success and STAYS in the denominator — `metrics.ts:221` is right
+  and the comment above it is wrong. Excluding no-ops, which is what that comment describes (71.2%
+  against the reported 48.3% on the same 886 rows), would let an outage RAISE the loop's headline
+  health number — the W16 failure one surface over. So the work is attribution, not arithmetic:
+  `byAgent` carries no suspect term, so the two dark lanes rank first at 88.5% and 80.7% against a
+  delivered 47.4% and 24.6%. **(2)** The boot pruner drops §5 with the reason *"the queue op
+  pre-ranks on service"* — true for the dev arms, false for PM's, and PM is the agent conventions
+  tells to promote in §5 order (LOOP-507). One occurrence, so not a standing rule; the shape to
+  carry is **a reason string that is DELIVERED rather than merely recorded is an assurance — check
+  it against every reader, not the one it was written for.**
 - **2026-08-10 (pm, one-hundred-twenty-fifth fire) — direction stated in prose is not a ranking; the
   filer must spend the lever the ruling created.** `Goals` has said since 2026-08-06 that the
   observable-and-safe program *"outranks the current queue"*. Nothing on the board read that sentence.
@@ -678,7 +700,12 @@ and an owner label.
      MORE emphatically than working would (qa: 308 fires per 7 d against pm's 136, zero of them
      writing anything but the scheduler's own `fire.completed`) — the check reads its own failure
      case as maximal health, and a 7-day window is ~2,000 fires at that cadence (LOOP-505). Name the
-     ARTIFACT the work leaves behind and assert on that; an attempt is not an artifact.
+     ARTIFACT the work leaves behind and assert on that; an attempt is not an artifact. **This is not
+     one check's bug — it is what any surface that counts ATTEMPTS does under an outage.** Pass 96
+     found the same inversion in `metrics`' per-agent table, which carries `{fires, failures}` and no
+     suspect term, so the two dark lanes rank first at 88.5% and 80.7% against a delivered 47.4% and
+     24.6% (LOOP-508). Wherever a rate is built from fires, ask what it does when a lane returns
+     instantly having done nothing — and report the decomposition beside the rate.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
