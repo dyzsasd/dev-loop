@@ -576,3 +576,108 @@ export function consultApproval(
     : `approval ${row.id} for ${JSON.stringify(row.action_key)} expired at ${row.expires_at}`;
   return finish({ authorises: false, key: parsed.parsed.key, approval: row, state, reason });
 }
+
+// ─── The coverage query (design §7 — the CONSULTING consumer, LOOP-395 / C6) ──────────────────────
+//
+// The hub can only refuse what the hub executes. The npm publish runs from a `workflow_dispatch`
+// workflow a human triggers in the GitHub UI, so no approval object can gate it — and design §7 says
+// plainly that no child should pretend otherwise. What failure 2 actually cost was never the missing
+// gate; it is stated in LOOP-383's Why: *"every retry required the operator console to re-derive
+// whether the original approval still covered the changed mechanics."* The party that needed the
+// record is the operator console. This is the answer it asks for.
+//
+// TWO PROPERTIES MAKE THIS A COVERAGE QUERY AND NOT A PERMISSION CHECK, and they are the same
+// property read from both ends (§5):
+//   - a grant is NOT consumed by being used, so all four dispatches of one release are covered by
+//     one grant, however many attempts were recorded against it;
+//   - a key names an END STATE, so the next version is a different key and is NOT covered.
+// A test that only asserts the first passes equally against a blanket permission. Both directions
+// are asserted (AC2 with AC3), and `nearest` below exists so the second one can be READ rather than
+// inferred from an absence.
+
+/** A live grant of the same action class that names a DIFFERENT end state — never coverage. */
+export interface CoverageNearMiss {
+  id: string;
+  key: string;
+  /** Component name → what was asked vs what is granted, for the components that differ. */
+  differs: Record<string, { asked: string; granted: string }>;
+  expires_at: string | null;
+}
+
+export interface CoverageVerdict {
+  /** The one field a caller may branch on; `verdict` is the same answer as a printable word. */
+  covered: boolean;
+  verdict: "covered" | "not-covered";
+  /** The normalized key, or the key exactly as typed when it does not parse. */
+  key: string;
+  /** The covering approval when covered; the latest row for the key otherwise; else null. */
+  approval: ApprovalRow | null;
+  state: ApprovalState | null;
+  /** Why it is not covered. `null` exactly when `covered` is true. */
+  reason: string | null;
+  nearest: CoverageNearMiss[];
+}
+
+export interface CoverageOptions {
+  /** Same narrowing as a consult: this project's rows plus workspace-scoped ones. */
+  projectId?: string | null;
+}
+
+/**
+ * "Does a grant still cover the action I am about to retry?" — a read, and only a read.
+ *
+ * It ledgers NOTHING. Design §14 decision 4 names this caller explicitly as one of the three that
+ * must pass `record:false`: a coverage QUERY is not an attempt, and recording it would inflate the
+ * very ledger the operator console reads to see what was attempted. That is not a security bypass —
+ * `record:false` skips the audit line and nothing else — but it IS the difference between a ledger
+ * that says "four dispatches" and one that says "four dispatches and eleven times somebody asked".
+ */
+export function coverageQuery(
+  db: DatabaseSync,
+  actionKey: string,
+  now: string,
+  opts: CoverageOptions = {},
+): CoverageVerdict {
+  const v = consultApproval(db, actionKey, now, { projectId: opts.projectId, record: false });
+  if (v.authorises) {
+    return { covered: true, verdict: "covered", key: v.key, approval: v.approval, state: v.state, reason: null, nearest: [] };
+  }
+
+  // The near-miss set answers the reason AC1 lists last — "a key that denotes a different end state".
+  // Without it, asking about 1.15.2 while holding a grant for 1.15.1 answers "no approval exists",
+  // which is true and useless: it reads identically to never having been granted anything, so the
+  // console is back to re-deriving by hand, which is the failure this ticket closes.
+  const parsed = parseActionKey(actionKey);
+  const nearest: CoverageNearMiss[] = [];
+  if (parsed.ok) {
+    const asked = parsed.parsed;
+    const inScope = (r: { project_id: string | null }): boolean =>
+      opts.projectId === undefined || r.project_id === null || r.project_id === opts.projectId;
+    for (const row of listApprovals(db, { now, states: [AUTHORISING_STATE] })) {
+      if (!inScope(row) || row.action_key === asked.key) continue;
+      const other = parseActionKey(row.action_key);
+      // A stored key that no longer parses cannot be compared component-wise, and guessing at one
+      // would be the same class of error as the ILLEGAL keys §4 refuses. Skipping is right: it is
+      // not a near miss, and it is not coverage either — `covered` is already false.
+      if (!other.ok || other.parsed.actionClass !== asked.actionClass) continue;
+      const differs: Record<string, { asked: string; granted: string }> = {};
+      for (const [name, value] of Object.entries(asked.components)) {
+        const granted = other.parsed.components[name];
+        if (granted !== value) differs[name] = { asked: value, granted };
+      }
+      if (Object.keys(differs).length) nearest.push({ id: row.id, key: row.action_key, differs, expires_at: row.expires_at });
+    }
+  }
+
+  // A near miss REPLACES the reason only when there is no row for the asked key at all. When one
+  // exists (revoked, expired, discharged), that row is the answer to "why not" and a neighbouring
+  // grant is context — reporting the neighbour instead would tell the operator to look at the wrong
+  // approval.
+  const reason =
+    v.approval === null && nearest.length
+      ? `no approval covers ${JSON.stringify(v.key)} — ${nearest.length === 1 ? "a granted approval names" : `${nearest.length} granted approvals name`} a DIFFERENT end state: ` +
+        nearest.map((n) => `${n.key} (${Object.entries(n.differs).map(([c, d]) => `${c} ${JSON.stringify(d.granted)}, not ${JSON.stringify(d.asked)}`).join("; ")})`).join(", ")
+      : v.reason;
+
+  return { covered: false, verdict: "not-covered", key: v.key, approval: v.approval, state: v.state, reason, nearest };
+}
