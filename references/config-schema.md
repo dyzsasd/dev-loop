@@ -214,7 +214,7 @@ project, so a shared repo has one build/deploy truth.
 | `landing` | `"direct"` or `"pr"`. | — |
 | `autoMerge` | In PR mode, whether Dev may merge its own green PR. | — |
 | `mergeChecks` | Required PR check contexts/job names. | — |
-| `ciIrrelevantPaths` | Comma-separated repo-relative paths whose changes cannot affect any check result: an exact file (`docs/STRATEGY.md`) or a directory prefix ending in `/` (`docs/strategy-archive/`). No globs — a glob language is a second thing to get wrong, and every case this exists for is a file or a directory. When absent, every delta stales (v1 behaviour). | ✓ `repos.<ref>.ciIrrelevantPaths` |
+| `ciIrrelevantPaths` | Repo-relative paths whose changes cannot affect any check result: an exact file (`docs/STRATEGY.md`) or a directory prefix ending in `/` (`docs/strategy-archive/`). No globs — a glob language is a second thing to get wrong, and every case this exists for is a file or a directory. **Stored as a JSON string array** — `"ciIrrelevantPaths": ["docs/STRATEGY.md", "docs/strategy-archive/"]`; a comma-joined string in `dev-loop.json` is refused with `E08` ("must be an array of strings"), so comma separation is the `team set` VALUE form only. When absent, every delta stales (v1 behaviour). | ✓ `repos.<ref>.ciIrrelevantPaths` (dot-free ref only — below) |
 | `defaultBranch` | This repo's integration branch — what dev worktrees branch off, what PRs target, and what a rebase-on-`DIRTY` rebases onto. Per-repo override; resolves `repos.<ref>.defaultBranch ?? team.git.defaultBranch ?? "main"` (the §19 resolution rule). Set it when a repo integrates on something other than `main` (e.g. `master`, `develop`). | — |
 | `build` | Step-5 ship gates, run in order: `typecheck` → `build` → `test` → `quality`. `quality` is the optional CRAP/mutation gate (quality-gauntlet design): e.g. `"quality": "dev-loop quality --changed --threshold 30"` — per-function `CRAP = CC² × (1−cov)³ + CC` over native V8 coverage, exit 2 over threshold; `--mutate` adds the test-strength probe (self-restoring operator flips; a SURVIVED mutant = a test that doesn't bite). **Language is per FILE**: `.ts/.js` ride the typescript AST + V8 coverage; `.go` rides a token scanner + `go test -coverprofile` (block-level claimed-bytes — an untested Go fn is a true 0%), same formula/report/gate; a Go repo needs only `"quality": "dev-loop quality --changed --threshold 30"` like any other. `add-repo --detect` maps package.json scripts named `typecheck`/`build`/`test`/`quality`. | — |
 | `deploy` | Command or release-PR deploy shape. | ✓ `repos.<ref>.deploy.style`, `.deploy.healthCheck`, `.deploy.environments.<env>.{auto,deployPrPrefix,command,healthCheck}` |
@@ -377,6 +377,12 @@ leave `dev-loop.json` invalid. Only the whitelisted paths above (`team set` ✓ 
   `.communication.includeUnreleased` (boolean)
 - `projects.<key>.notify.type` (`slack`|`lark`; first touch bootstraps the block with the standard
   `DEVLOOP_COMMS_WEBHOOK` env name) · `.notify.webhookEnv` · `.notify.secretEnv`
+- `repos.<ref>.ciIrrelevantPaths` (comma-separated paths; stored as string array) — **dot-free refs
+  only.** The whitelist entry is `^repos\.[^.]+\.ciIrrelevantPaths$` and `team set` splits the path on
+  dots, while a repo ref may itself contain one (`KEY_RE` permits `web.app`), so
+  `repos.web.app.ciIrrelevantPaths` names a knob the validator accepts and the mutator cannot address.
+  For such a ref, edit `dev-loop.json` directly and re-run `dev-loop doctor`; `merge-guard`'s stale
+  reason detects the case and prints the description instead of a command to copy.
 - `repos.<ref>.deploy.style` · `.deploy.healthCheck` ·
   `.deploy.environments.<env>.{auto,deployPrPrefix,command,healthCheck}`
 
