@@ -35,6 +35,7 @@ import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./t
 import * as metricsMod from "./metrics.ts";
 import { readLandingState, defaultGhExec } from "./landing.ts";
 const require_metrics = () => metricsMod;
+import { listApprovals } from "./approvals.ts"; // LOOP-394 — W40/W41 read the approvals record
 import { DOCTOR_CHECKS, runScoped, isThenable, type DoctorCtx, type DoctorReport, type DoctorOut, type RepoCtx, type BoardCtx } from "./doctor-registry.ts";
 
 // DL-81: the `doctor` COMMAND (server.ts / `node src/doctor.ts`) passes { reconcile: true } to ALSO report
@@ -799,6 +800,46 @@ export function checkBoardSnapshotW32(ws: Workspace, warn: (m: string) => void, 
 // Warn-only, deliberately (LOOP-430 AC6): it can fire on a pre-existing workspace the operator has
 // not touched, and failing doctor there would block the run rather than inform it. The remedy is one
 // command, and W39 is in the band the operator is instructed to read.
+// ── W40/W41 (LOOP-394) — the approvals record's own health ────────────────────────────────────────
+//
+// W40 is STANDING RULE 29 made mechanical for this feature: `approvals.enforce` ships default-EMPTY,
+// so the whole record can be in use — an operator granting, an agent requesting — while nothing
+// refuses anything. That state is INVISIBLE from either side. The approvals CLI reports the rows it
+// wrote, the config reports a switch nobody reads, and only doctor sees both at once. LOOP-335 is
+// the precedent: shipped, validated, mutator-ised, and inert for 60 commits because no surface put
+// the switch in front of a reader.
+//
+// W41 is design §6: an approval names an end state and SHOULD discharge, but `--expires never` is a
+// legal grant an operator may deliberately want. It is a warning and never a failure — a grant with
+// no horizon is a standing authorization, which is the shape design §4 spends its whole argument
+// keeping rare.
+//
+// EXTRACTED, not inlined in doctorWorkspace, and the reason is mechanical: that function sits at the
+// CRAP-90 merge-gate boundary and a new inline branch there has produced a green local diff and a red
+// CI before (LOOP-115 / LOOP-159 / AC7). Best-effort: any throw is swallowed and it never flips
+// DOCTOR_OK — a health read must not be the thing that fails a workspace.
+export function checkApprovalsHealth(ctx: DoctorCtx): void {
+  try {
+    if (ctx.ws.file.team.backend !== "service") return; // no hub.db ⇒ no approvals table to read
+    if (!existsSync(ctx.boardDb)) return;
+    const db = ctx.openBoardDb();
+    // record:false is not applicable here — listApprovals appends no ledger row by construction
+    // (approvals.ts: "reading the board is not an event on it"), which is why doctor may call it.
+    const rows = listApprovals(db, {});
+    if (!rows.length) return;                            // nobody uses the feature ⇒ nothing to say
+    const enforce = ctx.ws.file.team.approvals?.enforce ?? [];
+    if (!enforce.length) {
+      const classes = [...new Set(rows.map((r) => r.action_key.split(":")[0]))].sort();
+      ctx.out.warn(`[W40] ${rows.length} approval row(s) exist (classes: ${classes.join(", ")}) but team.approvals.enforce is empty — every one of them is a record that gates nothing, and a fire can still take the action they describe. Turn enforcement on for the classes you meant: dev-loop team set team.approvals.enforce ${classes.join(",")}`);
+    }
+    const forever = rows.filter((r) => r.state === "granted" && r.granted_at && r.expires_at === null);
+    if (forever.length) {
+      const sample = forever.slice(0, 3).map((r) => r.action_key).join(", ");
+      ctx.out.warn(`[W41] ${forever.length} granted approval(s) never expire (${sample}${forever.length > 3 ? ", …" : ""}) — an authorization with no horizon outlives the reason it was given. Discharge it once its end state is reached, or revoke it: dev-loop revoke <key>`);
+    }
+  } catch { /* best-effort — never fails doctor, never masks another check */ }
+}
+
 export function checkSecretsPerms(ws: Workspace, warn: (m: string) => void): void {
   const finding = loosePermsFinding(ws.root);
   if (!finding) return; // absent file or owner-only bits — both legitimate (AC4)

@@ -4,7 +4,11 @@
 // has since Canceled (the field's MP-275: a canceled ticket's commit rode a junior ship's push into a
 // Vercel prod deploy; revert d7b617f). Also flags passenger commits in origin/<defaultBranch>..HEAD that
 // are not attributable to the PR's own ticket (LOOP-87: stacked branches drag parent-ticket commits).
-// Read-only on git AND the hub; the dev-agent ship sequence runs it `--strict` before `git push` (§12).
+// Read-only on git, and on the hub's BOARD; the dev-agent ship sequence runs it `--strict` before
+// `git push` (§12). One deliberate exception since LOOP-394: with `approvals.enforce` naming `push`,
+// consulting the approvals record appends an `approval.attempt` ledger row — an audit line, per
+// approvals §14 decision 4, and the only write this module makes. It is unreachable while the
+// default-empty switch stays empty.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
@@ -12,7 +16,8 @@ import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
-import { resolveDefaultBranchForPath } from "./team-config.ts";
+import { resolveDefaultBranchForPath, approvalsEnforced } from "./team-config.ts";
+import { listApprovals, consultApproval, actionClasses } from "./approvals.ts"; // LOOP-394 — the record this guard consults
 
 export interface PushGuardFinding { sha: string; subject: string; ticket: string; state: string }
 export interface PushGuardPassenger {
@@ -38,7 +43,49 @@ export interface PushGuardPassenger {
  */
 export interface PushGuardGovernance { sha: string; subject: string; file: string; reason: "conventions" | "skill" }
 
-export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; governance: PushGuardGovernance[]; unresolvedDefaultBranch?: string; note?: string }
+/**
+ * LOOP-394 (design approvals §7) — the FIRST enforcing consumer of the approvals record.
+ *
+ * The incident this closes (design §1 / LOOP-383's Why): the operator's LOOP-367 branch sat in the
+ * shared checkout awaiting a human's push go-ahead, a fire found it and landed it to main, and
+ * nothing could refuse — because the system had no representation of "this work awaits human
+ * approval." The approval REQUEST is that representation, and this is the consumer that reads it.
+ *
+ * Request-driven, deliberately. The gate fires for a commit whose ticket carries a `push:` approval
+ * row; it does NOT demand an approval for every commit. A blanket "every push needs a grant" would
+ * be a capability gate in all but name — the operator would grant one standing thing per branch to
+ * get any work through — and design §4 exists to keep exactly that shape unrepresentable.
+ *
+ * The KEY is `push:<branch>:<sha>` and matching is by that whole key, never by ticket. A grant for
+ * one sha does not carry to the next commit on the same branch: that is the end-state property
+ * (design §4), and it is what separates this from the capability grant it must not become.
+ */
+export interface PushGuardApproval {
+  sha: string;          // short sha, as the other finding kinds report it
+  subject: string;
+  key: string;          // push:<branch>:<full-sha> — the exact key `dev-loop approve` takes
+  ticketId: string;     // the ticket whose push: row put this commit under the gate
+  state: string | null; // the ungranted row's derived state ("requested"/"revoked"/"expired"/…), null when no row matches the key
+  reason: string;       // consultApproval's verdict reason, printed verbatim
+}
+
+export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; governance: PushGuardGovernance[]; approvals: PushGuardApproval[]; unresolvedDefaultBranch?: string; note?: string }
+
+/** The key grammar for this class, in ONE place — the guard, the refusal, and the tests all read it. */
+export const pushApprovalKey = (branch: string, sha: string): string => `push:${branch}:${sha}`;
+
+/**
+ * The line a blocked agent actually reads (design §9.4). ONE copy, exported, so the test asserts the
+ * shipped string rather than a paraphrase of it.
+ *
+ * It names the approval path and NO bypass. There is deliberately no flag that waives this for one
+ * push: the route out is the operator granting the end state, which is safe to print only because C2
+ * made `approve` itself fire-refused (design §2). A guard that documents its own bypass to the party
+ * being guarded is a suggestion, not a gate.
+ */
+export const approvalRefusalLine = (a: PushGuardApproval): string =>
+  `⛔ approval required: ${a.sha} "${a.subject}" is work ${a.ticketId} marked as awaiting human approval — ${a.reason}. ` +
+  `The operator authorises this exact end state with: dev-loop approve ${a.key}`;
 
 // §17's governed surface. `skills/**` and the ONE conventions file — the two the invariant names.
 const GOVERNED_RE = /^(references\/conventions\.md|skills\/.+)$/;
@@ -112,7 +159,57 @@ const branchTicketId = (br: string): string | undefined => {
   return m[1].match(TICKET_RE)?.[0]; // "LOOP-54" from "dev-loop/LOOP-54"
 };
 
-export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string): PushGuardResult {
+/**
+ * The approvals gate over one commit range (LOOP-394 / design §5, §7).
+ *
+ * Under the gate = the commit's ticket has AT LEAST ONE `push:` approval row. That row is the
+ * operator's (or an agent's) statement that this work awaits a human; a ticket with no such row is
+ * outside this feature entirely and is never touched here.
+ *
+ * Authorised = `consultApproval` returns `authorises` for `push:<branch>:<that commit's sha>`. The
+ * lookup key is built from THIS commit, so a grant naming another sha simply does not match and the
+ * verdict reads "no approval exists" — which is the design §4 end-state property, not a special case
+ * anyone had to remember to write.
+ */
+function checkPushApprovals(
+  commits: Array<{ sha: string; subject: string; msg: string }>,
+  branch: string,
+  dbFile: string,
+  actor: string,
+): PushGuardApproval[] {
+  const out: PushGuardApproval[] = [];
+  if (!commits.length || !existsSync(dbFile)) return out;
+  const conn = openDb(dbFile);
+  try {
+    // One read of the (small) table, indexed by ticket: the question "is this ticket under the gate"
+    // is asked once per commit and the answer never changes within a run.
+    const byTicket = new Map<string, number>();
+    for (const r of listApprovals(conn, {})) {
+      if (!r.ticket_id || !r.action_key.startsWith("push:")) continue;
+      byTicket.set(r.ticket_id, (byTicket.get(r.ticket_id) ?? 0) + 1);
+    }
+    if (!byTicket.size) return out;
+    const now = new Date().toISOString();
+    for (const c of commits) {
+      const ids = [...new Set(c.msg.match(TICKET_RE) ?? [])] as string[];
+      const gated = ids.find((id) => byTicket.has(id));
+      if (!gated) continue;
+      const key = pushApprovalKey(branch, c.sha);
+      // The attempt IS ledgered (approvals §14 decision 4: the audit line must not depend on each
+      // consumer remembering to ask). A ledger write can still fail — a busy db, a read-only handle —
+      // and a safety gate that CRASHES is a safety gate that got skipped, so the verdict is re-taken
+      // without the audit line rather than lost. `record:false` grants nothing and skips no check.
+      let v;
+      try { v = consultApproval(conn, key, now, { actor, ticketId: gated }); }
+      catch { v = consultApproval(conn, key, now, { actor, ticketId: gated, record: false }); }
+      if (v.authorises) continue;
+      out.push({ sha: c.sha.slice(0, 7), subject: c.subject, key, ticketId: gated, state: v.state, reason: v.reason ?? "not authorised" });
+    }
+  } finally { conn.close(); }
+  return out;
+}
+
+export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string, opts: { enforcePush?: boolean; actor?: string } = {}): PushGuardResult {
   const git = (args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const gitOk = (args: string[]): boolean => { try { git(args); return true; } catch { return false; } };
   const parseLog = (raw: string) => raw ? raw.split("\0").filter(Boolean).map((r) => {
@@ -162,8 +259,21 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     }
   }
 
-  try { git(["rev-parse", "--verify", "--quiet", `origin/${br}`]); }
-  catch { return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], unresolvedDefaultBranch, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` }; }
+  // LOOP-394 — the approvals gate covers the commits a push would PUBLISH, which is a different range
+  // in the two cases: the unpushed tail for a tracked branch, and everything off the default branch
+  // for a never-pushed one. The first push is the more dangerous of the two (nothing of it is on the
+  // forge yet), so it is gated on the same footing rather than skipped with the note below.
+  const hasUpstream = gitOk(["rev-parse", "--verify", "--quiet", `origin/${br}`]);
+  const range = hasUpstream ? `origin/${br}..${br}`
+    : gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`]) ? `origin/${defaultBranch}..${br}`
+    : null;
+  // Default-OFF (design §8): with the class absent from `approvals.enforce` nothing below runs, no db
+  // handle is opened, and the result is byte-identical to the pre-LOOP-394 output (AC2).
+  const approvals = opts.enforcePush && range
+    ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, dbPath ?? resolveHubDbPath(repoDir), opts.actor ?? "unknown")
+    : [];
+
+  if (!hasUpstream) return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], approvals, unresolvedDefaultBranch, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` };
   // -z NUL-terminates each record so newlines in the body don't split records; %B is the full commit
   // message (subject + body), which allows ticket refs in trailers/footers to be detected (LOOP-25).
   const commits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${br}..${br}`]));
@@ -207,7 +317,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     }
   }
 
-  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, unresolvedDefaultBranch };
+  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch };
 }
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
@@ -228,21 +338,33 @@ if (isMainEntry(import.meta.url)) {
 whose referenced tickets are Canceled/Duplicate (the MP-275 ride-along class), and flag passenger
 commits not attributable to the PR's own ticket (LOOP-55, LOOP-87). Read-only.
 
+Also enforces the approvals record for the 'push' action class when — and only when —
+team.approvals.enforce lists it (default: enforces nothing). With it on, a commit whose ticket
+carries a push: approval row must have a granted, unexpired approval keyed push:<branch>:<sha>;
+grant one with 'dev-loop approve push:<branch>:<sha>'. Turn it on with:
+  dev-loop team set team.approvals.enforce push
+(a comma-separated list; the empty string clears it. Legal classes: ${actionClasses().join(", ")}.)
+
 Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
-  --strict           exit 1 when any finding, passenger, §17 governing-file edit, or unresolvable
-                     default branch is present
+  --strict           exit 1 when any finding, passenger, §17 governing-file edit, ungranted push
+                     approval, or unresolvable default branch is present
   --default-branch   the default branch name (resolved from workspace config when omitted)`);
       process.exit(0);
     } else { console.error(`push-guard: unknown option '${a}'`); process.exit(2); }
   }
   if (!repo) { console.error("push-guard: --repo needs a path"); process.exit(2); }
 
+  // Resolved once, for BOTH the default branch and the enforcement switch. Before LOOP-394 the
+  // workspace was read only on the fallback path, so `--default-branch` (what the ship sequence
+  // passes) would have silently skipped the enforcement lookup — enforcement configured ON and off
+  // in exactly the invocation the dev tiers use.
+  const absRepo = resolve(repo);
+  const ws = tryResolveWorkspace(absRepo);
+
   let defaultBranch: string;
   if (explicitDefaultBranch) {
     defaultBranch = explicitDefaultBranch;
   } else {
-    const absRepo = resolve(repo);
-    const ws = tryResolveWorkspace(absRepo);
     const fromConfig = ws ? resolveDefaultBranchForPath(ws, absRepo) : undefined;
     if (!fromConfig) {
       console.error(`push-guard: cannot resolve the default branch for '${repo}' — not a registered repo; pass --default-branch <name>`);
@@ -251,8 +373,11 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     defaultBranch = fromConfig;
   }
 
+  // No workspace ⇒ no config ⇒ enforcement off. An unregistered repo cannot opt in by accident.
+  const enforcePush = approvalsEnforced(ws?.file.team, "push");
+
   let r: PushGuardResult;
-  try { r = pushGuard(repo, branch, undefined, defaultBranch); }
+  try { r = pushGuard(repo, branch, undefined, defaultBranch, { enforcePush, actor: process.env.DEVLOOP_ACTOR }); }
   catch (e) { console.error(`push-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }
   if (asJson) { console.log(JSON.stringify(r, null, 2)); }
   else {
@@ -274,9 +399,14 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     // that only says "refused" leaves the agent with no legal next move and invites a workaround.
     for (const g of r.governance)
       console.log(`⛔ §17 firewall: ${g.sha} "${g.subject}" edits ${g.file} — ${g.reason === "conventions" ? "conventions" : "a SKILL"} is operator-committed, not agent-editable. Route: drop it from this branch and file the change as a proposal for the operator to apply (an in-marker cli-cheatsheet regeneration is exempt and would not appear here).`);
+    // LOOP-394 / design §9.4 — the refusal names the approval path and NO bypass. There is no flag
+    // that turns this off for one push: the route out is the operator granting the end state, which
+    // is safe to print only because C2 made `approve` itself fire-refused (design §2). If a bypass
+    // ever appears in this message, the guard has become a suggestion.
+    for (const a of r.approvals) console.log(approvalRefusalLine(a));
     if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: origin/${r.unresolvedDefaultBranch} does not exist — passenger detection did NOT run (a safety gate must not pass silently)`);
     if (r.unknownRefs.length) console.log(`note: ${r.unknownRefs.length} ticket ref(s) not verifiable here (${r.unknownRefs.slice(0, 5).join(", ")}${r.unknownRefs.length > 5 ? ", …" : ""}) — no matching row in the local hub`);
-    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, or §17 governing-file edits aboard");
+    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, or §17 governing-file edits aboard");
   }
-  process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || !!r.unresolvedDefaultBranch) ? 1 : 0);
+  process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || r.approvals.length || !!r.unresolvedDefaultBranch) ? 1 : 0);
 }

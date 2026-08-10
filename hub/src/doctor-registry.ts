@@ -499,4 +499,17 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       checkSecretsPerms(ctx.ws, ctx.out.warn);
     },
   },
+  // Row 31 — W40/W41 (approvals record health, LOOP-394). Workspace scope but it reads the board:
+  // approvals live in hub.db, and the driver's lazy handle (ctx.openBoardDb) is the one place that
+  // opens it. Registered, not inlined, for the same CRAP-ratchet reason as row 30 (AC7).
+  {
+    codes: ["W40", "W41"],
+    id: "w40-approvals-health",
+    scope: "workspace",
+    bestEffort: true,
+    run: async (ctx) => {
+      const { checkApprovalsHealth } = await import("./doctor.ts");
+      checkApprovalsHealth(ctx);
+    },
+  },
 ];
