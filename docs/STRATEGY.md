@@ -294,52 +294,39 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
   unset here, so the board is still read-only and the CLI is still the only way to rule.
 
-### 2026-08-10 (pm, one-hundred-thirty-fifth fire): what the wait actually bought, and a demotion the board records with nothing attached
+### 2026-08-10 (pm, one-hundred-thirty-sixth fire): the block that bounds the doc has started carrying facts that decay, and the sawtooth measured end to end
 
-**The operator's 08-10 06:30Z ruling has a 48 h review point at 16:36Z, so this pass measures the
-thing that review will turn on** rather than restating the outage. Both halves are above in
-"Observable-and-safe": the claude lanes cost **$737.93/2 d** against **$0.08** for all three dead
-lanes, and over the same 39 h they filed 62 tickets, made 22 claims, produced 19 `In Review`
-hand-offs and closed **18 verified `Done`** — ≈$33 per verified increment. The productive-spend
-question is therefore answered by measurement, not by judgement: the outage removes the *executor*
-(junior-tier, half the Backlog) and the *bug-verifier* (`qa`, 5 rows now stranded `In Review`), and
-the senior→pm pair kept closing increments throughout.
+**The doc's growth is a sawtooth, not a fix that decayed.** Measured per commit over every
+`docs/STRATEGY.md` revision: the 🧭 block was distilled 07-31 at **299 lines / 27,039 B**, regrew to
+425, was cut by the 08-06 rollup to **117 / 10,540 B**, held **flat at 186 lines / 16,929 B across
+~40 commits and three days** — then grew **186 → 306 lines (+11,545 B) in the six hours to 07:47Z**,
+one rule per pass. Whole doc: 147,966 B → **46,940 B** (08-06) → **83,325 B**, i.e. **77% of the way
+back in four days**. The ramp is PM's own passes; rule 23 already states the test, this is its
+number.
 
-**LOOP-518 — the one filing, and it came out of the same ledger.** Reading those 39 h of transitions
-for the cost measurement surfaced a shape the cost numbers do not explain: **18 `In Progress → Todo`
-moves across 9 tickets, of which 10 carry no comment at all.** Root cause, read in the source and
-not inferred: `applyTrip`'s forge axis routes to `Todo` with **no state guard**, so LOOP-216's AC3 —
-written for a ticket found at `In Review`, where nobody is working it — now fires against the
-`In Progress` state §12c created, where the dev still owns landing. And `buildCommentBody`'s forge
-branch is composed from the PR number and reviewer login alone, so every repeat trip is
-byte-identical and the LOOP-65 dedup eats it while LOOP-130 keeps routing unconditional. Every
-bounced ticket carries **exactly one** guard comment, so the silence is structural, not incidental.
-The measured worst case is LOOP-479: 1 commented + 3 silent bounces, 5 re-claims, 8 review rounds,
-21:50Z → 05:52Z. It is filed as a `Bug` at P2, not P1 — for a `Bug`, `priority=1` is `PICK_RANK` 0
-and outranks the entire board; this does not outrank a dry-run that suppresses real fires.
+**Three in-force rules assert ticket states that are now false.** Rule 13 says the label/marker
+divergence is "Open as LOOP-190"; rule 18 says the `Bug` design-parent owner split is "open as
+LOOP-310"; rule 32's premise reads "LOOP-372 is `In Progress`". All three are `Done`. That is
+**rule 35's own failure — a fact whose write rate (once, at distillation) does not match its decay
+rate (the board, hourly) — occurring inside the block that holds rule 35.** Corrected in place, and
+the correction is deliberately *not* a retirement: a close is not evidence the behaviour stopped, so
+each now says to re-derive against the tree. The general form for the next distillation: **a
+standing rule may cite a ticket as evidence; it may not depend on that ticket's STATE.**
 
-**The reading rule this breaks is one the team already relies on.** The lessons file says an
-`In Review → Todo` move is not evidence of a verify-fail and must be classified by its comment's
-verdict. Ten of eighteen moves in this window had no comment to classify by — the tell disappears
-exactly when the trip repeats, which is exactly when a reader most needs it.
+**Board and protocol.** Job A empty for the ninth consecutive fire — all 5 `In Review` rows are
+`qa`-owned and `qa` is dark. `needs-pm`/`_team` empty; no `## Deferred findings` pending; §9c
+re-derived, no blocker in {401, 468, 472, 464, 463} terminal, so none of the six parked rows can
+unpark. LOOP-463 stays at the operator (16:36Z review point ~8 h out at close, so no comment).
+Promotion closed for the **twenty-eighth** fire: unblocked Todo **26** (13/13) against 10 per tier.
+**Zero filings** — both findings (W03's remedy, the growth law) went as comments on **LOOP-482** and
+**LOOP-484**, which already own them.
 
-**Board and protocol.** Job A empty for the eighth consecutive fire — all 5 `In Review` rows are
-`qa`-owned, so PM verifying them would be lane-crossing, not helpfulness. `needs-pm` and `_team`
-empty; no `## Deferred findings` pending; §9c re-measured from a `hub.db` copy — no blocker in
-{401, 468, 472, 464, 463} is terminal, so none of the six parked rows can unpark and none is the
-zero-edge shape that must route back to step 1. LOOP-463 stays parked at the operator; its review
-point had not been reached at close, so it earned no comment. Promotion closed for the
-**twenty-seventh** consecutive fire: unblocked Todo **27** (senior 14, junior 13) against a cap of 10
-per tier. The Backlog stale sweep (`git grep` of every Backlog id against the merged tree) returned
-the same four code-referenced ids as last pass — LOOP-400 re-scoped, and 497/496/433 the deliberate
-deferral markers — so nothing went stale in the last 24 h; note the archive now matches ~50 ids by
-itself, so that sweep must exclude `docs/` to stay useful.
+**Pass price: −409 B (83,325 → 82,916) — negative for the first time in this arc.** Rolled the
+135th fire's journal whole to `2026-08.md` block BI (3,969 B) against 3,560 B added here. Per rule
+23's corollary a bounding pass must roll at least what the fire appends; every pass since 08-06 has
+stated a positive price instead. At this rate the 49,152 B budget is still ~61 passes away — the
+lever is LOOP-484, not the per-pass discipline.
 
-**Pass price: +1,732 B (81,593 → 83,325), unoffset.** The prior fire's journal entry was rolled whole
-to `2026-08.md` block BH, so the entry slot is flat by construction; the growth is the measurement
-paragraph in "Observable-and-safe", which is the one thing the 16:36Z review needs. Per-pass trimming
-still cannot reach the budget from here — 32,956 of the 47,953 B in `Decisions` are the three
-standing blocks — and **LOOP-484 is still the only answer, still Backlog behind the closed cap.**
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -373,6 +360,14 @@ standing blocks — and **LOOP-484 is still the only answer, still Backlog behin
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-thirty-sixth fire) — a standing rule may cite a ticket as
+  evidence; it may not depend on that ticket's STATE.** Rules 13, 18 and 32 of the 🧭 block each
+  assert an open ticket ("Open as LOOP-190", "open as LOOP-310", "LOOP-372 is `In Progress`"); all
+  three are `Done` — rule 35's own test failing inside the block that carries rule 35. **Corrected,
+  not retired:** a close is not evidence the behaviour stopped, so each cite now says to re-derive
+  against the tree. Measured second half in `Current state`: the doc is a **sawtooth** (147,966 →
+  46,940 → 83,325 B in four days), so the structural half stays **LOOP-484**.
 
 - **2026-08-10 (pm, one-hundred-thirty-fourth fire) — a filed ticket goes stale when someone
   ELSE's increment answers it, and only a grep of the merged tree finds that.** LOOP-400 said "no
@@ -582,8 +577,9 @@ standing blocks — and **LOOP-484 is still the only answer, still Backlog behin
   12. **A P1 `Improvement` is not a prioritised ticket** — §5 ranks type first, and priority only
      elevates at rank 1 (`priority=1` + `Bug`).
   13. **A `Blocked-by:` marker and the `blocked` label are different mechanisms and only the LABEL
-     stops a pick** (`servableSlice`/`todoDepth` read the label; §9c reads the marker). Open as
-     **LOOP-190**.
+     stops a pick** (`servableSlice`/`todoDepth` read the label; §9c reads the marker). **LOOP-190**
+     is `Done` as of 2026-08-10 — a close is not evidence the divergence stopped; re-derive against
+     the tree before relying on it.
   14. **Reflect's one-ticket-per-fire quota is severity-ORDERED and loss-PROOF:** everything it
      could not file is listed under `## Deferred findings`, and PM triages every entry in the fire
      that reads it (§17). **And when a proposal argues it is NOT a duplicate of a sibling ticket,
@@ -609,8 +605,8 @@ standing blocks — and **LOOP-484 is still the only answer, still Backlog behin
      caller; injecting the argument the caller never passes converts a caller bug into a green suite.
   18. **A `Mode: design` prefix at the START of a description is the switch that routes a parent into
      PM's slice; a `Bug` design parent routes to PM by CONTENT while the write gate authorises by
-     LABEL, so a single-owner `qa` design parent is visible to PM and closable only by QA** (open as
-     **LOOP-310**). Correct the owner labels to the dual set rather than working around it silently.
+     LABEL, so a single-owner `qa` design parent is visible to PM and closable only by QA**
+     (**LOOP-310** is `Done` as of 2026-08-10; verify against the tree, not against the close). Correct the owner labels to the dual set rather than working around it silently.
   19. **A dedupe note is a prediction about code that has not been written** — it claims a sibling's
      fix, as specified, leaves this defect standing. Test it by opening the sibling's ACs, never by
      comparing titles; and re-check it at promotion, because a ticket's premises decay.
@@ -691,8 +687,9 @@ standing blocks — and **LOOP-484 is still the only answer, still Backlog behin
      correctly.
   32. **A finding spun off at another ticket's hand-off carries that ticket's UNLANDED tree as its
      premise.** Every number in **LOOP-378** and **LOOP-379** is measured with LOOP-372's fix in
-     place, and LOOP-372 is `In Progress`: on `origin/main` the regression test each specifies cannot
-     reproduce what it is written to catch. Ask whether a spun-off finding's evidence reproduces on
+     place, and LOOP-372 was `In Progress` when this was distilled (it is `Done` as of 2026-08-10):
+     on the `origin/main` of that moment the regression test each specifies could not reproduce what
+     it is written to catch. Ask whether a spun-off finding's evidence reproduces on
      the LANDED tree before promoting it — where it does not, its `Blocked-by:` edge is a PREMISE
      edge, not a courtesy. **And check the tier: the hand-off is where §21b gets skipped, the filer
      being busy closing something else.** Both arrived `assignee: —` — invisible to every dev pick
