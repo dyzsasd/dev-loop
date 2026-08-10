@@ -206,6 +206,61 @@ try {
   const rAgentThread = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: ["bob"], exec: makePrExec(prEmpty, gqlUnresolvedThread("bob")) });
   ok(!rAgentThread.forgeReview.trip, "forge: unresolved thread by agent login → no trip (AC2)");
 
+  // ── LOOP-491: the reviewer's ACTOR TYPE excludes, not just the operator's login list ──────────
+  // Field defect: `@chatgpt-codex-connector` is a GitHub App absent from team.agentReviewers, so
+  // every arm read it as a person and 6 of 6 open PRs were held on it. Each pair below is
+  // byte-identical except for `__typename`, so an assertion can only pass by reading that field —
+  // deleting the union, or inverting Bot/User, fails at least one arm of every pair.
+  const gqlTyped = (opts: { threads?: Array<{ login: string; type: string; resolved?: boolean }>; reviews?: Array<{ login: string; type: string }> }) => ({
+    data: { repository: { pullRequest: {
+      reviews: { nodes: (opts.reviews ?? []).map((r) => ({ author: { login: r.login, __typename: r.type } })) },
+      reviewThreads: { nodes: (opts.threads ?? []).map((t) => ({
+        isResolved: t.resolved ?? false,
+        comments: { nodes: [{ author: { login: t.login, __typename: t.type } }] },
+      })) },
+    } } },
+  });
+
+  // AC1 (thread arm) — a Bot-typed author nobody enumerated must NOT hold the PR…
+  const rBotThread = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prEmpty, gqlTyped({ threads: [{ login: "codex-connector", type: "Bot" }] })) });
+  ok(!rBotThread.forgeReview.trip, "LOOP-491: unresolved thread by a Bot actor → no trip, without config");
+  ok(!rBotThread.forgeReview.skipped, "LOOP-491: Bot-thread case — the axis was evaluated, not skipped");
+  ok(rBotThread.forgeReview.unresolvedThreadAuthors.length === 0, "LOOP-491: the Bot author is filtered out of unresolvedThreadAuthors");
+  // …while the SAME thread from a User-typed author still must (§12c protects a person's objection).
+  const rUserThread = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prEmpty, gqlTyped({ threads: [{ login: "codex-connector", type: "User" }] })) });
+  ok(rUserThread.forgeReview.trip, "LOOP-491: the byte-identical thread from a User actor → still trips");
+  ok(rUserThread.forgeReview.unresolvedThreadAuthors.includes("codex-connector"), "LOOP-491: the User author is reported");
+
+  // AC1 (CHANGES_REQUESTED arm) — same discrimination, typed via the `reviews` selection because
+  // `latestReviews` carries no type field at all.
+  const prBotCR = { number: 42, reviewDecision: "CHANGES_REQUESTED", url: PR_URL, latestReviews: [{ author: { login: "codex-connector" }, state: "CHANGES_REQUESTED" }] };
+  const rBotCR = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prBotCR, gqlTyped({ reviews: [{ login: "codex-connector", type: "Bot" }] })) });
+  ok(!rBotCR.forgeReview.trip, "LOOP-491: CHANGES_REQUESTED by a Bot actor → no trip, without config");
+  ok(rBotCR.forgeReview.changeRequesters.length === 0, "LOOP-491: the Bot requester is filtered out of changeRequesters");
+  const rUserCR = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prBotCR, gqlTyped({ reviews: [{ login: "codex-connector", type: "User" }] })) });
+  ok(rUserCR.forgeReview.trip, "LOOP-491: the byte-identical CHANGES_REQUESTED from a User actor → still trips");
+
+  // AC2 — the two sources UNION. A bot posting through a User-shaped account (a PAT-driven bot) has
+  // no Bot typename to detect, so the operator's list must still be the thing that excludes it.
+  const rListStillWins = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: ["pat-bot"],
+    exec: makePrExec(prEmpty, gqlTyped({ threads: [{ login: "pat-bot", type: "User" }] })) });
+  ok(!rListStillWins.forgeReview.trip, "LOOP-491 AC2: a User-typed login in agentReviewers is still excluded (union, not replacement)");
+
+  // AC4 — GraphQL down ⇒ no type evidence ⇒ the pre-LOOP-491 behaviour, which HOLDS. The degrade
+  // direction is "treat everyone as a person", never "merge anyway".
+  const rDegrade = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [], exec: makePrExec(prBotCR, "fail") });
+  ok(rDegrade.forgeReview.trip, "LOOP-491 AC4: GraphQL failure → bot set empty → the Bot's CHANGES_REQUESTED still holds the PR");
+
+  // AC5 — `latestReviews` still decides WHO requested changes; the `reviews` selection only types
+  // them. A superseded CHANGES_REQUESTED visible in the GraphQL history must not be resurrected.
+  const rSuperseded = mergeGuard(repoDir, { pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prApproved, gqlTyped({ reviews: [{ login: "alice", type: "User" }] })) });
+  ok(!rSuperseded.forgeReview.trip, "LOOP-491 AC5: an older review in the GraphQL history does not override latestReviews=APPROVED");
+
   // …then through mergeGuard itself, with the injected exec (no live network).
   const prTwo = {
     headRefName: "dev-loop/LOOP-142",
