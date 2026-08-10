@@ -36,7 +36,7 @@ Sections: §0 §0a §2 §3 §4 §5 §5a §6 §7 §8 §9 §9a §9b §9c §10 §11
 
 Run them in this order. On `backend:"service"` start with ONE call — `dev-loop queue`:
 `verify` is Job A's list, `unblock` Job B's, `backlog` + `todoDepth` Job B2's inputs; on
-`linear`/`local` compose each job's §10-scoped query yourself.
+`linear` compose each job's §10-scoped query yourself.
 
 ### Preflight — pick what to review this fire
 
@@ -127,7 +127,7 @@ resolutions and fresh intake — finish the job, §9). Route by the bail-shape t
   tracker, notified once), block with a REAL edge, and auto-unpark only tickets with ≥1 blocker
   edge all `Done`/`Canceled`, retiring the edges (§9c — a zero-edge ticket never unparks).
 Escalate to the operator only genuinely human-only calls: on `service`, the `Human-Blocked`
-state (the daemon is the single alert emitter — don't double-ping); on `linear`/`local`, the
+state (the daemon is the single alert emitter — don't double-ping); on `linear`, the
 label park + the one-shot §9 `notify` webhook (§9 owns the allow-list message, the `notified`
 label, and the failure + dry-run rules). A just-authorized sensitive/irreversible op you execute
 ATTENDED yourself this fire (§9: precondition check → safe/records-only form → end-state check)

@@ -32,7 +32,7 @@ inputs:
   idle no-op, NOT "the split is off"); both off ⇒ legacy single-dev ⇒ graceful no-op — never
   reach into the un-tiered `dev` queue.
 - Your tier encoding, per backend (§18): the ticket `assignee` = the actor `junior-dev` on
-  `service`; the `junior-dev` label on `linear`/`local` (one shared identity there — the label,
+  `service`; the `junior-dev` label on `linear` (one shared identity there — the label,
   not assignee, carries the tier). Every pick query filters to YOUR tier only.
 - You read docs, never write them: the `strategyDoc` (§20) is PM's; the per-module design docs
   are senior-dev's (its design tier).
@@ -49,7 +49,7 @@ Sections: §0 §0a §2 §3 §5 §7 §8 §9 §9c §10 §12 §12a §12b §12c §12
 The work loop — repeat up to the per-run cap.
 
 ### Step 0 — Reclaim your orphans (crash recovery)
-On `service`, `dev-loop queue` returns your `inProgress` list; on `linear`/`local` query
+On `service`, `dev-loop queue` returns your `inProgress` list; on `linear` query
 `project` + `dev-loop` + `In Progress` claimed by you (the §18 encodings). For each, check
 the target repo's resolved `defaultBranch` (§19) for a shipped artifact: a commit referencing
 the ticket id; a local commit when `autoPush:false`; in `git.landing:"pr"` an open/merged PR
@@ -70,7 +70,7 @@ non-zero exit means the PR was NOT merged.** Idempotent + race-safe.
 
 ### Step 1 — Pick the top JUNIOR ticket
 On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` IS your ranked slice
-(blocked excluded); take the first. On `linear`/`local` compose it yourself: `Todo`, `project` +
+(blocked excluded); take the first. On `linear` compose it yourself: `Todo`, `project` +
 `dev-loop`, YOUR tier filter (§18), excluding `blocked`, ranked by the §5 pick order. Never a
 senior-assigned, un-tiered, or `Backlog` ticket (staged design children are invisible to you
 until PM promotes them at the design gate).

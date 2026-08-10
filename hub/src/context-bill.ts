@@ -72,15 +72,15 @@ export const BUDGETS: Record<string, Budget> = {
  * the prune with the boot corpus, so this bounds what a fire actually receives).
  */
 export const CONVENTIONS_BUDGETS: Record<string, number> = {
-  "pm":            129 * 1024,  // actual 131,441 —   655 B headroom
-  "qa":            121 * 1024,  // actual 123,587 —   317 B
-  "senior-dev":    109 * 1024,  // actual 111,086 —   530 B
-  "junior-dev":    107 * 1024,  // actual 109,402 —   166 B
-  "sweep":         116 * 1024,  // actual 118,050 —   734 B
-  "reflect":        81 * 1024,  // actual  82,447 —   497 B
-  "ops":           101 * 1024,  // actual 102,693 —   731 B
-  "architect":      79 * 1024,  // actual  79,895 — 1,001 B
-  "communication":  64 * 1024,  // actual  65,502 —    34 B
+  "pm":            127 * 1024,  // actual 129,134 —   914 B headroom (re-measured 2026-08-10, LOOP-465)
+  "qa":            119 * 1024,  // actual 121,350 —   506 B
+  "senior-dev":    107 * 1024,  // actual 109,178 —   390 B
+  "junior-dev":    105 * 1024,  // actual 107,375 —   145 B
+  "sweep":         114 * 1024,  // actual 116,118 —   618 B
+  "reflect":        79 * 1024,  // actual  80,510 —   386 B
+  "ops":            99 * 1024,  // actual 100,720 —   656 B
+  "architect":      77 * 1024,  // actual  77,904 —   944 B
+  "communication":  63 * 1024,  // actual  63,992 —   520 B
 };
 
 // Cheat-sheet blocks are generator-owned (gen-cheatsheets.ts); growth past this = trim the

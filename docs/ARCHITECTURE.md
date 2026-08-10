@@ -18,9 +18,9 @@ verified increments and records what it learned.
 It is deliberately **substrate-agnostic**. New 1.x workspaces normally coordinate through
 **Linear** or the bundled **service hub**: a system of record over `node:sqlite` with
 per-agent identity and a localhost web UI, reached by agents through the `dev-loop` CLI by
-default (an MCP server remains as a sibling thin client over the same op layer). The legacy machine-local file board is still
-described in [`references/conventions.md`](../references/conventions.md) for compatibility, but
-it is not the recommended path for new workspaces. The agents and protocols stay the same.
+default (an MCP server remains as a sibling thin client over the same op layer). (The legacy machine-local file board was
+retired: config validation refuses `backend:"local"` at E02, and the conventions no longer
+document it.) The agents and protocols stay the same.
 
 Three rules stay true everywhere:
 - **The board is the channel** — agents hand work off through ticket state, not direct calls.
@@ -48,9 +48,9 @@ dev-loop is three layers; the `npm i -g @dyzsasd/dev-loop` package ships all thr
    backend) that powers the **ticket system** and the **document system** (strategy/roadmap/design,
    versioned), and maintains the **per-project namespace** — each project's board, actors, and docs
    are isolated. It runs as a localhost daemon with a read-mostly, multi-project web UI
-   (project-scoped `/p/<key>/` routes; doc edit/publish is a double-gated opt-in). *(Linear or a machine-local
-   file board are alternative ticket backends in the shared conventions; the hub is the one that
-   adds per-agent identity, the doc system, and the namespace.)*
+   (project-scoped `/p/<key>/` routes; doc edit/publish is a double-gated opt-in). *(Linear is the alternative ticket backend in the
+   shared conventions; the hub is the one that adds per-agent identity, the doc system, and the
+   namespace.)*
 3. **Agents — skills + plugin + scheduler.** The role-specialized agents are a set of **SKILLs**
    (packaged as the Claude **plugin**) plus the **scheduler** (`dev-loop run`). You normally start
    the loop with the `dev-loop run` scheduler; Claude Code Agent View can also run the installed
@@ -175,7 +175,7 @@ from verified, public-safe facts. None of them implements or publishes externall
 
 ### 7. Human-park & notify
 A genuinely human-only block (a credential, a legal sign-off, an external prerequisite) parks
-the ticket — `Human-Blocked` on the hub, or `blocked`+`needs-pm` on Linear/local — and an
+the ticket — `Human-Blocked` on the hub, or `blocked`+`needs-pm` on Linear — and an
 optional **Slack/Lark webhook** pings you out-of-band so it never sits unseen.
 
 ### 8. Mirror — hub → Linear *(hub backend)*
@@ -225,15 +225,14 @@ work at a higher rate.
 
 ## Backends
 
-Coordination is pluggable; the agents and protocols are identical across the current 1.x
-operator-facing backends. The legacy `local` file board is kept in the conventions for
-compatibility and historical context.
+Coordination is pluggable; the agents and protocols are identical across the two 1.x
+operator-facing backends. (The legacy `local` file board was retired: config validation
+refuses it at E02.)
 
 | Backend | What it is | Gives you |
 |---|---|---|
 | **`linear`** *(default)* | Coordinate through the Linear MCP | Cloud, team-visible, the Linear app as UI |
 | **`service`** | A local **hub** — a system-of-record over `node:sqlite`, reached through the `dev-loop` CLI by default (MCP sibling) | **Real per-agent identity**, a localhost multi-project **web UI**, versioned operator-published docs, the one-way Linear mirror, CLI-portability |
-| **`local`** *(legacy compatibility)* | A machine-local markdown file board in the data dir | Zero-cloud, minimal, no web UI/identity; not recommended for new workspaces |
 
 The **work plane** (states, transitions, responsibilities, and the agent loop) is identical
 across backends. The **surface plane** (per-agent identity, web UI) expands by
@@ -246,7 +245,7 @@ The backends are **unified on the work plane and honestly divergent on the surfa
 naming the line is what keeps "the same loop, three substrates" a real guarantee rather than a
 slogan.
 
-- **The WORK PLANE is identical** across `linear`/`local`/`service`: the state set + legal
+- **The WORK PLANE is identical** across `linear`/`service`: the state set + legal
   transitions (§3, incl. the verify-fail close+follow-up rule), who-does-what (Dev claims/ships,
   PM/QA verify, §5 pick order, §7 claim, §8 dedupe), the agent loop, §9a human-intake, the §4
   label taxonomy, and reports (§22/§23 — `reports.sink` is backend-decoupled). This is the bulk
@@ -254,8 +253,7 @@ slogan.
 - **The SURFACE PLANE is a deliberate per-backend superset**, and parity there is genuinely
   impossible (not a missing feature): real **per-agent identity** + the **web UI/observability**
   + versioned operator-published hub docs are **`service`-only**; cloud **human-visibility** + the native
-  Linear app are **`linear`-only**; `local` is the zero-cloud floor (and the one backend with no
-  board view — steer a "no-cloud but I want a UI/identity" operator to `service`, not `local`).
+  Linear app are **`linear`-only**; a no-cloud operator runs `service`.
 - **Operator-notification is a cross-backend floor:** the one-way webhook alert (DL-52 transport +
   DL-59 daemon-reads-`notify`), realized on `service` via the `channel.*` tools as the §9 notify
   transport. See §9 for the unified `{transport}` model.
@@ -276,17 +274,17 @@ switching backends is operator material — agents never do either.)
 ### Loop-governance rails are `service`-only
 
 The runaway/quality rails are built on the hub, so they exist **only** on `backend:"service"`.
-For an **unattended** loop, run `service` — the scheduler prints a warning if you run `linear`/`local`.
+For an **unattended** loop, run `service` — the scheduler prints a warning if you run `linear`.
 
-| Rail | `linear` | `local` | `service` |
-|---|:---:|:---:|:---:|
-| **Verify gate** (In Progress→Done blocked; Done only via In Review, DL-77) | — | — | ✅ |
-| **No-progress circuit breaker** (alert on 0 accepted change in a window, DL-76) | — | — | ✅ |
-| **Human-Blocked reminders** (DL-26) | — | — | ✅ |
-| **Accept-rate / cycle-time / WIP-aging metrics** (`/activity`) | — | — | ✅ |
-| **Per-fire cost/outcome telemetry** (`fire.completed`) | — | — | ✅ |
-| **Per-agent identity + attribution** | shared Linear id | run token | ✅ real |
-| Convention-only gates (green-build-to-ship, verify-by-owner, the `dev-loop` firewall) | ✅ | ✅ | ✅ |
+| Rail | `linear` | `service` |
+|---|:---:|:---:|
+| **Verify gate** (In Progress→Done blocked; Done only via In Review, DL-77) | — | ✅ |
+| **No-progress circuit breaker** (alert on 0 accepted change in a window, DL-76) | — | ✅ |
+| **Human-Blocked reminders** (DL-26) | — | ✅ |
+| **Accept-rate / cycle-time / WIP-aging metrics** (`/activity`) | — | ✅ |
+| **Per-fire cost/outcome telemetry** (`fire.completed`) | — | ✅ |
+| **Per-agent identity + attribution** | shared Linear id | ✅ real |
+| Convention-only gates (green-build-to-ship, verify-by-owner, the `dev-loop` firewall) | ✅ | ✅ |
 
 ## Safety boundary
 
