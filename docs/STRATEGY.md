@@ -287,37 +287,40 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
   unset here, so the board is still read-only and the CLI is still the only way to rule.
 
-### 2026-08-10 (pm, one-hundred-thirty-second fire): three money renderers, one of them with no basis — and a successor destroyed before it could carry the fix
+### 2026-08-10 (pm, one-hundred-thirty-third fire): the AC that contradicted the ruling it was written to serve — and a flagged risk that measurement falsified
 
-**`dev-loop metrics` publishes two values for one named quantity, in one run (LOOP-514, filed).**
-Captured back-to-back at 06:41:57Z: the default line reads `$11.4858/accepted change`, `--flow` reads
-`$11.2936/accepted-change`. The default line also presents its priced total ($1987.0422, summed over
-the 491 rows with `costUsd > 0`) over the 548-row *metered* count — implying **$3.6260/fire** where
-`--cost` publishes **$4.0469/priced fire**, 10.4 % apart. `--flow` and `--cost` each name their basis; the
-default line — the one `doctor`'s `NEXT` sends the operator to, and the only money line §22a quotes —
-names none.
+**LOOP-379 verified `Done` against the merged tree `9ed0358`** — the doc-slug parent route no longer
+reads prose at all; a design's owner is derived from §21a's mandatory back-link, as ruled 08-06.
+Independently re-measured, not read off the hand-off: the post-fix fixture suite run against the
+**pre-fix** source (`BODY_SLUG_RE` present ×3) fails **22 assertions**, including both AC4 arms and
+every `sensitive`-inheritance arm; AC6 re-run on the CURRENT board (**495 rows**, up from the 461 the
+implementer measured) returns an EMPTY non-terminal parent set and resolves all four ruled slugs to
+their ruled owners — plus a **fifth** slug that appeared after the ruling (`state-locality` →
+LOOP-458), which is the stronger result: the rule generalised past the rows it was scored on.
 
-**The fix existed and reached two renderers of three.** LOOP-239 named this exact defect; its verify
-measured AC1 against *what `--flow` prints*, and LOOP-219's discarded-spend doctrine landed the same
-way. LOOP-239 was Canceled and superseded by **LOOP-292 — destroyed in the 2026-08-04 wipe, never
-reconstructed** — so the remaining renderer has had no carrier since, while the Cancel comment still
-reads as a clean hand-off. RULE 30's third instance, and a new failure mode for RULE 34: the named
-successor can be GONE. Both extended in place; highest rule number stays 40.
+**Three deviations, all surfaced by the implementer rather than slipped, all ratified.** AC2's
+lifetime-wide "every child" was wrong for a doc §21a defines as *living per-module*; applied to a
+redesigned module it resolves the slug to nobody, which the fixtures measure landing as
+`["dev-loop"] / junior-dev` on a sensitive design's child — the exact failure the ruling existed to
+prevent. The shipped per-increment read follows the ruling more closely than my own AC prose did.
+BOUND 3a removed (its input cannot arise once prose is not read); BOUND 3b narrowed to the mutual
+handshake. BOUND 3's posture is intact: an ambiguity the mandatory edge cannot break is still nobody.
 
-**Said before the number is used, not after.** The operator's 06:30Z ruling sets a 48 h review at
-16:36Z today on cost grounds, so a basis error in the surface they will read is decision-relevant now
-rather than after LOOP-514 lands. LOOP-463 carries the reconciliation, the refreshed ledger sum
-($562.11 / 38.1 h / 388 fires, still 100 % claude lanes), the ≈$709 projection to the review point,
-and one instruction: read `--flow` or `--cost`, never the bare line. This corrects a basis, not a
-magnitude — the $509.71 they ruled on came from the ledger, not from the buggy surface.
+**The risk the hand-off asked me to file was falsified by measuring it.** "Mid-staging, the parent is
+linked to only some of its children, so it is not the owner" does not reproduce: the child's own
+mandatory `relatedTo` carries it alone, so both mid-staging shapes resolve. What survived is a
+different finding — `isDesignParent(P)` true while `designOwnerOfSlug(S)` is null for the same
+increment, harmless today only because each of the three consumers happens to call the arm that is
+right for it. Filed as **LOOP-515**; LOOP-396, which the hand-off named, is scoped to *approvals* and
+does not cover it.
 
-**Board and protocol.** Job A empty for the seventh consecutive fire (all four In Review rows are
-`qa`-owned, oldest LOOP-378 at 38 h); `needs-pm` and `_team` empty; no `## Deferred findings` pending;
-§9c — no blocker in {401, 468, 472, 464, 463} is terminal, so none of the six parked rows can unpark.
-Promotion closed for the twenty-fourth consecutive fire: unblocked Todo **28** (senior 15, junior 13)
-against a cap of 10 per tier. One filing, one grooming: LOOP-459 — the operator's `--dry-run` bug, and
-the only Backlog row carrying no acceptance criteria — now has five, plus the repro hazard that it
-consumes the live scheduler's own gate file.
+**Board and protocol.** Job A: one verified `Done`, the first pm verify in eight fires. `needs-pm`
+and `_team` empty; no `## Deferred findings` pending; §9c — no blocker in {401, 468, 472, 464, 463}
+is terminal, so none of the six parked rows can unpark. Promotion closed for the twenty-fifth
+consecutive fire: unblocked Todo **28** (senior 15, junior 13) against a cap of 10 per tier. Two
+filings, both measured before filing: LOOP-515 and LOOP-516 (W34 states a harm the same doctor run
+contradicts three lines later, while the finding it should make — two worktrees at two *different*
+wrong paths, both created after LOOP-132 closed — goes unstated).
 
 ## Personas
 
@@ -352,6 +355,19 @@ consumes the live scheduler's own gate file.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-thirty-third fire) — when a shipped increment contradicts the
+  acceptance criterion that ruled it, the CRITERION is re-examined first.** LOOP-379's AC2 said a
+  slug's owner is linked to **every** child of that slug; §21a defines a design doc as *living
+  per-module*, so a module designed twice has children the current parent never staged and the
+  literal AC resolves it to nobody — measured landing as `["dev-loop"] / junior-dev` on a sensitive
+  design's child, LOOP-290's shape and the exact failure the A′ ruling existed to prevent. **Ratified
+  the narrowing.** The load-bearing half: a deviation is ratifiable only where the implementer NAMED
+  it before shipping and measured the harm the literal reading causes. One discovered by the verifier
+  is still a verify-fail. **Same fire, second rule: measure a hand-off's flagged risk before filing
+  it** — LOOP-379's stated unresolved-parent window does not reproduce, and measuring it found a
+  different defect one layer up (LOOP-515). Filing the reported shape would have created a ticket on
+  a false premise and missed the true one.
 
 - **2026-08-10 (pm, one-hundred-twenty-ninth fire) — when a projection truncates an ask, the ticket
   owner may move the payload into the surviving window, but only after enumerating every reader of
