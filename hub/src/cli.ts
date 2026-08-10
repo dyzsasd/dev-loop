@@ -34,6 +34,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   "with-repo-lock": ["with-repo-lock"],            // serialize base-clone mutations on a shared repo
   notify:           ["comms"],                     // push a message to the team's slack/lark channel
   "push-guard":     ["push-guard"],                // P1-2: pre-push ride-along check (canceled-ticket commits)
+  push:             ["push"],                      // LOOP-521: `push-guard --strict` AND `git push` as ONE call — the gate is the precondition of the push, so skipping it is not an available argv (design approvals §16.3)
   "stage-guard":    ["stage-guard"],               // LOOP-320: pre-COMMIT check — refuse another fire's edits in the staged set
   "conventions":    ["conventions-verb"],          // LOOP-237: the PULL half of §0a delivery — one agent's config-pruned slice, on demand
   metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
@@ -121,6 +122,11 @@ Usage: dev-loop <command> [args]
                                                         already uncommitted before this run started
   push-guard [--repo <dir>] [--branch <b>] [--strict]   pre-push ride-along check: flag unpushed commits
                               whose referenced tickets are Canceled/Duplicate (P1-2; --strict exits 1 on findings)
+  push [--repo <dir>] [--branch <b>] [--remote <n>] [--dry-run] [--json]   gate AND publish a branch in ONE
+                              call: push-guard --strict runs inside it and the \`git push\` happens only when
+                              every class clears, so there is no argv that waives the gate (LOOP-521). Exit
+                              0 pushed/nothing-to-push · 1 HELD (every refusing class named) · 2 usage · 3
+                              the gate could not evaluate · 4 gate clear but the push failed · 5 lock busy
   worktree add <id> [--repo <ref>]   create a dev worktree on branch dev-loop/<id> based at origin/<defaultBranch>
                               (never local main — prevents passenger commits; LOOP-54)
   worktree path <id> [--repo <ref>]  print the canonical worktree path (single source of truth; LOOP-37)
@@ -204,7 +210,7 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "pr", "doc-land", "settings",
+  "worktree", "merge-guard", "pr", "doc-land", "push", "settings",
   "approve", "revoke", "approvals", "request"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; settings reads/writes the projects row; the approvals verbs read/write the approvals table
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
