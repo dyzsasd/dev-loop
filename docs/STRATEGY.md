@@ -335,6 +335,32 @@ absorbed, which is the whole point of the price line. Per rule
 stated a positive price instead. At this rate the 49,152 B budget is still ~61 passes away — the
 lever is LOOP-484, not the per-pass discipline.
 
+**2026-08-10, 148th fire — the observable-and-safe program closed its last open control, and the
+shared checkout was holding a revert of shipped code.** **LOOP-532 verified `Done`** against the
+merged tree at `7d9c7cf`: the banner's two fault sources became state and `renderBanner()` the single
+writer, so a healthy poll can no longer clear a banner raised by a lost stream. The five
+`operator-design-review` controls now stand at **4 `Done`** and **1 `In Progress`** (LOOP-384) — and
+that ticket's live branch is `c63f65d` on open PR #292, superseding the `f9fb354` this doc named at
+the 144th fire. **Verified by mutation, not by reading:** three mutations of the shipped client,
+each red (3 / 10 / 5 assertions), the third reconstructing LOOP-386's defect exactly and being named
+by the suite's own AC — the power its predecessor's four `text.includes(…)` assertions never had.
+**What the checkout was carrying:** a STAGED revert of shipped LOOP-468 code (`postinstall.cjs` +
+its test, re-adding the autostart spawn PR #293 removed) left by the 147th fire's own mutation test,
+plus a superseded half-applied `migrate.ts` edit. Restored to `HEAD` before any doc work; the
+discarded diff preserved and reported on LOOP-384.
+**Todo depth 23 — senior 13/10, junior 10/10.** Promotion closed for the 39th time in 40 fires;
+Backlog steady at 74 for a fourth fire. `Human-Blocked` is zero for a fourth fire. Job C filed
+nothing for a fourth consecutive lens sweep: the ux-flows finding — the projects index, the page an
+operator lands on, renders three delivery counts and no decision-queue count at all — deduped into
+LOOP-390 as AC5 rather than becoming ticket #75.
+
+**Pass price: +5,044 B (132,940 → 137,984, this line included).** Rolled nothing. Larger than the ≤2.5 KB the 147th fire
+committed to, and a deliberate trim pass recovered only 270 B — the entry is long because it carries
+two findings and mints a standing rule, not because it is padded. Stating that rather than absorbing
+it: the per-pass lever is nearly exhausted, and the doc has now grown every pass since 08-06. The
+lever is LOOP-484 (Backlog, behind the cap), which argues the naive rollup is wrong because 244 of
+284 Decisions lines are in-force doctrine rather than superseded history.
+
 **2026-08-10, 144th fire — the observable-and-safe program, and what the board actually holds.**
 The five `operator-design-review` controls now stand at **3 `Done`** (LOOP-382 pause/resume, LOOP-383
 typed approvals, LOOP-385 release resilience), **1 `In Progress`** (LOOP-384 waiting-on discriminator,
@@ -390,6 +416,41 @@ discipline.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-forty-eighth fire) — two artifacts that were true when written and
+  false when read: a mutation left staged in the shared tree, and this doc's own commit citation.**
+  Both cost real work this fire, and both are the same failure with different clocks.
+
+  **The first is a near-miss with a large blast radius.** The 147th fire mutation-tested LOOP-468's
+  regression test by reverting `postinstall.cjs` to re-add the autostart spawn. That revert was still
+  **staged** in the shared checkout at this fire's boot, together with the matching test revert —
+  `M  hub/postinstall.cjs`, `M  hub/test/build-artifact.ts`. The mutation was correct; it was never undone. A mutation applied by
+  restoring an older blob lands in the INDEX, so the mutant is not working-tree scratch that a later
+  `git checkout` sweeps away — it is a staged payload waiting for the next commit. Had any agent run
+  `git add -A`, LOOP-468 would have been silently un-shipped inside an unrelated ticket's commit, with
+  every gate green. The 147th fire's report said the mutation went red; it did not say the tree was
+  clean, because nothing asked it to.
+
+  **This mints STANDING RULE 43 — the close condition of a mutation test is a clean tree, not a red
+  test run.** Verify the restore in the same fire, with `git status --porcelain` empty for the files
+  you touched, and say so where you report the mutation. The corollary names the tell: a mutation
+  performed as `git checkout <sha> -- <file>` STAGES it, so `git status` shows `M ` in the FIRST
+  column — the column that means "already staged for commit". This fire ran three mutations under the
+  rule and closed with the tree clean.
+
+  **The second is this document turning into a source of error.** I took the 144th fire's `LOOP-384 …
+  committed and pushed as f9fb354` at face value, found that commit bumps `SCHEMA_VERSION` to 6 while
+  touching no test, and filed a finding that its merge check would go red. It would not: the tip is
+  `c63f65d` on PR #292 and carries exactly that fix. The doc was accurate the day it was written.
+  Correcting the ticket was the cheap part; the expensive part is that a stale citation in the north
+  star reads exactly like a current fact.
+
+  **This folds into STANDING RULE 42** (verify a shipped constant against the spec, not the prose that
+  cites it) rather than minting a rule: a dated snapshot is prose about a branch, and a claim about a
+  branch is read from the branch. Practically — `git log <branch>`, `gh pr list --search <id>`, never
+  a commit sha quoted in a dated block. Per the existing discipline, the 144th fire's record is left
+  standing and superseded here rather than rewritten.
+  LOOP-532, LOOP-384, LOOP-468, LOOP-390.
 
 - **2026-08-10 (pm, one-hundred-forty-seventh fire) — a regression test whose discriminating power
   came from the code path its own fix deleted, so it went inert at the moment it started passing.**
