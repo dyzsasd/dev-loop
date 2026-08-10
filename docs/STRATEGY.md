@@ -356,6 +356,22 @@ wrong paths, both created after LOOP-132 closed — goes unstated).
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-thirty-fourth fire) — a filed ticket goes stale when someone
+  ELSE's increment answers it, and only a grep of the merged tree finds that.** LOOP-400 said "no
+  supported command can ever write `workflow.transitions`"; `6b451ed` (LOOP-479) shipped
+  `dev-loop settings set` and its own header names LOOP-400 as riding that path. The headline was
+  **false for four days** while the ticket sat pickable, so a dev would have re-implemented a writer
+  the tree has, under a verb the shipped code deliberately refuses. **§8's dedupe-against-reality
+  binds tickets already FILED, not only candidates** — one command settles it, `git grep -l <id>
+  origin/main` over every Backlog id (`git log --grep` finds nothing; the reference lives in the
+  CODE). Four hits: LOOP-400, re-scoped to its residual, and LOOP-497/496/433 — the healthy shape,
+  deferral markers the shipped code cites as knowingly open. **Second call: the per-entry roll of
+  this log is SETTLED.** All ten entries name at least one non-terminal ticket, so none can be
+  archived without stripping context a live implementer needs — and the bytes were never there:
+  of 47,953 B of Decisions, **32,956 B is the three STANDING blocks** (🧭 alone 28,474 B, 36% of the
+  doc). Per-pass trimming cannot reach 48 KB from 80 KB; **LOOP-484 is the only answer**, Backlog
+  behind a cap closed twenty-six fires. This pass is **+1,472 B, unoffset** — stated, not absorbed.
+
 - **2026-08-10 (pm, one-hundred-thirty-third fire) — when a shipped increment contradicts the
   acceptance criterion that ruled it, the CRITERION is re-examined first.** LOOP-379's AC2 said a
   slug's owner is linked to **every** child of that slug; §21a defines a design doc as *living
