@@ -369,6 +369,39 @@ lever is LOOP-484, not the per-pass discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-thirty-ninth fire) — the previous fire's exit condition was
+  necessary and not sufficient, and the wait it recorded reached no surface for two fires.**
+  Two separate defects in one hand-off, both mine.
+  **The exit condition was incomplete.** Pass 107 recorded that LOOP-499's refused close clears once
+  the CLI is reinstalled, and gave the next fire a one-line test for it
+  (`grep -c declaredParentOf …/dist/design-parent.js` > 0). The test is correct and the remedy is
+  not: the refusal string lives in `dist/ticketwrite.js`, and `daemon status` reports the running
+  daemon as `pid 23716, entry: …/dist/daemon.js` — the SAME installed tree. A live process does not
+  pick up a reinstall, so clearing this needs the rebuild AND a daemon restart. Had the operator acted
+  on pass 107's instruction alone, a still-refusing gate would have read as "the fix did not work",
+  which is the more expensive failure: it discredits a correct diagnosis. Three axes, not two — the
+  installed tree and the process serving it are different questions, and I checked only the first.
+  **The wait reached nobody.** Pass 107's call was "recorded on the ticket so the next fire retries
+  it". That is not routing. `decisionQueue` (`metrics.ts:677`) is
+  `Human-Blocked ∪ (In Review AND assignee='operator')`; LOOP-499 is `In Review` assigned to
+  `senior-dev`, so it is outside the set by construction, and doctor's `[W20]`/`NEXT` re-derives from
+  that same set. It carries no `blocked` label, so `blockedNow` misses it too; the §22a digest would
+  have shown "oldest In Review age" but `team.comms` is null AND the `communication` lane is one of
+  the OpenRouter lanes down under LOOP-463. Every operator surface was silent for two consecutive
+  fires. The only thing that carried the stall was a `carryOver` note in PM's own `pm-state.json` —
+  one agent's private memory, which is exactly what rule 34 says is owned by nobody.
+  **The call:** escalated as **LOOP-525** (`Human-Blocked`, assigned `operator`, P1) — not because a
+  decision is owed, but because `Human-Blocked` is the one set the operator's surfaces actually
+  query, and a machine action outside `autonomy:"ask"` needs to reach them. Its ACs carry all three
+  steps (reinstall, daemon restart, the close) so the remedy is not re-derived a third time. It is
+  scoped to the whole stale write layer — six merged code commits, of which `9ed0358` is the one
+  producing this wrong answer — rather than to LOOP-499, because the other five are equally not live.
+  Filed **LOOP-526** for the general gap: a refused transition is invisible on every surface, and
+  repetition (the same ticket, the same transition, ≥2 fires) is the signal, not the single event.
+  LOOP-499 got one comment carrying only the new fact, and no re-verification.
+  **Folded into STANDING RULE 34**, whose shape this is: the named future owner can be *the next fire
+  of the same agent*, and that names nothing at all.
+
 - **2026-08-10 (pm, one-hundred-thirty-eighth fire) — the §21a design gate passed on LOOP-499 and the
   board refused the close, because the running build enforces a predicate the merged tree replaced.**
   The gate's own work was clean. `hubDoc:design/approvals` v5 §16 answers all three conditions of the
@@ -802,6 +835,15 @@ lever is LOOP-484, not the per-pass discipline.
      LOOP-488). **And the named successor can be GONE:** LOOP-239's `Canceled` handed its remainder
      to LOOP-292, destroyed in the 2026-08-04 wipe — the comment still reads as routing while
      nothing carries the work (LOOP-514). Resolve the successor before reading a Cancel as closed.
+     **The named owner can also be "the next fire", which names nobody.** Pass 107 left LOOP-499's
+     refused close "recorded on the ticket so the next fire retries it"; the board carried it on no
+     queryable surface — `decisionQueue` is `Human-Blocked ∪ In Review@operator` and the ticket is
+     `In Review@senior-dev` — so for two fires the only carrier was PM's private `pm-state.json`
+     (LOOP-525, LOOP-526). **A wait is routed only when it lands in a set someone else QUERIES**;
+     a comment, a report line, or an agent's own state file is memory, not routing. Its sibling:
+     an exit condition is verified on the axis that will actually serve the code — pass 107's
+     reinstall test was correct for the installed tree and silent about the running daemon, which
+     loads that tree once at boot.
   35. **A fact belongs in the section whose WRITE RATE matches its DECAY RATE — and a number
      published without its coverage is not yet a fact.** The 2026-08-06 top-priority block put a
      fire-success percentage, six error-class counts, per-agent report ratios and per-ticket program
