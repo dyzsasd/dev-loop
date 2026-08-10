@@ -391,6 +391,52 @@ discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-seventh fire) — a regression test whose discriminating power
+  came from the code path its own fix deleted, so it went inert at the moment it started passing.**
+  LOOP-468 (I1, first half: an install must not install a login item) merged as `4cf6130` and the
+  product change is complete — `hub/postinstall.cjs` is 21 lines, a Node-version warning and
+  `process.exit(0)`, with the spawn, the `force`/`dryRun`/`globalInstall` flags and the darwin probe
+  all deleted. It failed verification on its guard, not its code.
+  **Measured by mutation, three trees under the shipped assertion's exact env and predicate.** The
+  test greps the postinstall's stdout for `/install-autostart|LaunchAgent|plist|login.item/i` while
+  passing `DEVLOOP_POSTINSTALL_FORCE`, `DEVLOOP_POSTINSTALL_TEST_DARWIN` and
+  `DEVLOOP_POSTINSTALL_DRY_RUN` — three variables the shipped file reads none of. Merged tree: green,
+  0 entries in `$HOME/Library/LaunchAgents`. Verbatim revert: red in-suite. **Revert plus a real spawn
+  (`dryRun = false`, a `dist/daemon.js` that writes the plist): green, and one `so.devloop.hub.plist`
+  on disk.** A postinstall that installs a login item passes the test that exists to stop it.
+  **The mechanism is specific and reusable: the guard's red came from a branch the fix removed.** The
+  old file's `dryRun` arm PRINTED `would run: … install-autostart` instead of spawning, and the
+  assertion was inverted in place. Production no longer has a dry-run concept, so the test can detect
+  a verbatim revert and nothing else — any reimplementation that spawns for real is invisible to it.
+  **This folds into STANDING RULE 33** (a proxy for the property is not the property) rather than
+  opening 43, with the corollary that earns the fold: *when a fix DELETES a branch, an assertion on
+  that branch's output degrades from a weak proxy to no proxy at all the instant the fix lands — and
+  it reads green forever after.* The tell is an invocation carrying env vars the code under test no
+  longer reads.
+  **This is NOT RULE 42, and the difference matters for where to intervene.** Rule 42's failure is an
+  AC set that enumerates mechanisms instead of the invariant. Here the AC was written correctly —
+  AC1 named both assertions verbatim, *"assert the temp `Library/LaunchAgents/` is empty and no child
+  process was spawned"* — and the delivery substituted a stdout grep for both. A correct AC narrowed
+  at implementation is a verification catch, not a filing-time one. AC2 and AC4 narrowed the same way
+  (detail on the tickets). Closed `Canceled`, superseded by **LOOP-533** (senior-dev,
+  `Mode: direct-code`), which carries the mutant above as its acceptance probe: the test must go red
+  against it.
+  **The fire's own verdict was the next job's input.** Cancelling LOOP-468 retired the sole
+  `Blocked-by:` edge on **LOOP-469** (I1, second half; P1, `sensitive`), which the §9c pass unparked
+  in the same fire — and the substance holds, not just the edge: `postinstall.cjs` no longer calls
+  `installAutostart()` at all, so the ordering hazard the block named has no caller left, and LOOP-533
+  is scoped to the test file so it cannot re-create it. Human-Blocked stayed at zero rows for a third
+  fire; the other four parks all still carry live edges to open tickets (LOOP-483→464, LOOP-402/403/404→401).
+  **STANDING RULE 19 again, and the strongest form yet — the dedupe hit landed INSIDE a ticket.** The
+  trust-safety lens, focused by the one commit that moved the code sha, asked what tells an operator
+  their machine still carries a login item. `doctor.ts:1868-1875` answered it: `reconcileAutostart`
+  `pass`es on a present plist and **`warn`s when none exists**, prescribing `dev-loop daemon
+  install-autostart` as the remedy. So the health surface grades the design's default state as a
+  deficiency and points at the verb LOOP-469 exists to fix. That deduped into LOOP-469's AC4 (which
+  already claims the doctor surface) and became **AC7** on that ticket — one classification change in
+  a function the implementer is already entering — rather than a fourth ticket against the same
+  function. Filings this fire: one, and it is an escalation, not an idea.
+
 - **2026-08-10 (pm, one-hundred-forty-sixth fire) — the lessons corpus passed from stale to
   incorrect, and every health surface reported healthy across the transition.**
   **Measured, not inferred.** `dev-loop project` writes 131 B to stdout and **0 B to stderr**
