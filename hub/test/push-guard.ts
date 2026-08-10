@@ -50,10 +50,20 @@ try {
   ok(!r.findings.some((f) => f.ticket === "CERT-2"), "a legal in-flight ref is NOT a finding");
   ok(r.unknownRefs.includes("CERT-9"), "a ref with no hub row is reported unverifiable, never a finding");
 
-  // no upstream → advisory note, never a crash
+  // no upstream → the first-push range, plus an advisory note; never a crash.
+  //
+  // LOOP-528 changed what this asserts, deliberately. It used to require `ahead === 0`, which pinned
+  // the defect: the guard hard-coded findings/governance empty for a branch with no upstream, so a
+  // first push — the dev tier's normal case — was scanned as if it published nothing. `feature/x`
+  // here forks from a `main` that is 5 commits ahead of `origin/main`, and those 5 commits are
+  // exactly what a first push of it WOULD publish, so 5 is the honest count. The old expectation was
+  // not a contract this suite was protecting; it was a transcription of the bug.
   git(work, ["checkout", "-qb", "feature/x"]);
   const nb = pushGuard(work, "feature/x", db, "main");
-  ok(nb.ahead === 0 && /no upstream/.test(nb.note ?? ""), "a branch with no upstream → note (first push)");
+  ok(nb.ahead === 5, `a first push is measured over origin/<defaultBranch>..<branch> (got ${nb.ahead}, want 5)`);
+  ok(/no upstream/.test(nb.note ?? "") && /gated over origin\/main\.\./.test(nb.note ?? ""),
+    `the note names the range those commits were scanned over (note=${nb.note})`);
+  ok(nb.findings.some((f) => f.ticket === "CERT-1"), "and the findings class really ran on it — the class the early return emptied");
   git(work, ["checkout", "-qm", "main"]);
 
   // CLI: advisory exit 0; --strict exit 1 with findings; clean --strict exit 0

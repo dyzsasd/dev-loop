@@ -452,17 +452,41 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, approvalsDbFile, opts.actor ?? "unknown", recordUnusable, opts.record !== false)
     : [];
 
-  if (!hasUpstream) return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], approvals, unresolvedDefaultBranch, note: `no upstream ${remote}/${br} — nothing to compare (first push of this branch)` };
+  // LOOP-528 — `findings` and `governance` measure the SAME range the approvals gate just measured.
+  // Until this commit they were hard-coded `[]` whenever the branch had no upstream, and the verb
+  // above cannot tell an empty class from an unevaluated one: `dev-loop push` reported a five-class
+  // gate having run three. §16.3 D3 names that failure exactly — "a verb that wraps a gate and
+  // quietly weakens it is worse than no verb, because the caller now believes a gate ran" — and the
+  // case it happened in is the dev tier's normal one, the first push of `dev-loop/<id>`. The
+  // §17 `governance` class is the one that matters most there: a first push carrying a
+  // `conventions.md` or SKILL edit read clean.
+  //
+  // The range was never actually unavailable. `range` above already answers "what would this push
+  // publish" for all three cases, and the approvals gate has been using it since LOOP-394; these two
+  // classes were simply re-deriving `origin/<br>..<br>` for themselves and getting nothing. They now
+  // read `range`, so the three classes that scan commits scan the same commits by construction.
+  //
+  // `range === null` is the one genuinely unevaluable case (no remote ref AND no local branch). It is
+  // NOT reported as three empty classes: `unresolvedDefaultBranch` carries it, which is what
+  // `dev-loop push` maps to exit 3 (D4 — "the gate checked nothing it could have checked"). Set here
+  // rather than left to the passenger block above, which only sets it for a `dev-loop/<id>` branch —
+  // an unevaluable range fails open on every other branch name otherwise.
+  if (!range && !unresolvedDefaultBranch) unresolvedDefaultBranch = defaultBranch;
   // -z NUL-terminates each record so newlines in the body don't split records; %B is the full commit
   // message (subject + body), which allows ticket refs in trailers/footers to be detected (LOOP-25).
-  const commits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${remote}/${br}..${br}`]));
+  const commits = range ? parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])) : [];
   const refs = new Map<string, { sha: string; subject: string }[]>();
   for (const c of commits) {
     for (const id of c.msg.match(TICKET_RE) ?? []) (refs.get(id) ?? refs.set(id, []).get(id)!).push(c);
   }
   const findings: PushGuardFinding[] = [];
   const unknownRefs: string[] = [];
-  const db = dbPath ?? resolveHubDbPath(repoDir);
+  // LOOP-528 — the THIRD reader of "which workspace is this directory". `d29c1f4` moved the default
+  // branch, the `approvals.enforce` switch and the passenger db onto `workspaceRootForRepoDir` so a
+  // call from a per-ticket worktree (the only place §7 lets a dev tier ship from) resolves the
+  // workspace that owns the repo rather than the worktree's own path; this lookup was left behind and
+  // silently degraded to "no local hub" there, reporting every ticket ref as unverifiable.
+  const db = dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir);
   // Same degrade as the passenger axis (R5): an UNREADABLE db is reported as unverifiable refs, the
   // path an absent one already takes, instead of throwing out of the guard and taking the approvals
   // gate with it.
@@ -500,7 +524,13 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     }
   }
 
-  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch };
+  // The note still reports a first push, but it no longer says "nothing to compare" — that sentence
+  // described the bug. It names the range the three commit-scanning classes actually used, because a
+  // reader judging a clean verdict needs to know WHICH commits were clean (LOOP-528 AC1).
+  const note = hasUpstream ? undefined
+    : range ? `no upstream ${remote}/${br} — first push of this branch; gated over ${range}`
+    : `no upstream ${remote}/${br} and no ${remote}/${defaultBranch} or local ${br} — the range could not be resolved, so findings/passengers/governance did NOT run`;
+  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}) };
 }
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
