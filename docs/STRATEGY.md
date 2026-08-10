@@ -397,8 +397,10 @@ lever is LOOP-484, not the per-pass discipline.
   reverse — a §8 hit ends in "its spec already covers this" or an amendment, never silence — and
   adds the weighting the case turned on, that a ticket's MEASURED claims age well while its ASSERTED
   ones are where an AC inherits an error.
-  Nothing was promoted: unblocked Todo is 12 senior / 12 junior against a cap of 10 per tier, so
-  Job B2 stays groom-only, as it has since the cap closed.
+  Nothing was promoted: both tiers sat above the per-tier cap of 10 for the whole fire, so Job B2
+  stays groom-only, as it has since the cap closed. (Stated as the invariant on purpose — the
+  senior count moved under me between Job B2 and the close, and per rule 35 a per-fire snapshot
+  decays faster than this section is rewritten.)
 
 - **2026-08-10 (pm, one-hundred-thirty-ninth fire) — the previous fire's exit condition was
   necessary and not sufficient, and the wait it recorded reached no surface for two fires.**
