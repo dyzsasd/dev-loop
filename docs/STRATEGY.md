@@ -391,6 +391,58 @@ discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-fifth fire) — the migration this loop has been sequencing for
+  two days ran on the operator's machine, and the half they deferred got a mechanical carrier instead
+  of a promise.**
+  **LOOP-473 is released and clear to start.** The operator confirmed on the ticket that
+  `dev-loop team import --into /Users/shuai/workspace/devplatform --project devplatform` ran for real
+  (dry-run first), into a workspace seeded outside every existing root per the LOOP-472 decision. This
+  is the first production exercise of LOOP-472's verb, and the operator verified it the way the verb
+  does not: `cmp` byte-identical on `qa-state.json` (55,764 B — the file that proved daily use) and on
+  the lessons file, with the legacy tree unmodified. They unparked the ticket themselves, so the
+  `Human-Blocked` queue is empty for the first time since it was filed.
+  **The verb's own report is a per-class file count and nothing else** — `lessons 1 · reports 4 ·
+  state-json 5` — with no byte total, no disk enumeration, and no line for the legacy `hub.db`. That
+  is **LOOP-531 reproducing on its first production run** rather than being inferred from source, and
+  the operator's out-of-band `cmp` is precisely the manual step a disk-complete inventory removes. The
+  evidence is on the ticket; no re-scope, no priority change.
+  **The decision this fire actually made is about the half that did NOT run.** The operator deliberately
+  deferred the physical `mv` of the repo checkout plus the runtime re-point, because that tree is in
+  live use by operator-side devplatform sessions — *"until then the legacy reads this ticket removes
+  MUST keep working"* — and placed it "before or with this ticket's landing". The gap was that nothing
+  carried it: LOOP-473's PREREQUISITE section now reads fully satisfied, AC1–AC6 are all about code,
+  and this repo lands `pr` + `autoMerge`. A senior fire reading only the body would build, go green,
+  and merge, with no step that asks whether the checkout had moved.
+  **Ruling: encode it, do not re-park it.** The operator had just released the ticket with a full
+  rationale; re-parking would have re-litigated a decision they made. Instead **AC7** moves the gate to
+  merge time — before Step 0.5 merges, the implementer re-reads the ticket and requires an operator
+  comment confirming the cutover; absent it the PR stays open and green and the fire closes with a
+  note, which is a completed fire rather than a block. This is enforceable rather than aspirational
+  precisely because Step 0.5 is the dev agent merging, not GitHub auto-merge — the implementer owns
+  that moment. Senior can now burn the ~15-call-site body of work in parallel with the operator's quiet
+  window, and the merge cannot outrun the cutover.
+  **This is STANDING RULE 42 applied at FILING rather than at verification**, one fire after it was
+  minted. The ticket's own PREREQUISITE names a failure — *"merging this before the migration destroys
+  work in daily use"* — and every AC beneath it enumerated a mechanism. AC7 is the missing invariant.
+  The rule's value is that it fires on tickets nobody has verified yet.
+  **Superseding the fire-140 record on the outward channel:** that entry said `team.comms` is unset
+  here, so W12 cannot fire and the missing channel surfaces only through W20's trailing clause. The
+  config now carries `team.comms = {provider: lark, webhookEnv: LARK_WEBHOOK_URL}` and doctor emits
+  **W12 — the env is unresolvable**, so the workspace has moved from row 2 of LOOP-377's table (never
+  set) to row 1 (set, dead). The runtime effect is identical and unchanged: `notify`, the daemon
+  Human-Blocked reminder and the §22a digest all silently no-op, and the reminder layer has been dead
+  through every park this week — including LOOP-473's, which the operator answered by reading the board.
+  LOOP-377 is untouched in scope (it is the never-set branch, still real in code) but is annotated:
+  its repro no longer exists on this machine, so its ACs need a fixture workspace, and an implementer
+  who reads this machine's doctor output will wrongly conclude the check already works. The live W12 is
+  the operator's to clear (`dev-loop secret set LARK_WEBHOOK_URL`); doctor's NEXT line already says so.
+  **This pass is one entry and no `Current state` subsection**, and it was written short on purpose:
+  the doc is 118.8 KB against the 48 KB budget (W37), last pass cost +7,762 B — the largest yet — and
+  LOOP-484 is the lever, still Backlog behind the cap. Board: promotion closed for the **thirty-sixth**
+  time in thirty-seven fires, senior 12/10 and junior 10/10 at the per-tier cap, Backlog steady at 74.
+  Nothing filed this fire: the trust-safety lens swept the freshly-moved `push`/`push-guard` surface
+  (`1daa96d`) and every candidate it produced was already on the board.
+
 - **2026-08-10 (pm, one-hundred-forty-fourth fire) — a fix satisfied every acceptance criterion and
   reintroduced the exact failure it was written to close; and the promotion gate opened for the first
   time in thirty-five fires.**
