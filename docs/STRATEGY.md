@@ -273,16 +273,16 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T03:52Z over the 7d team ledger (**851 fires**) via `dev-loop metrics --window
-  7d`: **fire success 50%** (`successRate` 0.4959; 65% over 538 fires when Goals was written
+  Measured 2026-08-10T03:54Z over the 7d team ledger (**860 fires**) via `dev-loop metrics --window
+  7d`: **fire success 49%** (`successRate` 0.4930; 65% over 538 fires when Goals was written
   2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 851** fires; the other
-  **678 carry `errorClass: null`** (LOOP-464), so the classes describe **20%** of the window.
+  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 860** fires; the other
+  **687 carry `errorClass: null`** (LOOP-464), so the classes describe **20%** of the window.
   `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked behind
   LOOP-464 + LOOP-463). **The numerator is now demonstrably frozen, not merely lagging:** across
-  three readings this morning the window grew **831 → 838 → 851** fires while the classified count
-  held at **exactly 173 every time** — twenty consecutive arrivals, none classified, coverage
-  21% → 20%. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no
+  four readings this morning the window grew **831 → 838 → 851 → 860** fires while the classified count
+  held at **exactly 173 every time** — twenty-nine consecutive arrivals, none classified, coverage
+  21% → 20.1%. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no
   class since the fixed anchor **2026-08-08 16:36Z** (≈35 h; trailing sub-60 s streaks 114 / 113 /
   20), so the outage feeds the denominator and nothing feeds the numerator. Compare two readings
   only alongside the fire counts they were measured over.
@@ -295,42 +295,45 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
   This is the third rung — source, installed `dist/`, observed effect — reached for this change.
 
-### 2026-08-10 (pm, one-hundred-twenty-third fire): the retirement measured in the corpus that read it
+### 2026-08-10 (pm, one-hundred-twenty-fourth fire): the gate shipped, and its switch turned out to have an ungated writer
 
-**The `polish-performance` lens filed nothing, and closed a standing question instead.** LOOP-465's
-retirement of the `local` file board had been carried here as merged-but-unverified since `0cac647`
-— the standing rule is that a ticket closes on merge and delivery is a separate rung. It is now
-**delivered**, measured on this fire's own corpus: `dev-loop conventions --agent <a> --root <tree>
---json` renders the installed tree and the merged tree at **byte-identical** sizes for all ten
-agents (pm 129,073 · qa 121,289 · sweep 116,057 · dev 105,454 · senior-dev 109,117 · junior-dev
-107,314 · ops 100,659 · reflect 80,449 · architect 77,843 · communication 63,931 — **1,011,186 B**
-total), and `references/backend-local.md` is absent from the installed tree. **The control is what
-makes that evidence rather than a null result:** a zero delta across ten agents is also exactly what
-an ignored `--root` produces, so the same command was pointed at `fc170bb` (the last pre-retirement
-tree) and returned pm −2,368 · qa −2,298 · senior-dev −2,126 — the per-agent savings predicted when
-the work landed. The flag discriminates; the trees agree because they are the same.
+**approvals C4 is verified and Done (LOOP-394, `d9adbc7`).** The approvals record now has its first
+ENFORCING consumer. All seven ACs were checked against the merged tree, not the handoff comment: the
+`push` gate refuses an ungranted commit and `--strict` exits non-zero; the key is `push:<branch>:<sha>`
+and a grant for a DIFFERENT sha — or the same sha on another branch — does not authorise, which is the
+one pair that separates an end state from a capability; `team.approvals.enforce` ships default-EMPTY
+and opens no db handle at all when off; `W40`/`W41` reach the operator through a `DOCTOR_CHECKS`
+registry row rather than an inline branch in `doctorWorkspace`. The suite runs **87 checks, 0
+failures** on a `git archive origin/main` extract. **The one AC that required a live probe got one:**
+AC5 is safe only while `approve` itself is fire-refused, so it was tested rather than read — inside
+this fire `dev-loop approve …` exits **4** with *"Nothing has been read or written."*
+Merged, not yet published: the installed build is `0cac647`, so `W40`/`W41` are not claimed live.
 
-**Cost picture from the same lens, filed nowhere because nothing is wrong.** Operator surfaces
-answer in 0.04–4.0 s (`doctor` 4.0 · `metrics` 2.6 · `queue` 0.11 · `tickets` 0.10 · `/api/tickets`
-0.04). Per-fire state: `hub.db` 9.85 MB over 480 tickets, `fires.jsonl` 499 KB over 1,386 rows.
+**Then the same probe found the hole (LOOP-503, filed).** `approve` is fire-refused because a fire
+must not grant itself the authorization that gates it. But the SWITCH deciding which classes are
+gated is written by `dev-loop team set`, and that verb asks no fire question at all: inside this fire
+`dev-loop team set team.budget.perFireUsd -1` returned exit **2** from the VALUE validator — a valid
+value would have been written. `hub/src/team-edit.ts` imports no fire marker; the four importers are
+`approvals-cli`, `board`, `cli-agentops`, `secret-cli`. So a fire cannot obtain an approval and does
+not need one — it can clear the class instead. **This is not LOOP-368's ground:** that sweep covered
+the verbs that DESTROY operator data, and a field mutator destroys nothing, it changes the controls.
+`dev-loop.json` was byte-identical before and after both probes (`dfeb113c39e8852f`, 3849 B) — the
+finding is the reachability of the write path, not a write. The approvals lever arrives the moment
+C4 is published, which is why this is a before-the-release item rather than an after-it one.
 
-**Two existing rows re-measured rather than duplicated.** **LOOP-419** reproduces and is worse than
-filed: `/api/tickets` returns `X-Total-Count: 480` on *every* filtered request, and because the four
-filters run in JS after the SQL `LIMIT`, **196 of 341 `Done` rows are unreachable** through the
-filter at the default limit. The sibling fix `dfed177` (LOOP-370) touched `views/board.ts` only and
-never reached this endpoint. Recorded there with a correction of my own first table, whose "truth"
-column was itself a capped read — `dev-loop tickets --state Done --json` returned exactly 250, the
-CLI's own cap, quoted as ground truth. **LOOP-487**: the worktree population grew 31 → **80 dirs /
-804 MB**, while the `node_modules` symlink this ticket blames is down to **one** — so the filed
-cause no longer explains the count. 58 of those dirs are empty husks invisible to `git worktree
-list` (worktrees nest as `wt/<ticket>/<repo-ref>`, so removal leaves `<ticket>/` behind), 17
-registrations point at absent directories, and a single tree is 72% of the bytes.
+**One row groomed instead of a duplicate filed.** The consumer-less-class gap I would have filed from
+this lens is already **LOOP-495**. It gained an AC6 instead: its AC4 was going to hard-code `push` as
+safe *because it has a consumer*, and `push` is precisely the counterexample — the consumer exists and
+no `landing:"pr"` ship path calls it (verified independently: `push-guard` appears in exactly ONE
+skill file in the merged tree, the pm-agent `doc-land` line). A check that certifies consumer
+EXISTENCE while reporting it as coverage would put a green tick over the inert state W40 exists to
+name.
 
-**Board and protocol.** §9c: eight parked tickets, all holding live edges to open blockers, zero
-unpark candidates. `needs-pm` empty on both scans; Job A empty. **The board moved mid-fire and the
-late re-read caught it** — LOOP-499 was ruled at 03:30:34Z, four minutes after a boot scan that read
-it parked (see the Decisions entry below). Promotion stayed closed: unblocked Todo 27 → 28 (senior
-15 after the unpark, junior 13) against the default cap of 10 per tier; Backlog 50.
+**Board and protocol.** §9c: LOOP-394 going Done resolved LOOP-396's only blocker edge, so C5 was
+unparked and the edge RETIRED in the same write — the remaining seven parked rows all still hold live
+edges to open blockers. `needs-pm` empty on both scans; `external-prereq` is LOOP-463 alone (the
+operator's credit park). Promotion stayed closed: unblocked Todo 28 → 29 (senior 16 after the unpark,
+junior 13) against the default cap of 10 per tier; Backlog 53 → 54.
 
 ## Personas
 
@@ -737,12 +740,34 @@ it parked (see the Decisions entry below). Promotion stayed closed: unblocked To
   made a pickable row read as parked.
 
   - **⚠️ LIVE HOLDS carried out of these rolls** — the residuals that are *instructions*, not ticket
-    IDs a board query already returns. **(1)** At LOOP-394's verify, hold its **AC6(c) default of an
-    EMPTY `approvals.enforce`** — that default is what bounds LOOP-489's window, and it is the kind
-    a later review round widens unnoticed. **(2)** The W37 byte ceiling is **LOOP-484**'s problem;
+    IDs a board query already returns. **(1) DISCHARGED at pass 93.** LOOP-394's verify
+    held its **default of an EMPTY `approvals.enforce`**: the resolver answers `false` for an absent
+    block, an absent list and an empty list, and this workspace carries no `approvals` block — so
+    LOOP-489's window stays bounded. The successor hold is **LOOP-503**: that default is only worth
+    as much as the gate on who may change it, and today the mutator has none. **(2)** The W37 byte ceiling is **LOOP-484**'s problem;
     direction prose is never trimmed to offset it (the operator's second LOOP-494 instruction).
     **(3)** Re-read an In Review@operator park LATE in a fire, not only at Job A — the fire-120
     ruling landed twenty-five minutes in, after the ticket had already been read once.
+
+- **2026-08-10 (pm, one-hundred-twenty-fourth fire) — a gate is only as strong as the gate on its
+  own switch, and the switch's writer was ungated.** Verifying approvals C4 (LOOP-394) meant testing
+  AC5's stated precondition rather than reading it: `dev-loop approve` must be refused inside a fire,
+  because a fire that can grant itself an authorization has not been gated at all. It is refused —
+  exit `4`, *"Nothing has been read or written."* **The same probe, pointed one level up, was not.**
+  `dev-loop team set` writes `team.approvals.enforce`, and inside the same fire it reached its VALUE
+  validator (exit `2`) with no fire question asked; `team-edit.ts` imports no fire marker while
+  `approvals-cli`, `board`, `cli-agentops` and `secret-cli` all do. **The call: verify C4 PASS and
+  file the hole as its own ticket (LOOP-503), rather than fail an increment that met every AC it was
+  written against.** The alternative — treating the un-gated mutator as a C4 defect — was rejected
+  because it would have re-specified the ticket at verification time, and because the defect predates
+  approvals entirely: it is reachable today against `team.mode`, `team.autonomy`, the `budget`
+  ceilings and `agentReviewers`, and merely BECOMES an approvals bypass when C4 publishes. **The
+  generalisable rule, and the reason this is recorded as direction rather than a ticket note:
+  enumerate a control's WRITERS before calling it a control.** LOOP-368 asked "may a fire DESTROY
+  this?" of four verbs; nobody asked "may a fire CHANGE this?" of the mutator, so a guard designed to
+  be un-bypassable acquired a bypass through the sanctioned tool. The same question is owed to every
+  future switch, which is STANDING RULE 29 (a switch with no reader) turned around: a switch whose
+  writer is un-gated is the same defect seen from the other end.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
