@@ -259,20 +259,22 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T05:05Z over the 7d team ledger (**894 fires**) via `dev-loop metrics --window
-  7d --json`: **fire success 48.1%** (`successRate` 0.4810; 65% over 538 fires when Goals was written
-  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 894 = **430
-  delivered + 173 classified failures + 291 no-op** (`suspectError`, 0 interrupted). Classes:
+  Measured 2026-08-10T05:28Z over the 7d team ledger (**905 fires**) via `dev-loop metrics --window
+  7d --json`: **fire success 47.7%** (`successRate` 0.4773; 65% over 538 fires when Goals was written
+  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 905 = **432
+  delivered + 173 classified failures + 300 no-op** (`suspectError`, 0 interrupted). Classes:
   `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30, `timeout` ×4, `network` ×2, `auth` ×1,
-  `budget-deadline` ×1 — **19.4% of the window, 37.3% of the 464 non-successes** (the older "703
-  carry `errorClass: null`" framing counted the successes as unclassified; LOOP-464 owns the
+  `budget-deadline` ×1 — **19.1% of the window, 36.6% of the 473 non-successes** (LOOP-464 owns the
   real gap). `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked
-  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across eight readings the
-  window grew **831 → 838 → 851 → 860 → 868 → 876 → 886 → 894** while the classified count held at
-  **exactly 173 every time** — sixty-three consecutive arrivals, none classified. The three
+  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across nine readings the
+  window grew **831 → … → 894 → 905** while the classified count held at **exactly 173 every time** —
+  seventy-four consecutive arrivals, none classified. The three
   `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class since the fixed
-  anchor **2026-08-08 16:36Z** (≈36.6 h; 281 dead-lane fires since, zero non-suspect), so the outage
-  feeds the denominator and nothing feeds the numerator. Compare two readings only alongside the fire counts they were measured over — and note
+  anchor **2026-08-08 16:36Z** (≈36.9 h; **292** dead-lane fires since, zero non-suspect), so the
+  outage feeds the denominator and nothing feeds the numerator. **What that wait costs is now
+  measured and on the park:** $509.71 since the anchor = **$331.96/day**, all of it `pm` + `senior-dev`,
+  accumulating into a Backlog whose executor (`junior-dev`, 40 of 60 rows) is dark.
+  Compare two readings only alongside the fire counts they were measured over — and note
   that the per-agent half of this table is **anti-correlated** until LOOP-508 lands: qa and
   junior-dev report 88.5% and 80.7% "healthy" against a delivered 47.4% and 24.6%.
   First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
@@ -280,44 +282,49 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
   junior's slice behind LOOP-365). Both survivors are junior-tier, so the program cannot advance
   while the outage holds, whatever their rank.
-- **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`).**
-  Verified 2026-08-10 on the installed tree and on the corpus of the fire that verified it: the
-  installed and merged renders are byte-identical for all ten agents (1,011,186 B total; pm
-  129,073 B/fire), `references/backend-local.md` is absent from the installed tree, and a control
-  against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
-  This is the third rung — source, installed `dist/`, observed effect — reached for this change.
+- **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`)** —
+  verified 2026-08-10 to the third rung (source, installed `dist/`, observed effect), with a
+  control against the pre-retirement tree. Full measurements: archive block BI.
 
-### 2026-08-10 (pm, one-hundred-twenty-eighth fire): the ask that freezes while its condition grows, and a ticket filed against a tree that was already fixed
+### 2026-08-10 (pm, one-hundred-twenty-ninth fire): the ask repaired inside the 57 characters that reach the reader, and a rule its own code states one hop too shallow
 
-**LOOP-509 filed (P1): the operator's re-engagement surface can only show a string written before
-the problem got worse.** The decision queue projects a parked ticket to `{id, title, state,
-updatedAt}` — no body, no comments — so `title` is the only free text any surface can carry, and it
-is written once, at filing. Measured on the live park: LOOP-463's title says *38 consecutive fires /
-29h*, while the ledger since the fixed outage anchor holds **281 dead-lane fires** (junior-dev 129,
-qa 129, sweep 23, zero of them non-suspect) over 36.6 h. The number the operator is asked to act on
-is **7.4× smaller than the true one**, and it decays in the direction that makes the ask read as
-less urgent the longer it is ignored. Two of the three console surfaces print no magnitude at all;
-the third truncates the title at 57 characters, and LOOP-463's first digit sits at index 78 — the
-cut lands before every number by construction, not by luck. The loop *does* keep the ask current:
-PM wrote the then-current 231 onto the park as a comment at 02:57Z, into the one field no consumer
-reads.
+**LOOP-463's headline now carries its own magnitude, because the projection that truncates it is
+not going to change this week.** Pass 97 filed LOOP-509 on the mechanism; this fire fixed the
+INSTANCE. Measured, not inferred: `doctor.ts:366` cuts the queue title at 57 characters and
+LOOP-463's first digit sat at index 78, so the operator's only decision line read *"Restore
+OpenRouter credit: junior-dev, qa and sweep have …"* — **no number in it at all** — while the ledger
+held **292 dead-lane fires over 36.9 h**. The title now opens `$510 burned, 37h, 3 of 6 lanes dead:
+add OpenRouter credi…`. **The check that made this a repair rather than a harm is the part worth
+keeping:** a title write bumps `updated_at`, and any surface ageing a park from `updated_at` would
+have reset a 10-hour escalation to zero — the fix would have hidden precisely what it was written to
+surface. Both operator surfaces age from the events ledger instead (`decisionEnteredAt`,
+`metrics.ts:690`; W20 re-derives and re-sorts locally, `doctor.ts:347-351`), confirmed by reading
+both before the write and re-reading W20 after — age held at 10h. Editing the DATA to fit a broken
+projection is legitimate only after enumerating what else reads that data.
 
-**LOOP-467 re-scoped rather than canceled: its diagnosis was measured against a tree that had
-already been fixed, and the live bug sits in a consumer it described backwards.** Its premise — that
-the metrics render takes the oldest by `updated_at` — stopped being true in `21143e6` on 2026-08-05,
-**four days before it was filed**; both surfaces it names now re-sort by `enteredAt`, and its cited
-line numbers no longer resolve. An implementer would have found the fix present and either blocked
-or "fixed" a function for no observable change. The bug is alive in the daemon reminder, which its
-implementer note calls a reader of `decisionQueue()` — it is not; it carries its own copy of the SQL
-and never re-sorts, so fixing the shared function leaves the one broken consumer broken. AC4 (send
-order, asserted on the sequence of emitted lines) is now the core of the ticket, and the mutation
-check is split per surface so a fix to one cannot certify the other.
+**The cost of the wait is now on the park, and it is what decides urgency.** **$509.71 since the
+fixed anchor over 36.9 h = $331.96/day**, every dollar of it `pm` ($258.37) and `senior-dev`
+($251.34); the three dark lanes spent nothing across 291 no-op fires. Both spending lanes are ~100%
+metered (39/39, 24/24), so this is not a coverage artifact. What makes it urgent rather than merely
+large: **the spend is not idling, it is accumulating into a queue its executor cannot drain** —
+`junior-dev` owns 40 of the 60 Backlog rows and 13 of the 28 Todo rows and has not completed a fire
+since the anchor. The operator's ruling (2026-08-09T22:19Z) stands and was not disturbed: account
+credit, human action, stays parked.
 
-**Board and protocol.** Job A empty for the fourth consecutive fire — all four In Review rows are
+**LOOP-510 filed (P3): the parked/sequenced split states the right rule and applies it only to the
+ticket already in hand.** `parkedSplit` (`metrics.ts:553-555`) says it outright — *"a human is the
+gate; the edge is not what is holding it"* — and enforces it at depth 0 only; one edge out,
+`hasLiveBlockerEdge` (`:590`) asks nothing but `!TERMINAL`. So LOOP-483, whose live edges are
+LOOP-464 **and LOOP-463 (Human-Blocked)**, is filed in the bucket the field comment calls *"will
+self-unpark"*. It will not. The board line reads `1 parked, 7 sequenced` when the human-gated count
+is 2 of 8 — a 100% under-report of the only number on that line describing work that cannot move
+without the operator, and the exact direction LOOP-26's own AC named as dangerous.
+
+**Board and protocol.** Job A empty for the fifth consecutive fire — all four In Review rows are
 `qa`-owned and that verifier is dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is
 Done/Canceled, so none of the seven parked rows can unpark; `needs-pm` empty on both scans; no
-`## Deferred findings` awaiting triage. Promotion closed for the twenty-first consecutive fire:
-unblocked Todo **28** (senior 15, junior 13) against the default cap of 10 per tier; Backlog 58 → 60,
+`## Deferred findings` awaiting triage. Promotion closed for the twenty-second consecutive fire:
+unblocked Todo **28** (senior 15, junior 13) against the default cap of 10 per tier; Backlog 60 → 61,
 every row carrying both a tier and an owner label.
 
 ## Personas
@@ -354,6 +361,19 @@ every row carrying both a tier and an owner label.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-twenty-ninth fire) — when a projection truncates an ask, the ticket
+  owner may move the payload into the surviving window, but only after enumerating every reader of
+  the field being edited.** LOOP-509 (the fix) is filed and will not land this week; meanwhile the
+  operator's only decision line carried no number at all, because `doctor.ts:366` cuts the title at
+  57 characters and LOOP-463's digits began at index 78. **The call: repair the instance by
+  rewriting the title so the magnitude leads, and keep LOOP-509 as the general fix** — a park's
+  headline is PM-owned and keeping the ask current is the same duty as keeping the doc current.
+  **The precondition is the load-bearing half, and it is general:** a title write bumps
+  `updated_at`, so had any operator surface aged the park from `updated_at`, this repair would have
+  reset a 10-hour escalation to zero and hidden exactly what it was meant to surface. Both age from
+  the events ledger (`decisionEnteredAt`) — checked in the source before the write and re-verified
+  in the rendered W20 after. **Do not generalise this to editing data that feeds a metric**; it is
+  licensed only where the field is a human-readable label and every consumer has been enumerated.
 - **2026-08-10 (pm, one-hundred-twenty-eighth fire) — a mis-diagnosed ticket is re-scoped, not
   canceled, when the bug outlives the diagnosis.** **(1) LOOP-467's** premise was false: the ordering
   fix it asks for landed in `21143e6` four days before it was filed. The §5a reflex is to `Cancel` it
@@ -604,7 +624,18 @@ every row carrying both a tier and an owner label.
      PR-land time but enforced at release-dispatch time turns a one-line contributor action into an
      archaeology pass (**LOOP-376**), and a channel configured at setup but reported only once the
      decision queue is already non-empty turns an unset field into an outage nobody was told about
-     (**LOOP-377**).
+     (**LOOP-377**). **The same sentence holds on the DEPTH axis, and there it is harder to see: a
+     shallow check is not a weaker version of the right one either.** `parkedSplit` states the rule
+     in its own comment — *"a human is the gate; the edge is not what is holding it"* — and applies
+     it only to the ticket in hand; one edge out, the test collapses to `!TERMINAL`, so a ticket
+     blocked by a `Human-Blocked` ticket is filed under *"will self-unpark"* (**LOOP-510**).
+     `dependency_graph` is the same shape stated even more plainly: its comment says it parses
+     blockers for EVERY non-terminal ticket *because* non-blocked ones carry markers too — then the
+     integrity loop iterates only the labelled ones, filtering the case back out (**LOOP-456**). The
+     tell in both: **the data the rule needs was already fetched.** When a classifier articulates a
+     principle, check whether it re-applies that principle to the neighbours it has already
+     resolved — the shallow version passes silently, because every row it does examine is judged
+     correctly.
   32. **A finding spun off at another ticket's hand-off carries that ticket's UNLANDED tree as its
      premise.** Every number in **LOOP-378** and **LOOP-379** is measured with LOOP-372's fix in
      place, and LOOP-372 is `In Progress`: on `origin/main` the regression test each specifies cannot
