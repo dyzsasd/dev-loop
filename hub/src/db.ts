@@ -487,6 +487,21 @@ export function listActorHandles(db: DatabaseSync): string[] {
     .map((r) => r.handle);
 }
 
+/**
+ * The HUMAN half of the roster. `actors.kind` is the store's own human/agent distinction, and the
+ * approvals schema declares `grantor` to be "always a human/operator identity" (LOOP-392) — a
+ * contract nothing enforced until the granting verbs asked this question rather than the weaker
+ * "is this handle in the roster at all?". Lives here, beside the other identity guards, so the next
+ * consumer that must know reads the same answer instead of re-deriving it from a handle spelling.
+ */
+export function actorIsHuman(db: DatabaseSync, handle: string): boolean {
+  return db.prepare("SELECT 1 FROM actors WHERE handle = ? AND active = 1 AND kind = 'human'").get(handle) !== undefined;
+}
+export function listHumanActorHandles(db: DatabaseSync): string[] {
+  return (db.prepare("SELECT handle FROM actors WHERE active = 1 AND kind = 'human' ORDER BY handle").all() as { handle: string }[])
+    .map((r) => r.handle);
+}
+
 export function logEvent(
   db: DatabaseSync,
   e: { project_id: string; ticket_id?: string | null; actor: string; kind: string; data?: unknown },
