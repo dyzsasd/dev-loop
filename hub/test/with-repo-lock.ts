@@ -86,7 +86,13 @@ const buildsRepoLock = (src: string): boolean => /wsLockPath\([^)]*`repo-/.test(
 const found = readdirSync(SRC).filter((f) => f.endsWith(".ts") && buildsRepoLock(readFileSync(join(SRC, f), "utf8"))).sort();
 // Pinned so the scan cannot pass by finding nothing — a predicate that silently stops matching its
 // own motivating modules is the failure this list exists to catch.
-for (const expected of ["doc-land.ts", "pr-merge.ts", "with-repo-lock.ts", "worktree.ts"]) {
+//
+// `pr-merge.ts` was on this list until LOOP-521, which moved the resolution it owned into
+// `repo-lock-path.ts` so `pr merge` and `push` could not resolve two different names for one repo —
+// so the module that BUILDS the path is now that one, and `pr-merge.ts` reaches it by import. The
+// list follows the expression, not the verb: the invariant is unchanged and the count is unchanged,
+// which is what keeps this from being a pin quietly relaxed to match whatever the tree happens to say.
+for (const expected of ["doc-land.ts", "repo-lock-path.ts", "with-repo-lock.ts", "worktree.ts"]) {
   ok(found.includes(expected), `LOOP-455: the repo-lock scan still sees ${expected} (found: ${found.join(", ") || "none"})`);
 }
 for (const f of found) {
