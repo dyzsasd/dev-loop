@@ -239,13 +239,16 @@ export function buildCommentBody(
 }
 
 // Post objection comment and, for forge-review trips, route the ticket.
-// tripAxis determines the routing behaviour (LOOP-216):
+// tripAxis determines the routing behaviour (LOOP-216, LOOP-518):
 //   "board": comment only — state/assignee/labels are left untouched (AC2).
-//   "forge": comment + route to Todo with existing assignee, without adding "blocked" (AC3).
+//   "forge": comment + route to Todo with existing assignee, without adding "blocked" (AC3);
+//           LOOP-518 AC1: from In Progress the trip is comment-only (like board/ciFreshness).
 //   "ciFreshness": comment only — staleness is transient (a rebase clears it).
 // Degrades silently when the hub DB is absent (no throw, returns skipped_no_db).
 // Idempotent on the comment: if the exact body already exists, skips re-posting (LOOP-65).
 // Routing still re-enforces on every call regardless of comment dedup (LOOP-130).
+// LOOP-518 AC2: when routing mutates state and the objection comment is deduped, a short
+// record line is posted separately so the transition is never silent.
 function applyTrip(
   ticketId: string,
   dbPath: string | undefined | null,
@@ -270,8 +273,10 @@ function applyTrip(
     // "operator" ONLY when it is absent (a hand-run from the operator console, where operator is the
     // truthful actor). AC1 — both invocation modes must become honest.
     const actor = process.env.DEVLOOP_ACTOR || "operator";
+    let wroteComment = false;
     if (!dup) {
       addComment(db, projectId, actor, ticketId, commentBody);
+      wroteComment = true;
     }
     if (tripAxis === "board" || tripAxis === "ciFreshness") {
       // AC2 (LOOP-216): board-state/ciFreshness trip — comment only, no mutation of state/assignee/labels.
@@ -279,16 +284,28 @@ function applyTrip(
       // For ciFreshness: staleness is transient (a rebase clears it), so the ticket stays where it is.
       return { action: dup ? "already_present" : "wrote", commentBody };
     }
-    // AC3 (LOOP-216): forge-review trip — route to Todo with existing assignee, without "blocked".
-    // Routing re-enforces on every call, regardless of comment dedup (LOOP-130).
+    // LOOP-518 AC1: forge trip from In Progress — comment only, same as board/ciFreshness.
+    // The dev still owns landing (§12c) and dropping the claim causes a re-claim cycle.
+    // From In Review the LOOP-216 AC3 route to Todo below is still correct (nobody working it).
     const cur = db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
       .get(ticketId, projectId) as TicketUpdateFields | undefined;
+    if (cur && cur.state === "In Progress") {
+      return { action: dup ? "already_present" : "wrote", commentBody };
+    }
+    // AC3 (LOOP-216): forge-review trip — route to Todo with existing assignee, without "blocked".
+    // Routing re-enforces on every call, regardless of comment dedup (LOOP-130).
     if (cur) {
       updateTicketRow(db, projectId, actor, ticketId, cur.state, {
         ...cur, state: "Todo", assignee: cur.assignee, labels: cur.labels,
       });
+      // LOOP-518 AC2: when routing mutates state but the objection comment was deduped,
+      // post a short record line so the transition is never silent.
+      if (dup) {
+        const prRef = pr ? `PR #${pr}` : "";
+        addComment(db, projectId, actor, ticketId, `⏺ merge-guard (deduped): ${prRef} forge-review trip → Todo (LOOP-518 AC2)`);
+      }
     }
-    return { action: dup ? "already_present" : "wrote", commentBody };
+    return { action: dup ? (wroteComment ? "wrote" : "already_present") : "wrote", commentBody };
   } finally {
     db.close();
   }
