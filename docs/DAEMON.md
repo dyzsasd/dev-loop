@@ -251,6 +251,12 @@ Before it existed this section read "operator-set via seed / CLI / git", and non
 could reach the key: `seed` takes positionals only, `team set` writes `dev-loop.json` (not the hub row),
 and `hub.db` is not in git — so the documented procedure could not be followed as written.
 
+"Never by an agent" is **enforced, not just asserted**: `settings set`/`unset` refuse with exit `4` when a
+fire marker (`DEVLOOP_DEV_SPLIT` / `DEVLOOP_TEAM_SCOPE`) is present, so a scheduler-spawned agent cannot
+open its own write surface or re-route ticket assignment — the LOOP-367 rule, whose suppressor is the
+ABSENCE of a marker and which therefore has no bypass flag. `settings list`/`get` stay open inside a fire:
+they are read-only, and a diagnostic an agent cannot run is a gate that gets routed around.
+
 The flag is **operator-set — never set by an agent** (design §11): the hub agents coordinate through the
 CLI/op layer, and the human web-write path is for a human at the localhost board. The flag is read **fresh
 per request**, so toggling it takes effect without a restart. Writes are attributed to the daemon's

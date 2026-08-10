@@ -132,6 +132,81 @@ try {
   raw.close();
   ok(stillBad === "{not json", "…and the unreadable row is left byte-identical, not clobbered");
 
+  // The EMPTY STRING is the same class and the easier one to get wrong: the column is NOT NULL but does not
+  // forbid '', and a falsy `!row.settings_json` check reads it as "absent" and routes it to the {} default —
+  // so the next `set` would overwrite a row the verb had promised to refuse. Only null may mean absent.
+  const empty = openDb(dbPath);
+  empty.prepare("UPDATE projects SET settings_json='' WHERE key='p'").run();
+  empty.close();
+  const onEmpty = run("set", "humanWrite.enabled", "true");
+  ok(onEmpty.status !== 0 && /malformed settings_json/.test(onEmpty.stderr),
+    `an EMPTY settings_json is malformed JSON, not "absent" — it is refused too (got ${onEmpty.status})`);
+  const rawEmpty = openDb(dbPath);
+  const stillEmpty = (rawEmpty.prepare("SELECT settings_json FROM projects WHERE key='p'").get() as { settings_json: string }).settings_json;
+  rawEmpty.close();
+  ok(stillEmpty === "", "…and that row is left untouched as well, not replaced with a fresh object");
+
+  // Restore a readable row so the assertions below measure the verb, not the refusal above.
+  const restore = openDb(dbPath);
+  restore.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify({ scratch: true, hub: { transport: "daemon" } }), "p");
+  restore.close();
+
+  // ── The fire gate (LOOP-367's rule applied to this verb) ─────────────────────────────────────
+  // `humanWrite.enabled` opens the board's HTTP write surface and `workflow.transitions` re-routes ticket
+  // assignment; docs/DAEMON.md defines both as operator-set, "never by an agent". A writer an agent fire
+  // could run would hand the key to the party being guarded, so `set`/`unset` refuse with a marker present.
+  // Asserted through the REAL argv with a REAL marker — the same route an agent would take.
+  const runInFire = (marker: string, ...args: string[]) => spawnSync(process.execPath, [CLI, "settings", ...args], {
+    cwd: ROOT, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: dbPath, DEVLOOP_PROJECT: "p", [marker]: "true" },
+  });
+  run("unset", "humanWrite.enabled"); // known-off starting point, written by the operator path
+  const beforeFire = JSON.stringify(settingsRow());
+  for (const marker of ["DEVLOOP_DEV_SPLIT", "DEVLOOP_TEAM_SCOPE"]) {
+    const blocked = runInFire(marker, "set", "humanWrite.enabled", "true");
+    ok(blocked.status === 4, `fire gate: \`set humanWrite.enabled true\` under ${marker} exits 4 (got ${blocked.status})`);
+    ok(/refusing inside an agent fire/.test(blocked.stderr), `fire gate: …and says why, naming ${marker} (stderr: ${blocked.stderr.trim().slice(0, 80)})`);
+    ok(!gateSaysEnabled(), `fire gate: …and the shipped humanWriteEnabled() gate is STILL false after the ${marker} attempt`);
+    ok(runInFire(marker, "unset", "humanBlockedReminderHours").status === 4, `fire gate: \`unset\` is refused under ${marker} too, not just \`set\``);
+  }
+  ok(JSON.stringify(settingsRow()) === beforeFire, "fire gate: the settings_json row is byte-identical after every refused attempt — nothing was written");
+  // Reads stay open inside a fire, deliberately: a diagnostic an agent cannot run is a gate that gets
+  // routed around (the secret-cli rationale). These two MUST NOT start failing.
+  ok(runInFire("DEVLOOP_DEV_SPLIT", "list", "--json").status === 0, "fire gate: `list` still works inside a fire — read-only, never gated");
+  ok(runInFire("DEVLOOP_DEV_SPLIT", "get", "humanWrite.enabled").status === 0, "fire gate: `get` still works inside a fire — read-only, never gated");
+
+  // ── Shape validation: values the writer accepts but a consumer cannot honour ──────────────────
+  // `{"assignTo":true}` is valid JSON and a valid object; it detonates later in actorExists(), where
+  // node:sqlite rejects a boolean bind and the whole ticket transition rolls back.
+  const badDirective = run("set", "workflow.transitions", '{"Todo->In Progress":{"assignTo":true}}');
+  ok(badDirective.status === 2 && /assignTo must be a string/.test(badDirective.stderr),
+    `transitions: a boolean assignTo is refused at the writer, not stored to crash a later transition (got ${badDirective.status})`);
+  const badKey = run("set", "workflow.transitions", '{"Todo=>In Progress":{"assignTo":"owner"}}');
+  ok(badKey.status === 2 && /transition key/.test(badKey.stderr),
+    "transitions: a key that is not \"<From>-><To>\" is refused — it would never match, so it would silently never fire");
+  const goodDirective = run("set", "workflow.transitions", '{"In Review->Done":{"assignTo":"owner"}}');
+  ok(goodDirective.status === 0, `transitions: the valid directive is still accepted (got ${goodDirective.status}: ${goodDirective.stderr.trim()})`);
+  ok(((settingsRow().workflow as { transitions?: Record<string, unknown> })?.transitions ?? {})["In Review->Done"] !== undefined,
+    "transitions: …and it is stored under the workflow block");
+
+  // A ratio of 0 is refused because daemon.ts:983 applies the setting only when > 0 — storing it would show
+  // the operator a value the running daemon silently replaces with the 0.5 default.
+  const zeroThreshold = run("set", "fireHealth.threshold", "0");
+  ok(zeroThreshold.status === 2 && /windowHours 0/.test(zeroThreshold.stderr),
+    `fireHealth.threshold 0 is refused and names the opt-out the daemon DOES honour (got ${zeroThreshold.status})`);
+  ok(run("set", "fireHealth.threshold", "0.25").status === 0, "…while a real threshold in (0,1] is still accepted");
+  // The cadence keys are read once at daemon bootstrap, so the write says so at the point of use.
+  ok(/hub restart/.test(run("set", "humanBlockedReminderHours", "6").stdout),
+    "a restart-required key prints the restart hint on write (the daemon never re-reads the row)");
+  ok(!/hub restart/.test(run("set", "humanWrite.enabled", "true").stdout),
+    "…and a per-request key does NOT — the hint distinguishes the two, it is not boilerplate");
+  run("unset", "humanWrite.enabled");
+
+  // ── The project ladder: --project, else DEVLOOP_PROJECT, else cwd (§11) ───────────────────────
+  const fromCwd = spawnSync(process.execPath, [CLI, "settings", "list", "--json"], {
+    cwd: join(ROOT, "repo"), encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: dbPath, DEVLOOP_WORKSPACE: ROOT },
+  });
+  ok(fromCwd.status === 0, `project ladder: with no DEVLOOP_PROJECT, standing in the project's repo resolves it (got ${fromCwd.status}: ${fromCwd.stderr.trim()})`);
+
   // ── AC4 — discoverability ────────────────────────────────────────────────────────────────────
   const help = run("--help");
   ok(help.status === 0 && /humanWrite\.enabled/.test(help.stdout) && /workflow\.transitions/.test(help.stdout),
