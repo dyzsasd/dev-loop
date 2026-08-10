@@ -18,8 +18,8 @@ import { reportTrailGaps } from "./metrics.ts"; // LOOP-28: W35 shares the findi
 import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
-import { homedir, platform } from "node:os";
-import { sameDaemonCode } from "./daemon-lifecycle.ts";
+import { platform } from "node:os";
+import { sameDaemonCode, readAutostartBinding, describeAutostartBinding } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
@@ -1865,14 +1865,21 @@ function reconcileSessionStartHook(pass: (m: string) => void): void {
   } catch { /* Claude plugin hook is optional for standalone scheduler/Codex installs. */ }
 }
 
+// AC7 (LOOP-469): the ABSENCE of a login item is the designed default since LOOP-468 (an install
+// never creates autostart), so it is informational, never a warning — and the remedy text belongs
+// only where the operator has opted in. What IS a deficiency: an installed plist bound to no
+// workspace, which starts whatever the install shell happened to export. Reads through the ONE
+// binding reader in daemon-lifecycle.ts, so doctor and `daemon status` cannot report different
+// bindings; the whole classification lives here rather than inline in doctorWorkspace (CRAP ratchet).
 function reconcileAutostart(pass: (m: string) => void, warn: (m: string) => void): void {
   if (platform() !== "darwin") {
-    warn("daemon autostart — not installed by dev-loop on this OS; use systemd/cron/your process manager to run `dev-loop daemon up-all` at login");
+    pass("daemon autostart — dev-loop installs no login item on this OS; run `dev-loop daemon up-all` from systemd/cron/your process manager if you want one");
     return;
   }
-  const plist = join(homedir(), "Library", "LaunchAgents", "com.dyzsasd.dev-loop.daemon.plist");
-  if (existsSync(plist)) pass(`daemon autostart installed → ${plist}`);
-  else warn("daemon autostart — not installed; run `dev-loop daemon install-autostart` to start service projects at login");
+  const binding = readAutostartBinding();
+  const line = describeAutostartBinding(binding);
+  if (binding.installed && !binding.workspace) warn(line);
+  else pass(line);
 }
 
 // CLI: node src/doctor.ts  (or `dev-loop-hub doctor` via server.ts dispatch / `npm run doctor`)
