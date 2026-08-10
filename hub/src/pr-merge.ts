@@ -17,17 +17,13 @@
 // It deliberately does NOT do branch protection on the forge — conventions §12c explains why
 // required-check gating deadlocks the release pipeline's `GITHUB_TOKEN`-created `deploy/*` PRs
 // (W38 names that posture). This is the in-product gate instead.
-import { realpathSync, readFileSync, existsSync } from "node:fs";
-import { join, dirname, resolve as resolvePath, sep } from "node:path";
-import { tmpdir } from "node:os";
 import { isMainEntry } from "./is-entry.ts";
 import type { ExecFn } from "./landing.ts";
 import { defaultGhExec } from "./landing.ts";
 import { acquireRepoLock } from "./locks.ts";
-import { tryResolveWorkspace, wsLockPath } from "./workspace.ts";
+import { repoLandingLockPath } from "./repo-lock-path.ts";
 import {
   mergeGuard, unevaluatedHold, resolveRegistryCiFreshnessConfig, registryGhRepos, resolveGhRepo, skipClass,
-  ghRepoFromRemote,
   type MergeGuardResult, type SkipReason, type CiFreshnessConfigResolution,
 } from "./merge-guard.ts";
 
@@ -318,97 +314,12 @@ const LOCK_WAIT_MS = 120_000;
 // The lock this verb serializes on. It ALWAYS resolves to a path — there is no "could not work out
 // where to lock, so proceed unlocked" branch, because that branch would be the hole (AC5).
 //
-// Registered repo ⇒ `repo-<ref>`, byte-identical to what `dev-loop with-repo-lock <ref>` takes (§7).
-// Sharing the name is the point, not a coincidence: in `landing:"direct"` the merge-back sequence
-// pushes `defaultBranch` under that same lock, and a squash racing that push moves the same branch
-// from two writers. One name, one serialization.
-//
-// The fallbacks key on the GitHub repo instead, because that — not the local directory — is what two
-// racing fires actually contend for: two clones or two worktrees of one repo are different paths
-// landing into the same branch, and a path-keyed lock would let them straight through.
-// The base clone a LINKED WORKTREE belongs to, or null when `dir` is not one (a plain clone, or not a
-// git dir at all). Read from the filesystem rather than `git rev-parse --git-common-dir`, because this
-// function is the lock's NAME: it must answer identically wherever it runs, without a subprocess that
-// can be absent, slow, or fail into the fallback this exists to avoid.
-//
-// A linked worktree's `.git` is a FILE holding `gitdir: <base>/.git/worktrees/<name>`; a plain clone's
-// is a directory (readFileSync → EISDIR → null). The path is matched structurally, so a SUBMODULE's
-// gitdir (`<super>/.git/modules/<name>`) does not answer — a submodule is not a worktree of its
-// superproject and must not borrow its lock.
-const canonPath = (p: string): string => { try { return realpathSync(p); } catch { return resolvePath(p); } };
-
-// The git root that ENCLOSES `dir` — the nearest ancestor with a `.git` entry — or null. Walking up is
-// load-bearing, not defensive: `pr merge` runs from wherever the fire happens to be (the worktree
-// root, `hub/`, any package subdirectory), and a lock whose NAME depends on the cwd is not a lock.
-function gitRootOf(dir: string): string | null {
-  let cur = resolvePath(dir);
-  for (;;) {
-    if (existsSync(join(cur, ".git"))) return cur;
-    const up = dirname(cur);
-    if (up === cur) return null;
-    cur = up;
-  }
-}
-
-// Every path that identifies the same registered repo as `dir`: `dir` itself, the git root enclosing
-// it, and — when that root is a linked worktree — the base clone that owns it.
-function repoRootsOf(dir: string): string[] {
-  const roots: string[] = [];
-  const push = (p: string): void => { const c = canonPath(p); if (!roots.includes(c)) roots.push(c); };
-  push(dir);
-  const root = gitRootOf(dir);
-  if (!root) return roots;
-  push(root);
-  const base = baseCloneOf(root);
-  if (base) push(base);
-  return roots;
-}
-
-function baseCloneOf(dir: string): string | null {
-  let raw: string;
-  try { raw = readFileSync(join(dir, ".git"), "utf8"); } catch { return null; }
-  const m = /^gitdir:\s*(.+?)\s*$/m.exec(raw);
-  if (!m) return null;
-  let abs = resolvePath(dir, m[1]!); // git may record it relative (worktree.useRelativePaths)
-  try { abs = realpathSync(abs); } catch { /* keep the resolved form */ }
-  const parts = abs.split(sep);
-  const i = parts.lastIndexOf("worktrees");
-  if (i < 1 || parts[i - 1] !== ".git") return null;
-  const base = parts.slice(0, i - 1).join(sep) || sep;
-  try { return realpathSync(base); } catch { return base; }
-}
-
-export function prMergeLockPath(repoDir: string, ghRepo: string): string {
-  const slug = `repo-gh-${ghRepo.replace(/[^A-Za-z0-9._-]+/g, "-")}`;
-  const ws = tryResolveWorkspace(repoDir);
-  if (!ws) {
-    // No workspace: still lock, per-user and per-machine. Two fires always share a workspace, so this
-    // is the standalone-invocation case rather than the racing one — but "unlikely to be contended"
-    // is not a reason to skip the lock, and a skip here would be a fail-open nobody would see.
-    return join(tmpdir(), "dev-loop-locks", `${slug}.lock`);
-  }
-  // A ticket worktree is not the base clone, and landing FROM one is the normal dev-tier invocation
-  // (§7 makes the worktree mandatory for both split tiers, in every landing mode). Neither a worktree
-  // nor a package subdirectory equals a registered `path`, so without this the ref match falls through
-  // to the remote match — which needs the OPTIONAL `remote` — and then to `repo-gh-<owner-repo>`, a
-  // name `with-repo-lock <ref>` never takes. Two names is not serialization. So the cwd is resolved to
-  // the repo that owns it, and a registry entry without a `remote` is still matched by path.
-  const selves = repoRootsOf(repoDir);
-  const entries = Object.entries(ws.file.repos ?? {}) as [string, { path?: string; remote?: string } | null][];
-  for (const [ref, e] of entries) {
-    if (!e?.path) continue;
-    const abs = resolvePath(ws.root, e.path);
-    let absReal = abs;
-    try { absReal = realpathSync(abs); } catch { /* keep abs */ }
-    if (selves.includes(absReal) || selves.includes(abs)) return wsLockPath(ws, `repo-${ref}`);
-  }
-  // The cwd is not a registered repo path (the workspace-root invocation this verb's --help
-  // advertises). Match on the remote instead — one entry only; two entries sharing a remote is the
-  // ambiguity `resolveRegistryCiFreshnessConfig` already refuses to guess through.
-  const byRemote = entries.filter(([, e]) => e?.remote && ghRepoFromRemote(e.remote) === ghRepo);
-  if (byRemote.length === 1) return wsLockPath(ws, `repo-${byRemote[0]![0]}`);
-  return wsLockPath(ws, slug);
-}
+// The RESOLUTION moved to `repo-lock-path.ts` under LOOP-521, and the move is the point: `dev-loop
+// push` now takes the SAME lock, and two verbs resolving a lock name separately will eventually
+// resolve two names — which is not serialization. This alias keeps `pr merge`'s own contract
+// unchanged (same exported name, same behaviour, same tests) while making the resolution shared
+// code; a push verb importing the merge verb would have been the layering inversion instead.
+export const prMergeLockPath = repoLandingLockPath;
 
 // `dev-loop pr merge` — the axes AND the squash under ONE per-repo lock (LOOP-455).
 //
