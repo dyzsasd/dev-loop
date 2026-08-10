@@ -31,4 +31,4 @@ These explain why the 1.x system looks the way it does. They are not the quickes
 
 ## Current Backend Names
 
-For new 1.x workspaces, treat `linear` and `service` as the current operator-facing backends. Older docs and compatibility code may still mention `local`; it is a legacy file-board backend kept in the shared conventions for compatibility, not the recommended path for new workspaces.
+`linear` and `service` are the two operator-facing backends. Older material may still mention `local`; that legacy file-board backend was retired — config validation refuses it at E02 — and the conventions no longer document it.

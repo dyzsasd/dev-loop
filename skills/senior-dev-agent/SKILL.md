@@ -26,7 +26,7 @@ inputs:
   ⇒ legacy single-dev ⇒ terse no-op and exit (`dev` owns the queue). Split on with an empty
   senior slice = a normal idle fire, NOT "the split is off".
 - Your pick filter, per backend (§18): the `assignee` actor `senior-dev` on `service`; the
-  `senior-dev` label on `linear`/`local`. You never pick a junior-dev ticket.
+  `senior-dev` label on `linear`. You never pick a junior-dev ticket.
 - Resolve the target repo per ticket exactly as `dev` does (§19); the doc-home repo roots a
   repo-file design doc.
 - Lessons (§14): `## senior-dev` + `## Dev` + `## Shared`. Codex (§24): direct-code uses the
@@ -44,7 +44,7 @@ Sections: §0 §0a §2 §5 §7 §8 §9 §9c §10 §12 §12a §12b §12c §12d §
 The work loop — repeat up to the per-run cap.
 
 ### Step 0 — Reclaim your orphans (crash recovery)
-On `service`, `dev-loop queue` returns your `inProgress` list; on `linear`/`local` query
+On `service`, `dev-loop queue` returns your `inProgress` list; on `linear` query
 `In Progress` in YOUR slice (`project` + `dev-loop` + the §18 filter). For each, by mode:
 - **direct-code** crash: look for a shipped artifact on the target repo's resolved
   `defaultBranch` — a commit referencing the ticket id; a local commit when `autoPush:false`;
@@ -68,12 +68,12 @@ non-zero exit means the PR was NOT merged.** Idempotent + race-safe.
 
 ### Step 1 — Pick the top senior-assigned ticket
 On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` IS your ranked slice;
-take the first. On `linear`/`local`: `Todo` in your slice (§18), `project` + `dev-loop`,
+take the first. On `linear`: `Todo` in your slice (§18), `project` + `dev-loop`,
 excluding `blocked`, ranked by the §5 pick order applied to the slice.
 
 ### Step 2 — Claim it (atomic, §7)
 `In Progress` + claim (`assignee:"me"` on `service` — you claim your own pre-assignment, the
-assignee stays `senior-dev`; a per-fire run token on `local`). Re-fetch; lost the race ⇒ pick
+assignee stays `senior-dev`). Re-fetch; lost the race ⇒ pick
 the next. Apply the §10 verify-after-write to EVERY state move this run (hand-offs and blocks
 included), and re-pass the FULL label set on any label change.
 
@@ -98,7 +98,7 @@ Run the §21a design-and-delegate flow; below is the senior-side judgement it ne
 1. **Author the design** at the §21a granularity. Substantial / module-level work ⇒ the LIVING
    per-module doc, home per backend (§21a/§18): `service` ⇒ the hub `design` doc-kind
    (`doc.save` — multi-instance, NOT publish-gated: your saved draft IS the live design; CAS
-   recovery per §18); `linear`/`local` ⇒ `docs/design/<slug>.md` committed in the doc-home
+   recovery per §18); `linear` ⇒ `docs/design/<slug>.md` committed in the doc-home
    repo — commit ONLY that file (staging discipline) and run the commit (+ push) under
    `dev-loop with-repo-lock` (§7), since the shared checkout doubles as junior's merge-back
    target. Small feature ⇒ NO separate doc — the parent ticket body IS the design
@@ -115,7 +115,7 @@ Run the §21a design-and-delegate flow; below is the senior-side judgement it ne
    - Retire, don't delete (§21a / D6): a removed or superseded module's design doc is ARCHIVED
      — `dev-loop doc archive --slug <module>` on `service` (`--restore` reverses; history stays
      readable, never deleted), a one-line commit moving it to `docs/design/archive/` on
-     `linear`/`local` — and the superseding doc names what it replaced.
+     `linear` — and the superseding doc names what it replaced.
 2. **Spawn the concrete child dev-tickets** per the §21a contract: junior-assigned (§18);
    created in **`Backlog`** (staged — UNPICKABLE until the gate; never `Todo`); exactly ONE
    `Design:` pointer line (the three §21a forms); `relatedTo:[<parent>]` mandatory (it survives

@@ -25,8 +25,8 @@ per-agent inputs:
   (§12a), optional `repos[]` (§19). No config resolves ⇒ ask the user before proceeding.
 - Lessons (§14): `## Reflect` + `## Shared` — for you the file is input AND the Job-2
   output.
-- Evidence window per backend (§18): `local` ⇒ the dated comment log + git (each state move
-  appends a comment); `service` ⇒ the hub `list_events` feed (per-agent-attributed
+- Evidence window (§18): ticket comments + git; on `service` the transition record is
+  the hub `list_events` feed (per-agent-attributed
   create/transition/comment events). **`list_events` is a high-resolution RECENT SLICE, not
   your window**: it is capped (max 500 rows, newest first) with no backward paging, and a
   truncated feed is indistinguishable from a complete one — on a busy board those 500 rows

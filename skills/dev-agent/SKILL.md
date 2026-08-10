@@ -45,7 +45,7 @@ Sections: §0 §0a §2 §3 §5 §5a §7 §8 §9 §9c §10 §12 §12a §12b §12c
 The work loop — repeat up to the per-run cap.
 
 ### Step 0 — Reclaim your orphans (crash recovery)
-On `service`, `dev-loop queue` returns your `inProgress` list; on `linear`/`local` query
+On `service`, `dev-loop queue` returns your `inProgress` list; on `linear` query
 `project` + `dev-loop` + `In Progress` assigned to you. For each, check the target repo's
 resolved `defaultBranch` (§19) for a shipped artifact: a commit referencing the ticket id, or a
 local commit when `autoPush:false`; in `git.landing:"pr"` (§12b) the artifact is instead an open
@@ -84,7 +84,7 @@ Idempotent + race-safe; these are the ONLY merge/deploy actions (no `deploy.comm
 
 ### Step 1 — Pick the top ticket
 On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` arrives already in the
-pick order; take the first. On `linear`/`local` compose it yourself: `Todo`, `project` +
+pick order; take the first. On `linear` compose it yourself: `Todo`, `project` +
 `dev-loop`, excluding `blocked`, ranked by the §5 pick order.
 
 ### Step 2 — Claim it (atomic, §7)

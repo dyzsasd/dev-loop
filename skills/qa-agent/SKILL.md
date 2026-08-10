@@ -33,7 +33,7 @@ Sections: §0 §0a §2 §3 §4 §5a §6 §7 §8 §9 §9c §10 §11 §12 §12a §
 ## JOBS
 
 Run them in this order. On `backend:"service"` start with ONE call — `dev-loop queue`:
-`verify` is Job A's list, `blocked` Job B's input; on `linear`/`local` compose each job's
+`verify` is Job A's list, `blocked` Job B's input; on `linear` compose each job's
 §10-scoped query yourself.
 
 ### Preflight — gate the deep sweep on change
