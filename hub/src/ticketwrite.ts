@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
-import { designParentIds, isDesignParent, designPointerOf, docSlugOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
+import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug, designChildrenOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 import { handoffGateRejection } from "./handoff-gate.ts";
 import { acCompletenessRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
@@ -144,11 +144,18 @@ function designParentGate(
   // PASS action, and §21a's pass action is "promote every staged child Backlog → Todo FIRST, THEN
   // move the parent Done". Backlog is invisible to every dev pick-query, so a parent closed over
   // Backlog children strands them with no owner and no signal.
-  // R2's own row set, fetched where it is used. It is NOT the predicate's input (LOOP-378): this
-  // asks which children are stranded, which is a question about rows, not about who the parent is.
-  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
-  const stranded = rows.filter((t) => t.state === "Backlog" && isChildOf(t, id, rows));
+  // WHICH tickets are this parent's children is the shared derivation's answer, not a local one
+  // (PR #278 review, P1 — `designChildrenOf`). It used to be decided here by matching the child's
+  // slug against a slug scanned out of the PARENT'S description, which stopped being the same
+  // relation the parent was derived from the moment ownership moved to §21a's back-link: a parent
+  // that names its doc nowhere is now a design parent, and this scan found NONE of its children,
+  // so R2 measured zero strandings for exactly the parents LOOP-379 admits.
+  // R2's own row set is still fetched where it is used. It is NOT the predicate's input (LOOP-378):
+  // this asks which of the children are stranded, which is a question about STATE.
+  const children = designChildrenOf(db, projectId, id);
+  const rows = db.prepare("SELECT id, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as Array<{ id: string; state: string }>;
+  const stranded = rows.filter((t) => t.state === "Backlog" && children.has(t.id));
   if (stranded.length)
     return `verify gate: In Review → Done blocked — ${id} is a design parent with ${stranded.length} staged child(ren) still in Backlog (${stranded.map((t) => t.id).join(", ")}). §21a's pass action promotes every child Backlog → Todo FIRST, then closes the parent; Backlog is invisible to every dev pick-query, so closing now strands them.`;
   return DESIGN_PARENT_DECIDED;
@@ -179,23 +186,6 @@ function designParentHandoffExemption(
   if (!(fromState === "In Progress" && next.state === "In Review")) return false;
   const me = { id, description: next.description ?? storedRow?.description ?? "" };
   return isDesignParent(me, designParentIds(db, projectId));
-}
-
-// A child of `parentId`: it carries a Design: pointer that resolves to this parent — either directly
-// (`Design: parent <id>`) or through the doc slug the parent owns.
-function isChildOf(t: { id: string; description: string }, parentId: string, rows: Array<{ id: string; description: string }>): boolean {
-  const ptr = designPointerOf(t.description ?? "");
-  if (!ptr) return false;
-  const direct = /^parent\s+(\S+)/i.exec(ptr);
-  if (direct) return direct[1] === parentId;
-  const slug = docSlugOf(ptr);
-  if (!slug) return false;
-  const parent = rows.find((r) => r.id === parentId);
-  if (!parent) return false;
-  const parentPtr = designPointerOf(parent.description ?? "");
-  const parentSlug = (parentPtr ? docSlugOf(parentPtr) : null)
-    ?? (/(?:hubDoc:design\/|docs\/design\/)([A-Za-z0-9._-]+?)(?:\.md)?\b/i.exec(parent.description ?? "")?.[1] ?? null);
-  return parentSlug === slug;
 }
 
 /**
@@ -307,7 +297,14 @@ function terminalExitRejection(actor: string, fromState: string, next: TicketUpd
 // LOOP-296 — resolve this ticket's design parent (all three §21a pointer forms, via the shared
 // predicate) and inherit `sensitive` from it. Returns the ORIGINAL array when nothing changes, so
 // the caller can skip the copy.
-function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, description: string, labels: string[]): string[] {
+//
+// `relatedTo` is the pending child's OWN link set, and it is load-bearing rather than incidental: a
+// slug's owner is derived from the set of its children, so the FIRST child of a design resolves
+// against a slug with no children on the board yet and the lookup answers nobody — the one case
+// where the label matters most, since a design's first staged child is exactly where the tier is
+// chosen. Passing the pending row lets the shared derivation see it (LOOP-379). `updateTicketRow`
+// passes nothing: by then the row is on the board and re-adding it would double the child.
+function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, description: string, labels: string[], relatedTo?: readonly string[]): string[] {
   if (labels.includes("sensitive")) return labels;             // already carried explicitly
   try {
     const ptr = designPointerOf(description ?? "");
@@ -315,16 +312,25 @@ function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, d
     const rows = db.prepare("SELECT id, description, labels FROM tickets WHERE project_id=?")
       .all(projectId) as unknown as Array<{ id: string; description: string; labels: string }>;
     // The direct form names the parent; the two doc forms name the DOC, so the parent is the ticket
-    // that owns that slug. designParentIds already resolves all three — reuse it rather than
-    // re-deriving, which is how the LOOP-344 inversion happened in the first place.
+    // that owns that slug. The predicate resolves both — reuse it rather than re-deriving, which is
+    // how the LOOP-344 inversion happened in the first place.
     // The rows above carry `labels` for the lookup below; the predicate fetches its own board-wide
     // set (LOOP-378) rather than borrowing this one, which is what kept the four call sites honest.
-    const parentIds = designParentIds(db, projectId);
+    //
+    // LOOP-379: this used to pick the owner out of `designParentIds` by asking which candidate's
+    // DESCRIPTION contained the slug. That was a second, private copy of the derivation, and the
+    // back-link rule falsifies it — an owner need not name its own doc anywhere (LOOP-399 does not),
+    // so the scan would have matched nobody and a doc-pointer child of a `sensitive` design would
+    // have silently stopped inheriting the label. That is LOOP-290's shape, which LOOP-296 exists to
+    // prevent. Ask the module that owns the derivation instead.
     const direct = /^parent\s+(\S+)/i.exec(ptr);
     const slug = direct ? null : docSlugOf(ptr);
+    const ownerId = slug === null
+      ? null
+      : designOwnerOfSlug(db, projectId, slug, relatedTo ? { description, relatedTo } : undefined);
     const parent = direct
       ? rows.find((r) => r.id === direct[1])
-      : rows.find((r) => parentIds.has(r.id) && slug !== null && (r.description ?? "").includes(slug));
+      : (ownerId === null ? undefined : rows.find((r) => r.id === ownerId));
     if (!parent) return labels;
     let parentLabels: string[] = [];
     try { parentLabels = JSON.parse(parent.labels) as string[]; } catch { return labels; }
@@ -393,7 +399,7 @@ export function insertTicket(
   // Inheritance runs FIRST so the re-tier below sees the inherited label and escalates the child in
   // the same write, rather than leaving a sensitive ticket sitting on the junior tier until a
   // backstop notices.
-  const inherited = inheritSensitiveFromDesignParent(db, projectId, f.description, f.labels);
+  const inherited = inheritSensitiveFromDesignParent(db, projectId, f.description, f.labels, f.relatedTo);
   f = inherited === f.labels ? f : { ...f, labels: inherited };
   // Tier restore FIRST (LOOP-223): fix null assignee before sensitive retier
   const tierRestore = applyTierRestore(db, f.state, f.assignee, f.labels);
