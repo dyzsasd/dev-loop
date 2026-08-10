@@ -270,7 +270,15 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   while the classified count held at **exactly 173 every time** — 138 consecutive arrivals, none
   classified. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class
   since the fixed anchor **2026-08-08 16:36Z** (39.0 h; **345** dead-lane fires, **zero** non-suspect),
-  so the outage feeds the denominator and nothing feeds the numerator. Compare two readings only
+  so the outage feeds the denominator and nothing feeds the numerator. **The provider attribution in
+  that sentence is FALSIFIED as of pass 122 (2026-08-10T22:2xZ, 62 h after the anchor) — re-tested
+  live, not re-read:** the key returns **HTTP 200** on `/credits` with **$4.19 remaining** (10 granted,
+  5.81 used), the exact configured model `deepseek/deepseek-v4-flash` returns **HTTP 200** with a real
+  completion, and `opencode` 1.2.24 runs. The kill is **local to the spawn/boot path**, and it is
+  lane-exact: over 24 h the three `opencode` lanes emit **125 · 125 · 22** fires that **exit 0** with
+  `bootBytes: 0` and `errorClass: null`, while the two `claude` lanes emit **zero** of that shape. A
+  failure that presents as a success is why no classifier sees it. Owned by **LOOP-543**; LOOP-464's
+  credit-exhaustion premise is corrected in place on that ticket. Compare two readings only
   alongside the fire counts they were measured over — and note that the per-agent half of this table
   is **anti-correlated** until LOOP-508 lands: qa and junior-dev report 89.2% and 82.4% "healthy"
   against a delivered 44.3% and 22.4%.
@@ -284,11 +292,15 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   to date: senior implements, pm verifies, and that pair closed 18 increments while dark. What it
   cannot do is drain the half of the board that is junior-tier, or verify anything `qa`-owned — 5
   rows now sit `In Review`, all `qa`-owned, 0 Done since the anchor.
-  First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
-  Todo at P1** (raised pass 94 — `PICK_RANK` rank 4.5 is the only lever that reaches a picker, so
-  this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
-  junior's slice behind LOOP-365). Both survivors are junior-tier, so the program cannot advance
-  while the outage holds, whatever their rank.
+  First program: **4 of 5 shipped** (re-derived pass 122) — LOOP-382 · LOOP-383 · LOOP-385 Done, and
+  **LOOP-386 shipped through its successor**: it was verify-failed and `Canceled` (it re-introduced the
+  failure it closes), superseded by **LOOP-532**, which merged as `7d9c7cf` and is Done. **LOOP-384 is
+  `In Progress`** (junior-dev, PR #292 open and mergeable), not Todo. The pass-94 note that
+  `PICK_RANK` rank 4.5 is "the only lever that reaches a picker" **is now inoperative, measured**:
+  `Todo` holds **0** P1 tickets while `Backlog` holds **18** (17 junior-tier), because P1 is assigned
+  in `Backlog` and §5a promotes only while depth is under the cap — with no preemption, a P1 filed
+  after the cap saturated can never displace a promoted P3. The junior slice has been at its cap since
+  the executor stalled, so the promotion list has not been consulted at all, ranked (LOOP-507) or not.
 - **The board's write surface has a supported switch (LOOP-479, `6b451ed`, verified Done
   2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
@@ -428,6 +440,47 @@ No other open row on the board carries an edge, live or retired.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fifty-third fire) — the loop spent 62 hours waiting out an outage that
+  had already ended, because the diagnosis was recorded once and the symptom was re-measured forever.**
+
+  **What happened.** Since 2026-08-08 16:36Z this doc has carried one explanation for three dead lanes:
+  an OpenRouter outage. Every pass since re-measured the *symptom* (fires returning in ~6 s, unclassified)
+  and none re-tested the *cause*. This fire I tested it directly: the key returns HTTP 200 with **$4.19
+  of credit left**, and the configured model `deepseek/deepseek-v4-flash` returns a real completion. The
+  provider has been healthy for some time. The lanes are killed locally, before boot — `bootBytes: 0`,
+  and **exit 0**, so the ledger counts each one as a success. The two `claude` lanes produce none of
+  this shape; all three `opencode` lanes produce ~125/24 h each. Filed as **LOOP-543** (senior-dev
+  direct-code, P1); **LOOP-464**'s credit-exhaustion premise corrected in place rather than duplicated.
+
+  **The rule this earns.** *A cause recorded as a fact decays exactly like a number.* This doc already
+  requires re-measuring values each pass (rule 35); the same discipline was never applied to
+  attributions, so "the provider is down" hardened into an assumption while its subject recovered.
+  **When a condition persists, re-test what you believe is CAUSING it — not just that it is still
+  happening.** A cheap live probe (one HTTP call) would have closed 62 hours of this at any point.
+
+  **A second-order cost worth naming:** while the executor tier was dark, the two live lanes billed
+  ~$350/24 h filing work the stalled half of the board cannot execute — so the backlog inflated with
+  17 junior-tier P1s that provably cannot be promoted.
+
+  **Direction question for the operator — the promotion cap has no priority or staleness component,
+  and I am not deciding it.** Measured: `Todo` holds **0** P1s; `Backlog` holds **18**. §5a promotes
+  only while depth is under the cap and provides no preemption, so a P1 filed after the cap saturated
+  waits behind promoted P2/P3 work indefinitely — and this doc names P1 as the only lever that reaches
+  a picker. The lever is inoperative on the junior tier. Fixing it means changing §5a, which is a
+  `conventions.md` rule and therefore outside the §17 firewall: **not an agent's to change.** The
+  options are (a) leave it — the cap is a WIP limit and a stalled executor is the real bug (LOOP-543),
+  (b) give the cap a priority carve-out so a P1 can always be promoted, or (c) allow PM to de-promote a
+  stale Todo ticket back to Backlog. Recorded here for a ruling; no change made.
+
+  **One protocol lesson, from a wrong unpark this fire avoided.** LOOP-540 was the tracker blocking
+  LOOP-396, and it closed — but it closed on the operator's disposition **(a)** (remove the login item),
+  while LOOP-396 was waiting on disposition **(b)** (cut a release). The mechanical §9c rule ("all
+  blockers terminal ⇒ unpark") would have released a ticket whose prerequisite is untouched; the
+  installed CLI is still 7 code commits behind and its `push-guard` still predates LOOP-535. Re-blocked
+  on **LOOP-542**, a tracker whose ACs cannot be met without the release. **A blocker edge is only valid
+  while its tracker's close condition IMPLIES the dependent's prerequisite — never point an edge at a
+  ticket that offers the operator a choice of dispositions.**
 
 - **2026-08-10 (pm, one-hundred-fifty-second fire) — a merged fix's own incident recurred 23 minutes
   after it merged, and every health surface but one certified the machine while it did.**
