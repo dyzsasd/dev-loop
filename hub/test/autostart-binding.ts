@@ -163,7 +163,7 @@ try {
 
   // ── AC7 — doctor's classification for both states ──────────────────────────────────────────────
   {
-    const withPlist = cli(WS_A, {}, "doctor");
+    const withPlist = cli(WS_A, { DEVLOOP_PROJECT: "alpha" }, "doctor");
     const lines = `${withPlist.stdout ?? ""}${withPlist.stderr ?? ""}`.split("\n").filter((l) => l.includes("daemon autostart"));
     ok(lines.length > 0, "AC7: doctor emits an autostart line");
     if (process.platform === "darwin") {
@@ -172,7 +172,7 @@ try {
     } else ok(true, "AC7: plist arm is macOS-only (skipped: not darwin)");
 
     rmSync(PLIST, { force: true });
-    const noPlist = cli(WS_A, {}, "doctor");
+    const noPlist = cli(WS_A, { DEVLOOP_PROJECT: "alpha" }, "doctor");
     const nl = `${noPlist.stdout ?? ""}${noPlist.stderr ?? ""}`.split("\n").filter((l) => l.includes("daemon autostart"));
     ok(nl.length > 0, "AC7: doctor still reports autostart when absent");
     ok(!nl.some((l) => /⚠|WARN/.test(l)), `AC7: ABSENT plist is NOT graded a warning (${nl[0] ?? ""})`);
