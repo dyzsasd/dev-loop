@@ -23,9 +23,7 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { acquireRepoLock } from "./locks.ts";
-import { repoLandingLockPath } from "./repo-lock-path.ts";
-import { tryResolveWorkspace } from "./workspace.ts";
-import { resolveDefaultBranchForPath } from "./team-config.ts";
+import { repoLandingLockPath, resolveDefaultBranchForRepoDir } from "./repo-lock-path.ts";
 import { resolveGhRepo } from "./merge-guard.ts";
 import { pushGuard, approvalRefusalLine, type PushGuardResult } from "./push-guard.ts";
 
@@ -165,7 +163,7 @@ interface PushOpts {
   // repo states. The default is the real `push-guard` — and it is called with `enforcePush` left
   // UNSPECIFIED on purpose, so the switch resolves from the repo's own config exactly as it does for
   // `doc-land`: a caller cannot fall outside an enabled gate by omitting an argument.
-  guard?: (ctx: { repoDir: string; branch: string; dbPath: string | undefined; defaultBranch: string; record: boolean }) => PushGuardResult;
+  guard?: (ctx: { repoDir: string; branch: string; dbPath: string | undefined; defaultBranch: string; record: boolean; remote: string }) => PushGuardResult;
   lockPath?: string;
   lockWaitMs?: number;
 }
@@ -214,6 +212,14 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   // `origin/<branch>..<branch>` grows and `origin/<defaultBranch>..<branch>` grows — so the gate errs
   // toward refusing, which is the safe direction. (Nothing-to-push below is computed from the same
   // possibly-stale ref, and its error direction is "push something already upstream", a no-op.)
+  //
+  // IT RUNS UNDER `--dry-run` TOO, deliberately, and the contract says so rather than pretending
+  // otherwise (PR #287 review, P2). The fetch updates remote-tracking refs — real local state — but
+  // AC6's promise is that the dry run reports the verdict the real run WOULD, and a verdict measured
+  // against a base the real run will not use is not that verdict. So the honest split is by kind, not
+  // by count: the dry run writes nothing OUTWARD (no remote, no approvals ledger) and refreshes the
+  // same base the real run reads. Skipping the fetch here would buy an untrue "mutates nothing" line
+  // at the price of the one property the mode exists for.
   const fetched = git(["fetch", remote]);
   // Said out loud, as `doc-land` does: a silent fetch failure would let the reader believe the
   // ranges below were measured against a base they were not.
@@ -235,10 +241,14 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   // row by default, so the one mode that promises to write nothing was writing to the audit trail
   // (D6; the R10 defect `doc-land` shipped and had to fix). `record:false` suppresses that row ONLY:
   // every check still runs and still refuses, so a dry run reports the verdict the real run would.
-  const runGuard = opts.guard ?? ((ctx) => pushGuard(ctx.repoDir, ctx.branch, ctx.dbPath, ctx.defaultBranch, { record: ctx.record, ...(process.env.DEVLOOP_ACTOR ? { actor: process.env.DEVLOOP_ACTOR } : {}) }));
+  //
+  // `remote` is threaded in for the same reason the fetch above uses it: every range the gate
+  // measures must belong to the remote this call will publish to, or a `--remote` that is not origin
+  // gates a different remote's refs than it pushes (PR #287 review, P2).
+  const runGuard = opts.guard ?? ((ctx) => pushGuard(ctx.repoDir, ctx.branch, ctx.dbPath, ctx.defaultBranch, { record: ctx.record, remote: ctx.remote, ...(process.env.DEVLOOP_ACTOR ? { actor: process.env.DEVLOOP_ACTOR } : {}) }));
   let guard: PushGuardResult;
   try {
-    guard = runGuard({ repoDir, branch, dbPath: opts.dbPath, defaultBranch, record: !dryRun });
+    guard = runGuard({ repoDir, branch, dbPath: opts.dbPath, defaultBranch, record: !dryRun, remote });
   } catch (e) {
     // A gate that threw has not cleared anything. It is exit 3, not 2: the invocation was fine, the
     // evaluation was not.
@@ -282,23 +292,28 @@ export async function push(repoDir: string, opts: PushOpts = {}): Promise<PushRe
     lockUnavailable: null, dryRun: opts.dryRun ?? false,
   };
 
-  // CANONICALIZE before matching the registry. `resolveDefaultBranchForPath` compares absolute paths
-  // by string equality against `join(ws.root, <path>)`, and `ws.root` is canonicalized on resolution
-  // — so a repo named through a symlinked ancestor (`/var` → `/private/var` on macOS; any symlinked
-  // checkout root) misses its own registry entry and the verb reports "not a registered repo" for a
-  // repo that plainly is one. Measured on this ticket's fixture workspace, which lives under
-  // `/var/folders/...`.
+  // CANONICALIZE before matching the registry. The match compares absolute paths by string equality
+  // against `join(ws.root, <path>)`, and `ws.root` is canonicalized on resolution — so a repo named
+  // through a symlinked ancestor (`/var` → `/private/var` on macOS; any symlinked checkout root)
+  // misses its own registry entry and the verb reports "not a registered repo" for a repo that
+  // plainly is one. Measured on this ticket's fixture workspace, which lives under `/var/folders/...`.
   const abs = (() => { try { return realpathSync(resolve(repoDir)); } catch { return resolve(repoDir); } })();
 
   // The default branch is what the gate's passenger range is measured against, so an unresolvable
   // one is a usage failure, not a silent default: guessing "main" here would make the gate measure a
   // range nobody configured (LOOP-119's class).
+  //
+  // Resolved through the repo's ROOTS, not through this directory alone (PR #287 review, P1). §7 runs
+  // every dev-tier ship in a linked worktree — this verb's whole reason to exist is to be the push in
+  // that sequence — and a worktree equals no registered `path`, so the exact-path match answered "not
+  // a registered repo" for the one invocation the verb was built for. Worse than the exit 2 Codex
+  // named: `pushGuard` resolves `approvals.enforce` from the same path, so the gate this ticket
+  // exists to install would have resolved itself OFF there. One matcher, so it cannot.
   let defaultBranch = opts.defaultBranch;
   if (!defaultBranch) {
-    const ws = tryResolveWorkspace(abs);
-    defaultBranch = (ws ? resolveDefaultBranchForPath(ws, abs) : undefined) ?? undefined;
+    defaultBranch = resolveDefaultBranchForRepoDir(abs);
     if (!defaultBranch) {
-      return { ...base, unresolved: `cannot resolve the default branch for '${repoDir}' — not a registered repo; pass --default-branch <name>` };
+      return { ...base, unresolved: `cannot resolve the default branch for '${repoDir}' — neither it nor the repo it belongs to is registered in this workspace; pass --default-branch <name>` };
     }
   }
 
@@ -340,8 +355,10 @@ Usage: dev-loop push [--repo <dir>] [--branch <b>] [--remote <name>] [--default-
   --remote <name>    remote to push to (default: origin)
   --default-branch   the default branch the gate measures passengers against (resolved from
                      workspace config when omitted)
-  --dry-run          run every check and report the verdict, mutating NOTHING — not the remote,
-                     not the approvals ledger
+  --dry-run          run every check and report the verdict the real run would. It writes nothing
+                     OUTWARD: not the remote, not the approvals ledger. It DOES run the same
+                     \`git fetch\` (updating remote-tracking refs) — the verdict is measured against
+                     the base the real run would use, or it is not that verdict
   --lock-wait        how long to wait for another fire's landing to finish (default 120s)
   --json             emit the result as JSON
 
@@ -446,7 +463,7 @@ if (isMainEntry(import.meta.url)) {
   } else if (result.pushError) {
     console.error(`push: the gate CLEARED but \`git ${result.pushArgv?.join(" ")}\` failed — ${result.pushError}`);
   } else if (result.dryRun) {
-    console.log(`push (dry-run): the gate CLEARS — would push ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}. Nothing was written: not the remote, not the approvals ledger.`);
+    console.log(`push (dry-run): the gate CLEARS — would push ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}. Nothing was written outward: not the remote, not the approvals ledger (the base was fetched, as the real run would).`);
   } else {
     console.log(`push: ✅ gate clear — pushed ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}`);
   }

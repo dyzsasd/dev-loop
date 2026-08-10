@@ -16,8 +16,9 @@ import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite"; // R5 — the read-only probe below must NOT create/migrate
 import { openDb } from "./db.ts";
-import { resolveHubDbPath, tryResolveWorkspace, findWorkspaceRoot } from "./workspace.ts";
-import { resolveDefaultBranchForPath, approvalsEnforced, loadWorkspace } from "./team-config.ts";
+import { resolveHubDbPath } from "./workspace.ts";
+import { approvalsEnforced, loadWorkspace } from "./team-config.ts";
+import { workspaceRootForRepoDir, workspaceForRepoDir, resolveDefaultBranchForRepoDir } from "./repo-lock-path.ts";
 import { listApprovals, consultApproval, actionClasses } from "./approvals.ts"; // LOOP-394 — the record this guard consults
 
 export interface PushGuardFinding { sha: string; subject: string; ticket: string; state: string }
@@ -176,10 +177,16 @@ const TICKET_RE = ticketIdScanRe("g"); // the ONE canonical <PREFIX>-<n> id shap
  * workspace cannot have opted into a gate, so refusing it would block every caller outside a
  * workspace. It is NOT the same question as an enabled gate whose record is unreadable, which fails
  * closed (APPROVALS_UNVERIFIABLE).
+ *
+ * Which makes the WALK load-bearing rather than incidental (PR #287 review, P1). A bare
+ * `findWorkspaceRoot` answers from THIS directory, and §7 puts every dev-tier ship in a linked
+ * worktree that can sit outside the workspace tree — so the one invocation the gate was built for
+ * read as "in no workspace" and turned the gate off, silently, in the safe-looking direction above.
+ * `workspaceRootForRepoDir` asks the same question of the repo rather than of the directory.
  */
 function readTeamBlockFor(repoDir: string) {
   try {
-    const root = findWorkspaceRoot(repoDir);
+    const root = workspaceRootForRepoDir(repoDir);
     return root ? loadWorkspace(root).file.team : undefined;
   } catch { return undefined; }
 }
@@ -340,7 +347,13 @@ function checkPushApprovals(
   return out;
 }
 
-export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string, opts: { enforcePush?: boolean; actor?: string; record?: boolean } = {}): PushGuardResult {
+export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string, opts: { enforcePush?: boolean; actor?: string; record?: boolean; remote?: string } = {}): PushGuardResult {
+  // Every range below is measured against the remote the caller will actually PUSH TO. It was
+  // hardcoded `origin`, which was correct while every caller pushed to origin — `dev-loop push`
+  // accepts `--remote <name>`, so a non-origin push would have been gated against a different
+  // remote's refs: the wrong commit range, or "unevaluated" for a remote that resolves fine
+  // (PR #287 review, P2). Defaulted, so every existing caller is byte-identical.
+  const remote = opts.remote ?? "origin";
   const git = (args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const gitOk = (args: string[]): boolean => { try { git(args); return true; } catch { return false; } };
   const parseLog = (raw: string) => raw ? raw.split("\0").filter(Boolean).map((r) => {
@@ -366,7 +379,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // Default-OFF (design §8): with the class absent from `approvals.enforce` nothing here runs, no db
   // handle is opened — not even the read-only probe — and the result is byte-identical to the
   // pre-LOOP-394 output (AC2).
-  const approvalsDbFile = enforcePush ? (dbPath ?? resolveHubDbPath(repoDir)) : "";
+  const approvalsDbFile = enforcePush ? (dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir)) : "";
   const recordUnusable = enforcePush ? approvalsRecordUnusable(approvalsDbFile) : null;
   // A record classified unusable must stay untouched for the REST of the guard, not just until the
   // next `openDb` (R6, PR #283 review). The other two axes open the same path, and `openDb` creates
@@ -379,10 +392,10 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   let unresolvedDefaultBranch: string | undefined;
   const ownId = branchTicketId(br);
   if (ownId) {
-    if (gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`])) {
-      const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${defaultBranch}..${br}`]));
+    if (gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`])) {
+      const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${remote}/${defaultBranch}..${br}`]));
       // Open hub.db for passenger ticket-state lookups (read-only).
-      const pgDb = dbPath ?? resolveHubDbPath(repoDir);
+      const pgDb = dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir);
       // An unreadable db degrades to the SAME path an absent one already takes (no state lookups,
       // passengers reported as unverifiable warnings). Before R5 it threw out of pushGuard entirely,
       // which took the approvals gate down with it — a corrupt record must make the safety gate
@@ -422,9 +435,9 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // in the two cases: the unpushed tail for a tracked branch, and everything off the default branch
   // for a never-pushed one. The first push is the more dangerous of the two (nothing of it is on the
   // forge yet), so it is gated on the same footing rather than skipped with the note below.
-  const hasUpstream = gitOk(["rev-parse", "--verify", "--quiet", `origin/${br}`]);
-  const range = hasUpstream ? `origin/${br}..${br}`
-    : gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`]) ? `origin/${defaultBranch}..${br}`
+  const hasUpstream = gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${br}`]);
+  const range = hasUpstream ? `${remote}/${br}..${br}`
+    : gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`]) ? `${remote}/${defaultBranch}..${br}`
     // Neither remote ref resolves — an empty or brand-new remote, i.e. the first push the forge has
     // ever seen from this repo. That push publishes the branch's ENTIRE history, so that history is
     // the range. Absent refs make the published set WIDER, never narrower, and a `null` here read as
@@ -439,10 +452,10 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, approvalsDbFile, opts.actor ?? "unknown", recordUnusable, opts.record !== false)
     : [];
 
-  if (!hasUpstream) return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], approvals, unresolvedDefaultBranch, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` };
+  if (!hasUpstream) return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], approvals, unresolvedDefaultBranch, note: `no upstream ${remote}/${br} — nothing to compare (first push of this branch)` };
   // -z NUL-terminates each record so newlines in the body don't split records; %B is the full commit
   // message (subject + body), which allows ticket refs in trailers/footers to be detected (LOOP-25).
-  const commits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${br}..${br}`]));
+  const commits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${remote}/${br}..${br}`]));
   const refs = new Map<string, { sha: string; subject: string }[]>();
   for (const c of commits) {
     for (const id of c.msg.match(TICKET_RE) ?? []) (refs.get(id) ?? refs.set(id, []).get(id)!).push(c);
@@ -529,13 +542,13 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
   // passes) would have silently skipped the enforcement lookup — enforcement configured ON and off
   // in exactly the invocation the dev tiers use.
   const absRepo = resolve(repo);
-  const ws = tryResolveWorkspace(absRepo);
+  const ws = workspaceForRepoDir(absRepo);
 
   let defaultBranch: string;
   if (explicitDefaultBranch) {
     defaultBranch = explicitDefaultBranch;
   } else {
-    const fromConfig = ws ? resolveDefaultBranchForPath(ws, absRepo) : undefined;
+    const fromConfig = resolveDefaultBranchForRepoDir(absRepo);
     if (!fromConfig) {
       console.error(`push-guard: cannot resolve the default branch for '${repo}' — not a registered repo; pass --default-branch <name>`);
       process.exit(strict ? 1 : 0);

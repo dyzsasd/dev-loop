@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { acquireLock } from "../src/locks.ts";
 import { requestApproval, grantApproval } from "../src/approvals.ts";
-import { pushApprovalKey, type PushGuardResult } from "../src/push-guard.ts";
+import { pushApprovalKey, pushGuard, type PushGuardResult } from "../src/push-guard.ts";
 import { prMergeLockPath } from "../src/pr-merge.ts";
 import { repoLandingLockPath } from "../src/repo-lock-path.ts";
 import {
@@ -129,6 +129,11 @@ try {
     // waives it; a verb that wraps a gate silently is the shape D3 refuses.
     ok(/push-guard --strict/.test(PUSH_HELP), "AC8 --help names the gate it runs (push-guard --strict)");
     ok(/NO FLAG THAT WAIVES THE GATE/i.test(PUSH_HELP), "AC8 --help states that no flag waives the gate");
+    // AC6's contract half (PR #287 review, P2): --dry-run DOES fetch, because a verdict measured
+    // against a base the real run will not use is not the real run's verdict. The help says which
+    // way it cuts instead of claiming a blanket "mutates nothing" the code does not honour.
+    ok(/writes nothing\s+OUTWARD/.test(PUSH_HELP) && /git fetch/.test(PUSH_HELP),
+      "AC6 --help scopes the dry run's promise to OUTWARD writes and names the fetch it still runs");
     ok(/approvals\.enforce/.test(PUSH_HELP) && /push:<branch>:<sha>/.test(PUSH_HELP),
       "AC8 --help names the approvals class + key shape it enforces");
   }
@@ -317,6 +322,108 @@ try {
     // second cause).
     const after = await push(ws.repo, { dbPath: ws.db });
     ok(after.pushed && remoteHas(ws.origin, ws.branch), "AC5 with the lock released the same call gates and pushes");
+  }
+
+  // ── The worktree invocation — the one §7 mandates, and the one the verb was built for ───────────
+  //
+  // PR #287 review, P1. `dev-loop push` replaces the feature-branch push in the dev-agent ship
+  // sequence, and §7 runs that sequence in a linked worktree — which equals no registered `path`, so
+  // the exact-path registry match answered "not a registered repo" and the verb exited 2 in its own
+  // call site. The second arm is the consequence Codex did not name and the one that matters more:
+  // `pushGuard` resolves `approvals.enforce` from the same path, so once the exit 2 were fixed by
+  // hand at the call site (`--default-branch`), the gate would have resolved itself OFF there —
+  // a silent fail-open in the gate this ticket exists to install.
+  //
+  // Both worktree locations are exercised: inside the workspace tree, and OUTSIDE it at §7's
+  // canonical `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project>/wt/<ticket>`, where the upward walk for
+  // `dev-loop.json` finds nothing at all.
+  for (const [where, wtBase] of [["inside the workspace tree", null], ["OUTSIDE it (§7's ~/.dev-loop/…/wt path)", join(ROOT, "external-wt")]] as const) {
+    // Digit ids, not "AP-WX": `branchTicketId` matches the canonical <PREFIX>-<n> shape only, and a
+    // branch it cannot parse has no own-ticket to compare against — the arm would pass or fail for a
+    // reason that has nothing to do with the worktree.
+    const TICKET = wtBase ? "AP-72" : "AP-71";
+    const ws = mkWs(wtBase ? "wtx" : "wti", ["push"], TICKET);
+    mkDb(ws.db, TICKET);
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    const conn = openDb(ws.db);
+    requestApproval(conn, { projectId: "p", actionKey: pushApprovalKey(ws.branch, ws.sha), requestedBy: "senior-dev", ticketId: TICKET });
+    conn.close();
+
+    // A real linked worktree ON the ticket branch — what the ship sequence pushes from. The shared
+    // checkout goes back to `main` first, which is not fixture bookkeeping: §7 keeps the base clone
+    // parked on `defaultBranch` precisely so the ticket's branch lives only in its worktree.
+    const wt = join(wtBase ?? join(ws.root, ".dev-loop"), "wt", TICKET);
+    mkdirSync(dirname(wt), { recursive: true });
+    git(ws.repo, ["checkout", "-q", "main"]);
+    git(ws.repo, ["worktree", "add", "-q", wt, ws.branch]);
+
+    const r = await push(wt, { dbPath: ws.db });
+    ok(r.unresolved === null,
+      `worktree ${where}: the repo resolves — no "not a registered repo" exit 2 (${r.unresolved ?? "resolved"})`);
+    // THE fail-open assertion. `dbPath` is passed, so this arm is not about which db was read: it is
+    // about whether `approvals.enforce` was found at all from a worktree path.
+    ok(pushExit(r) === PUSH_EXIT.held && r.holds.some((h) => h.class === "approvals"),
+      `worktree ${where}: the approvals gate is still ON — the ungranted push HOLDS (exit ${pushExit(r)})`);
+    ok(r.pushArgv === null && !remoteHas(ws.origin, ws.branch),
+      `worktree ${where}: nothing was pushed — asserted on origin, not on the return value`);
+    // The lock is the SAME one the base clone takes: a worktree that locked under its own name would
+    // serialize against nobody (AC5's invariant, now asserted from outside the workspace tree too).
+    ok(repoLandingLockPath(wt, "owner/repo521") === repoLandingLockPath(ws.repo, "owner/repo521"),
+      `worktree ${where}: takes the base clone's landing lock, not one of its own`);
+
+    // The grant clears it from the worktree exactly as from the base clone — so the hold above was
+    // the gate doing its job, not the worktree path failing in a second way.
+    const conn2 = openDb(ws.db);
+    grantApproval(conn2, { projectId: "p", actionKey: pushApprovalKey(ws.branch, ws.sha), grantor: "operator", ticketId: TICKET, expires: "24h" });
+    conn2.close();
+    const granted = await push(wt, { dbPath: ws.db });
+    ok(granted.pushed && remoteHas(ws.origin, ws.branch),
+      `worktree ${where}: with the end state granted, the same call pushes from the worktree`);
+  }
+
+  // ── --remote gates the remote it pushes to (PR #287 review, P2) ──────────────────────────────────
+  //
+  // The flag existed and the guard was origin-only, so a non-origin push was gated against origin's
+  // refs: the wrong commit range, or "unevaluated" for a remote that resolves fine. The fixture gives
+  // the two remotes DIFFERENT tips, so a guard still reading origin sees a different range and the
+  // assertion below separates them.
+  {
+    const TICKET = "AP-RM";
+    const ws = mkWs("remote", [], TICKET);
+    mkDb(ws.db, TICKET);
+    process.env.DEVLOOP_WORKSPACE = ws.root;
+    process.env.DEVLOOP_HUB_DB = ws.db;
+    const alt = join(ws.root, "alt.git");
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", alt]);
+    git(ws.repo, ["remote", "add", "alt", alt]);
+    git(ws.repo, ["push", "-q", "alt", "main"]);
+    // ORIGIN carries the branch; ALT carries only main. So the two remotes give opposite readiness
+    // answers for the same repo and branch, and an origin-only reading of `--remote alt` is visible.
+    git(ws.repo, ["push", "-q", "origin", `${ws.branch}:${ws.branch}`]);
+
+    const viaOrigin = await push(ws.repo, { dbPath: ws.db });
+    ok(viaOrigin.nothingToPush && pushExit(viaOrigin) === PUSH_EXIT.pushed,
+      "P2 --remote: against origin there is nothing to push (origin already carries the branch)");
+    // The REAL guard's ranges follow the remote, not just readiness — measured through the library
+    // BEFORE the push below, while origin/<branch> exists and alt/<branch> does not: an origin-only
+    // guard reports a tracked branch, an alt-aware one reports the first-push note.
+    const gAlt = pushGuard(ws.repo, ws.branch, ws.db, "main", { remote: "alt" });
+    const gOrigin = pushGuard(ws.repo, ws.branch, ws.db, "main", {});
+    ok(gOrigin.note === undefined && (gAlt.note ?? "").includes("alt/"),
+      `P2 --remote: pushGuard's own ranges use the given remote (alt note=${JSON.stringify(gAlt.note)}, origin note=${JSON.stringify(gOrigin.note)})`);
+
+    // The same call against alt must NOT read origin's answer: it has a real push to make, so the
+    // gate runs — and it is told which remote it is gating, because its ranges are that remote's.
+    const seen: string[] = [];
+    const viaAlt = await push(ws.repo, {
+      dbPath: ws.db, remote: "alt",
+      guard: (ctx) => { seen.push(ctx.remote); return cleanGuard(ctx.branch); },
+    });
+    ok(!viaAlt.nothingToPush && viaAlt.pushed,
+      "P2 --remote: readiness is measured against the SELECTED remote, not origin");
+    ok(seen.length === 1 && seen[0] === "alt", `P2 --remote: the gate is told which remote it is gating (${JSON.stringify(seen)})`);
+    ok(remoteHas(alt, ws.branch), "P2 --remote: the branch reached the selected remote");
   }
 
   // ── Readiness (§16.3 D2) — named honestly, and it refuses rather than guessing ───────────────────

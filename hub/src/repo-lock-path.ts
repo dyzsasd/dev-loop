@@ -1,11 +1,17 @@
-// The per-repo LANDING LOCK's name — shared by every verb that mutates a repo's base clone
-// (LOOP-521 AC5; extracted verbatim from pr-merge.ts, which owned it alone until `dev-loop push`).
+// WHICH REGISTERED REPO IS THIS DIRECTORY? — the one answer every landing verb resolves through
+// (LOOP-521 AC5; extracted from pr-merge.ts, which owned the lock half alone until `dev-loop push`).
 //
-// WHY IT IS ITS OWN MODULE. Two verbs now serialize on this lock: `pr merge` (the squash) and `push`
-// (the fetch + the push). They must take THE SAME NAME — two names is not serialization — and the
-// only way to guarantee that is one resolution both import. A push verb importing the merge verb
+// WHY IT IS ITS OWN MODULE. Two verbs now serialize on the landing lock: `pr merge` (the squash) and
+// `push` (the fetch + the push). They must take THE SAME NAME — two names is not serialization — and
+// the only way to guarantee that is one resolution both import. A push verb importing the merge verb
 // would be a layering inversion, and a second copy of the resolution is exactly the drift the
 // approvals arc (design approvals §16.3 D5) exists to stop.
+//
+// The lock name is the FIRST consumer of that resolution, not the only one. A directory also decides
+// which default branch the gate measures its passenger range against, and — the one that bites
+// silently — whether `approvals.enforce` covers the push at all. Those three answers must come from
+// one matcher: a repo that is registered for the lock but unregistered for the enforcement switch is
+// a gate that turns itself off in exactly the invocation §7 mandates (PR #287 review, P1).
 //
 // The name is also what `dev-loop with-repo-lock <ref>` takes (§7), so a registered repo resolves to
 // `repo-<ref>` and the direct merge-back sequence, the squash, and the push all queue behind each
@@ -13,7 +19,8 @@
 import { realpathSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve as resolvePath, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { tryResolveWorkspace, wsLockPath } from "./workspace.ts";
+import { tryResolveWorkspace, findWorkspaceRoot, wsLockPath } from "./workspace.ts";
+import { effectiveRepo, type Workspace } from "./team-config.ts";
 import { ghRepoFromRemote } from "./merge-guard.ts";
 
 const canonPath = (p: string): string => { try { return realpathSync(p); } catch { return resolvePath(p); } };
@@ -68,6 +75,54 @@ export function repoRootsOf(dir: string): string[] {
   return roots;
 }
 
+// The workspace ROOT that owns the repo `dir` belongs to, or null.
+//
+// `findWorkspaceRoot(dir)` alone is NOT this question, and the difference is not academic: §7 puts a
+// dev-tier worktree at `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project>/wt/<ticket>`, OUTSIDE the workspace
+// tree, so the upward walk from a worktree finds no `dev-loop.json` and answers "in no workspace" for
+// a repo that is plainly registered. Walking the repo's roots reaches the base clone, which is inside.
+//
+// Deliberately the bare root walk rather than `resolveWorkspace`: callers that document themselves as
+// read-only (push-guard) need the config WITHOUT hydrating secrets into `process.env` or upserting
+// the machine-global index.
+export function workspaceRootForRepoDir(dir: string): string | null {
+  for (const root of repoRootsOf(dir)) { const r = findWorkspaceRoot(root); if (r) return r; }
+  return null;
+}
+
+// The same question, answered with a resolved `Workspace` for callers that already resolve one.
+export function workspaceForRepoDir(dir: string): Workspace | null {
+  for (const root of repoRootsOf(dir)) { const ws = tryResolveWorkspace(root); if (ws) return ws; }
+  return null;
+}
+
+// The registry ref whose repo CONTAINS `dir` — the base clone itself, a package subdirectory of it,
+// or one of its linked worktrees — or null. This is the matcher; every consumer below is a reader of
+// it, so the lock name, the default branch, and the enforcement switch cannot disagree about which
+// repo a directory is.
+export function registeredRepoRefFor(ws: Workspace, dir: string): string | null {
+  const selves = repoRootsOf(dir);
+  const entries = Object.entries(ws.file.repos ?? {}) as [string, { path?: string } | null][];
+  for (const [ref, e] of entries) {
+    if (!e?.path) continue;
+    const abs = resolvePath(ws.root, e.path);
+    let absReal = abs;
+    try { absReal = realpathSync(abs); } catch { /* keep abs */ }
+    if (selves.includes(absReal) || selves.includes(abs)) return ref;
+  }
+  return null;
+}
+
+// The registered default branch for the repo `dir` belongs to, or undefined when it belongs to none.
+// The gate's passenger range is measured against this, so an unresolvable one must stay a loud
+// refusal in the caller — never a guessed "main" (LOOP-119's class).
+export function resolveDefaultBranchForRepoDir(dir: string): string | undefined {
+  const ws = workspaceForRepoDir(dir);
+  if (!ws) return undefined;
+  const ref = registeredRepoRefFor(ws, dir);
+  return ref ? effectiveRepo(ws, ref).defaultBranch : undefined;
+}
+
 // The lock a landing verb serializes on. It ALWAYS resolves to a path — there is no "could not work
 // out where to lock, so proceed unlocked" branch, because that branch would be the hole.
 //
@@ -87,7 +142,7 @@ export function repoLandingLockPath(repoDir: string, ghRepo: string | null): str
   const slug = ghRepo
     ? `repo-gh-${ghRepo.replace(/[^A-Za-z0-9._-]+/g, "-")}`
     : `repo-path-${(gitRootOf(repoDir) ?? canonPath(repoDir)).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "")}`;
-  const ws = tryResolveWorkspace(repoDir);
+  const ws = workspaceForRepoDir(repoDir);
   if (!ws) {
     // No workspace: still lock, per-user and per-machine. Two fires always share a workspace, so this
     // is the standalone-invocation case rather than the racing one — but "unlikely to be contended"
@@ -100,15 +155,9 @@ export function repoLandingLockPath(repoDir: string, ghRepo: string | null): str
   // to the remote match — which needs the OPTIONAL `remote` — and then to `repo-gh-<owner-repo>`, a
   // name `with-repo-lock <ref>` never takes. Two names is not serialization. So the cwd is resolved to
   // the repo that owns it, and a registry entry without a `remote` is still matched by path.
-  const selves = repoRootsOf(repoDir);
+  const byPath = registeredRepoRefFor(ws, repoDir);
+  if (byPath) return wsLockPath(ws, `repo-${byPath}`);
   const entries = Object.entries(ws.file.repos ?? {}) as [string, { path?: string; remote?: string } | null][];
-  for (const [ref, e] of entries) {
-    if (!e?.path) continue;
-    const abs = resolvePath(ws.root, e.path);
-    let absReal = abs;
-    try { absReal = realpathSync(abs); } catch { /* keep abs */ }
-    if (selves.includes(absReal) || selves.includes(abs)) return wsLockPath(ws, `repo-${ref}`);
-  }
   // The cwd is not a registered repo path (the workspace-root invocation these verbs' --help
   // advertise). Match on the remote instead — one entry only; two entries sharing a remote is the
   // ambiguity `resolveRegistryCiFreshnessConfig` already refuses to guess through.
