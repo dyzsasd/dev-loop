@@ -273,48 +273,56 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T01:57Z over the 7d team ledger (807 fires) via `dev-loop metrics --window
-  7d`: **fire success 52%** (`successRate` 0.5155; 65% over 538 fires when Goals was written
+  Measured 2026-08-10T03:15Z over the 7d team ledger (831 fires) via `dev-loop metrics --window
+  7d`: **fire success 50%** (`successRate` 0.5042; 65% over 538 fires when Goals was written
   2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1 — cover 172 of 807 fires; the other **635 carry
-  `errorClass: null`** (LOOP-464), so the classes describe 21% of the window. `stalled` is the
-  largest class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 + LOOP-463).
+  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover 173 of 831 fires; the other
+  **658 carry `errorClass: null`** (LOOP-464), so the classes describe 21% of the window. `stalled`
+  is the largest class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 +
+  LOOP-463). **Coverage decays while an outage runs.** Against the 01:57Z reading 78 minutes
+  earlier, the window's net growth was +24 fires and +23 `errorClass: null` rows: the three
+  `openrouter` lanes (junior-dev, qa, sweep) have fired every ~5 min for **34.6 h**, each returning
+  in ~6 s carrying no class. This percentage therefore tracks the outage's length as much as the
+  taxonomy's reach — compare two readings only alongside the fire counts they were measured over.
   First program: **3 of 5 shipped** — LOOP-382 Done · LOOP-383 Done · LOOP-385 Done (`6a4977d`,
   verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo.
 
 
-### 2026-08-10 (pm, one-hundred-twentieth fire): the north star stops carrying facts it cannot keep
+### 2026-08-10 (pm, one-hundred-twenty-first fire): the coverage number moves without the taxonomy changing
 
-**LOOP-494 approved and landed** (`b310dd0`) — the first §9a investigation this doc has run against
-its own WRITE POLICY rather than against the product. The finding was not that `Goals (north star)`
-held wrong numbers; it was that `Goals` is the wrong place for numbers at all. A direction section
-writable only by an operator approval round cannot carry state that decays in hours, so it goes stale
-by construction — and it had, four assertions of seven, while contradicting `Current state` inside one
-published version on whether the first program was 2 of 5 or 3 of 5. The board said 3.
+**The `data-analytics` lens filed nothing, and that is the sweep's result.** Resumed from pass 89's
+partial pass, it exercised `dev-loop metrics` at three windows and a full `doctor` read against a
+board where two of five lanes are alive. Every blind spot it surfaced already has an owner: the 24 h
+view printing `success 17%` beside `errors: budget-deadline×1` is **LOOP-464**; the 7 d per-agent
+medians ranking the three dead lanes above the two live ones is **LOOP-447**, re-measured onto that
+ticket at pass 89; the queue-age-versus-outage-age gap is **LOOP-467**. Two candidates died on
+inspection rather than becoming tickets — `success` already discounts `suspectError` (17% of 263 =
+45, and 45 + 1 + 217 = 263, so the headline is honest), and the `$/accepted change` line discloses
+its own short denominator (*"incomplete history: ledger begins 2026-08-04"*). With 48 Backlog rows
+and both tiers over the §5a cap, confirming an instrument is honest is worth more than a 49th row.
 
-**The precedent is what made it structural rather than another correction.** LOOP-446 had already
-fixed exactly this section by VALUE, at the cost of an investigation plus an approval round, and it
-was falsified again in roughly a day. Proposing the same remedy a second time would have bought the
-same day. The applied change moves the measurements to `Current state` under a named bullet PM
-re-measures each pass, and leaves `Goals` holding what a direction section is for: three gap CLASSES,
-the through-line, and the five named controls (LOOP-382..386) with no shipped count. Distilled as
-**STANDING RULE 35**.
+**What the re-measure produced instead.** The `Observable-and-safe` bullet moved 52% → 50% success
+and 172/807 → 173/831 classified in 78 minutes, and the mechanism behind that is worth more than
+either value: the window's net growth was **+24 fires and +23 `errorClass: null`**. The three
+`openrouter` lanes have fired every ~5 min for 34.6 h, each returning in ~6 s with no class, so the
+denominator grows from the outage while the numerator stands still. The coverage percentage is a
+property of the outage's length as much as of the taxonomy's reach. That is the operator's LOOP-494
+coverage rule holding one layer deeper than it was written: a number needs its coverage, and the
+coverage needs the population it was measured over.
 
-**The operator's ruling added the half I had not seen.** Approving as proposed, they attached the
-coverage requirement: wherever the moved values are re-measured, the unclassified share rides with
-them. The live bullet therefore reads *172 of 807 fires classified — 21%*, naming the 635
-`errorClass: null` rows (LOOP-464) as the reason the class sizes are not the error profile. That is
-the sharper statement of the original defect: `Goals` was falsified not only because its numbers aged
-but because a 21% sample was presented as the whole. Their second instruction was a refusal — the
-+226 B stays LOOP-484's ceiling problem; direction prose is not to be trimmed to offset a byte count.
+**A measurement error caught inside the fire, distilled as STANDING RULE 39.** The first read of
+`.dev-loop/team/fires.jsonl` assumed a `durationSec` field and normalised anything above 10,000 as
+milliseconds. The ledger's field is `durationMs`, so a 5,336 ms fire scored as 5,336 s of work and
+the table reported junior-dev, qa and sweep as having done real work 0.2 h ago with zero trailing
+short fires — a clean bill of health for three lanes dead 34.6 h. A wrong unit does not announce
+itself, and it failed toward health, which is the direction that ends a lens early.
 
-**Two working facts from the fire itself.** The operator ruled at 02:30:22Z, twenty-five minutes into
-a fire that had already read the ticket and found no verdict — an In Review@operator park is worth
-re-reading late, not only at Job A. And the tell that caught it was a false alarm honestly chased: the
-decision queue returned two rows on a 24h window and one on 7d, which reads exactly like a window bug.
-`decisionQueue` has no window predicate at all (`metrics.ts:675`); re-running every window returned one
-row uniformly, and the real cause was the operator's own mid-fire write flipping `assignee` off
-`operator`. One extra command separated a state change from a defect and kept a ticket unfiled.
+**Board and protocol, unchanged and clean.** §9c: eight parked tickets, all eight holding live edges
+to open blockers (LOOP-394 In Progress · LOOP-401/468/472/479 Todo · LOOP-464 Backlog · LOOP-463
+Human-Blocked), zero unpark candidates, zero zero-edge rows. `needs-pm` empty on both scans. Job A
+empty — the four In Review rows are all `qa`-owned and belong to a verifier that has not fired in
+34.6 h. Promotion stayed closed: unblocked Todo 27 (senior 14, junior 13) against the default cap of
+10 per tier.
 
 ## Personas
 
@@ -629,6 +637,14 @@ row uniformly, and the real cause was the operator's own mid-fire write flipping
      naming the CONSUMER, never by the file's directory. Its converse is the live hazard the loop
      keeps re-learning: code that IS in the installed build can still sit behind a flag or a caller
      that never runs, so shipped is not running. Distilled at pass 89 from the fire-116 journal.
+  39. **Read one raw record before aggregating a ledger — a unit guess fails silently, and in the
+     direction of health.** Fire 121's first pass over `.dev-loop/team/fires.jsonl` assumed a
+     `durationSec` field and treated any value above 10,000 as milliseconds. The ledger's field is
+     `durationMs`, so a 5,336 ms fire scored as 5,336 s of work: the table reported junior-dev, qa
+     and sweep as having done real work 0.2 h ago with zero trailing short fires, for three lanes
+     that had then been dead 34.6 h. The error inverted the finding into a clean bill of health and
+     cost a second full read to catch. One `tail -1 | python3 -m json.tool` before the aggregate
+     settles the field names and their units. Distilled at pass 90 from the fire it happened in.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -719,6 +735,16 @@ row uniformly, and the real cause was the operator's own mid-fire write flipping
     forward on its ticket: **LOOP-394** (approvals C4) — **hold its AC6(c) default of an EMPTY
     `approvals.enforce` at verify**; that default is what bounds **LOOP-489**'s window, and it is the
     kind of default a later review round widens unnoticed.
+  - **2026-08-10 (pm, one-hundred-twentieth fire)** — the north star stops carrying facts it cannot
+    keep (**LOOP-494** approved and landed, `b310dd0`): a direction section writable only by an
+    approval round cannot hold state that decays in hours, so the measurements moved to
+    `Current state` under a PM-re-measured bullet while `Goals` kept the three gap classes, the
+    through-line and the five controls. Rolled by **§20 R2 pass 90** →
+    [`2026-08.md`](strategy-archive/2026-08.md), block AX. What still governs from it: **STANDING
+    RULE 35**, distilled above before the roll, and the operator's second instruction — the W37 byte
+    ceiling is **LOOP-484**'s problem and direction prose is never trimmed to offset it. Live
+    residual: an In Review@operator park is worth re-reading late in a fire, not only at Job A; the
+    fire-120 ruling landed twenty-five minutes in, after the ticket had already been read once.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
