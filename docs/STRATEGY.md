@@ -419,6 +419,33 @@ lever is LOOP-484, not the per-pass discipline.
   the events ledger (`decisionEnteredAt`) — checked in the source before the write and re-verified
   in the rendered W20 after. **Do not generalise this to editing data that feeds a metric**; it is
   licensed only where the field is a human-readable label and every consumer has been enumerated.
+- **2026-08-10 (pm, one-hundred-twenty-ninth fire) — an acceptance criterion that names a GENERATOR
+  is not a criterion about DELIVERY, and from inside the ticket the two are indistinguishable.**
+  Two increments verified, both PASS. **(1) LOOP-395** (approvals `--covers`) met all six ACs; AC5
+  asked `operator-brief.ts` to document recording a chat-granted approval, and it does. But
+  `scaffoldOperatorBriefs` is create-only at all three call sites, so every addition to
+  `operatorBrief()` reaches only a workspace whose `CLAUDE.md` does not yet exist. Measured here:
+  this workspace's brief still runs `Docs:` straight into `Health:`, and no doctor check reports the
+  drift — **the operator console the whole approvals arc was written for is the one reader that
+  cannot receive its own guidance.** The call: verify PASS and file the delivery gap as its own
+  ticket (**LOOP-520**, senior, `sensitive` — the naive repair overwrites operator-authored files),
+  rather than fail an increment against an AC it met. Same call as fire 124's, same reason: a
+  verifier that re-specifies at verify time destroys the only record of what was actually agreed.
+  Folded into **STANDING RULE 29** rather than filed as a new rule — rule 29 covers a switch shipped
+  default-off with no discovery path; this is a discovery path that exists and is delivered once.
+  **(2) LOOP-365 — rule 29's own cited instance — is closed:** `ciIrrelevantPaths` now names itself
+  in the stale reason and sits in the schema table beside `autoMerge`/`mergeChecks`. Both review
+  rounds that held its PR for two days found the same class of defect: AC4's *"runnable command"*
+  bar had been encoded as a no-shell-metacharacters proxy, and a dotted repo ref produces a string
+  that carries no metacharacters and still cannot run, because `team set` refuses it INSIDE the tool
+  after the shell is done. **A proxy that cannot fail on the defect it stands for is not a weaker
+  assertion than the property — it is a different assertion.** **(3) The doctrine I am taking from
+  my own AC-writing:** that ticket's AC5 required the hint mutation to fail *"exactly the AC1
+  assertion and no other"*; measured this fire, it fails **8**, every one of them the feature's own
+  arm. A mutation-sensitivity AC must pin the PROPERTY — nothing outside the feature moves — and
+  never a COUNT, because the count is a function of how many review rounds the feature survived, so
+  a stale count reads at verify time as a failure when it is evidence of a stronger suite.
+
 - **2026-08-10 (pm, one-hundred-twenty-eighth fire) — a mis-diagnosed ticket is re-scoped, not
   canceled, when the bug outlives the diagnosis.** **(1) LOOP-467's** premise was false: the ordering
   fix it asks for landed in `21143e6` four days before it was filed. The §5a reflex is to `Cancel` it
@@ -668,6 +695,10 @@ lever is LOOP-484, not the per-pass discipline.
      validated, tested and mutator-ised `ciIrrelevantPaths` and reached no reader — absent from the
      schema table carrying both its siblings, from `--help`, and from the failure message that would
      have taken it — so it sat inert while its case recurred 8 times in 60 commits (**LOOP-365**).
+     Closed this fire: the hint names the knob, and the row sits beside its siblings. **A discovery
+     path that is DELIVERED ONCE is the same defect one step later** — `operatorBrief()` documents
+     the approvals verbs, and `scaffoldOperatorBriefs` is create-only at all three call sites, so
+     the guidance reaches only workspaces that do not exist yet (**LOOP-520**).
   30. **A change to a shared datum — new precision OR a new bound — is not done until every consumer
      of the old form is enumerated and moved.** `buildCommit` reached the wire and then one of three
      consumers (**LOOP-364**); the board's 250-row cap is disclosed correctly beside per-state counts
