@@ -307,7 +307,14 @@ function terminalExitRejection(actor: string, fromState: string, next: TicketUpd
 // LOOP-296 — resolve this ticket's design parent (all three §21a pointer forms, via the shared
 // predicate) and inherit `sensitive` from it. Returns the ORIGINAL array when nothing changes, so
 // the caller can skip the copy.
-function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, description: string, labels: string[]): string[] {
+//
+// `relatedTo` is the pending child's OWN link set, and it is load-bearing rather than incidental: a
+// slug's owner is derived from the set of its children, so the FIRST child of a design resolves
+// against a slug with no children on the board yet and the lookup answers nobody — the one case
+// where the label matters most, since a design's first staged child is exactly where the tier is
+// chosen. Passing the pending row lets the shared derivation see it (LOOP-379). `updateTicketRow`
+// passes nothing: by then the row is on the board and re-adding it would double the child.
+function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, description: string, labels: string[], relatedTo?: readonly string[]): string[] {
   if (labels.includes("sensitive")) return labels;             // already carried explicitly
   try {
     const ptr = designPointerOf(description ?? "");
@@ -328,7 +335,9 @@ function inheritSensitiveFromDesignParent(db: DatabaseSync, projectId: string, d
     // prevent. Ask the module that owns the derivation instead.
     const direct = /^parent\s+(\S+)/i.exec(ptr);
     const slug = direct ? null : docSlugOf(ptr);
-    const ownerId = slug === null ? null : designOwnerOfSlug(db, projectId, slug);
+    const ownerId = slug === null
+      ? null
+      : designOwnerOfSlug(db, projectId, slug, relatedTo ? { description, relatedTo } : undefined);
     const parent = direct
       ? rows.find((r) => r.id === direct[1])
       : (ownerId === null ? undefined : rows.find((r) => r.id === ownerId));
@@ -400,7 +409,7 @@ export function insertTicket(
   // Inheritance runs FIRST so the re-tier below sees the inherited label and escalates the child in
   // the same write, rather than leaving a sensitive ticket sitting on the junior tier until a
   // backstop notices.
-  const inherited = inheritSensitiveFromDesignParent(db, projectId, f.description, f.labels);
+  const inherited = inheritSensitiveFromDesignParent(db, projectId, f.description, f.labels, f.relatedTo);
   f = inherited === f.labels ? f : { ...f, labels: inherited };
   // Tier restore FIRST (LOOP-223): fix null assignee before sensitive retier
   const tierRestore = applyTierRestore(db, f.state, f.assignee, f.labels);

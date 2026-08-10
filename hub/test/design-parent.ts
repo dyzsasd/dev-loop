@@ -517,6 +517,83 @@ try {
       "LOOP-379: …and both layers agree on the NEW answer — a real design parent reaches its own verifier without having to declare a marker");
   }
 
+  // ── LOOP-379 BOUND 3b: the undirected read degenerates as a slug gets SMALLER ─────────────────
+  // `children.every(c => linked(t).has(c))` reads "is t related to every child", and it is satisfied
+  // VACUOUSLY by any single neighbour when a slug has exactly ONE child. So LOOP-420's shape — a
+  // ticket related to one child of a design it does not own — is excluded on a three-child slug and
+  // comes straight back on a one-child slug, where "every" and "any" are the same quantifier. The
+  // harm is not that the neighbour gains routing: it is that TWO candidates resolve to nobody under
+  // BOUND 3, so the real parent LOSES the PM routing and the close gate it had.
+  //
+  // The tie is broken by the one edge §21a makes MANDATORY — the child's own `relatedTo:[<parent>]`,
+  // written at filing. A neighbour is linked FROM itself; a parent is named BY its children. That is
+  // a structural difference, not a preference, which is why it may decide an authorization question
+  // where id order may not.
+  {
+    // Exactly one child, so `every` is `any`. The parent has not back-linked yet (the second write of
+    // §21a step 5), which is the normal window this has to survive.
+    mk("L379B-OWNER", "the press design, filed with no marker and no back-link yet", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
+    mk("L379B-CHILD", "Design: hubDoc:design/press-core\n\nbuild it", "Todo", ["dev-loop"], ["L379B-OWNER"]);
+    // An ordinary neighbour: a coverage follow-up related to the child. §18 makes `relatedTo` a
+    // general append-only kinship field, so this is a routine row, not a contrived one.
+    mk("L379B-NEIGHBOUR", "a coverage follow-up for the work in the child", "In Review", ["dev-loop", "Bug", "qa"], ["L379B-CHILD"]);
+
+    const p4 = designParentIds(db, pid);
+    ok(p4.has("L379B-OWNER"),
+      "LOOP-379 BOUND 3b: a one-child slug still resolves to the parent its child NAMES, though a neighbour is linked to that same child");
+    ok(!p4.has("L379B-NEIGHBOUR"),
+      "LOOP-379 BOUND 3b: …and the neighbour is not the parent — being linked to every child is `any` when there is one child");
+    ok(inVerify("pm", "L379B-OWNER") && !inVerify("qa", "L379B-OWNER"),
+      "LOOP-379 BOUND 3b: …so the parent keeps the PM routing the ambiguity would have taken from it");
+    ok(inVerify("qa", "L379B-NEIGHBOUR") && !inVerify("pm", "L379B-NEIGHBOUR"),
+      "LOOP-379 BOUND 3b: …and the neighbour stays an ordinary qa-owned Bug on both layers");
+
+    // BOUND 3 is NARROWED, not removed. When the mandatory edge cannot separate the candidates —
+    // the child names both — the slug still resolves to NOBODY rather than to whichever sorts first.
+    mk("L379B-A", "one of two candidates for the kiln doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L379B-TIED"]);
+    mk("L379B-B", "the other candidate for the kiln doc", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"], ["L379B-TIED"]);
+    mk("L379B-TIED", "Design: hubDoc:design/anvil-core\n\nbuild it", "Todo", ["dev-loop"], ["L379B-A", "L379B-B"]);
+    const p5 = designParentIds(db, pid);
+    ok(!p5.has("L379B-A") && !p5.has("L379B-B"),
+      "LOOP-379 BOUND 3b: an ambiguity the mandatory edge cannot break still resolves to NOBODY — narrowing is not a tie-break by id order");
+  }
+
+  // ── LOOP-379: the FIRST child of a design, which resolves against a slug with no children ─────
+  // Ownership is derived from the set of a slug's children, and `insertTicket` runs the lookup BEFORE
+  // the row exists. For the first child of a design the slug therefore has no children at all, the
+  // owner is nobody, and the `sensitive` inheritance LOOP-296 exists for goes silent — on the one
+  // ticket where it decides the tier, since a design's first staged child is where the cheap tier is
+  // chosen. The pending row is folded into the same derivation rather than resolved beside it.
+  {
+    const create = (title: string, desc: string, labels: string[], assignee: string | null, relatedTo: string[]) =>
+      (agentOp("save_issue", db, pid, "dp", "senior-dev",
+        { title, type: "Improvement", state: "Todo", description: desc, labels, relatedTo, ...(assignee ? { assignee } : {}) }) as OpResult)
+        .body as { id: string; labels: string[]; assignee: string | null };
+
+    // A sensitive design parent with NO children yet and no back-link — the state every design is in
+    // at the moment its first child is filed.
+    mk("L379F-PARENT", "the forge design, staged but not yet decomposed", "In Review", ["dev-loop", "Bug", "qa", "sensitive", "senior-dev"]);
+    const first = create("first-child-of-forge", "Design: hubDoc:design/forge-core\n\nbuild the first slice",
+      ["dev-loop"], "junior-dev", ["L379F-PARENT"]);
+    ok(first.labels.includes("sensitive"),
+      `LOOP-379: the FIRST doc-pointer child of a sensitive design inherits the label — the pending row is part of the derivation (got ${JSON.stringify(first.labels)})`);
+    ok(first.assignee === "senior-dev" || first.labels.includes("senior-dev"),
+      `LOOP-379: …so the §21b senior re-tier fires in the same write, instead of staging sensitive work on the junior tier (assignee ${first.assignee})`);
+
+    // …and the SECOND child, filed once the first is on the board, resolves the same way. This is the
+    // arm that would pass with the pending row ignored, so it is what makes the first assertion
+    // discriminating rather than decorative.
+    const second = create("second-child-of-forge", "Design: hubDoc:design/forge-core\n\nbuild the second slice",
+      ["dev-loop"], "junior-dev", ["L379F-PARENT"]);
+    ok(second.labels.includes("sensitive"),
+      `LOOP-379: …and the second child, whose slug now has a child on the board, inherits identically (got ${JSON.stringify(second.labels)})`);
+
+    // The pending row must not become a parent OF ITSELF: it is a child of its own slug, so it is
+    // excluded from the candidate set before its synthetic id is ever compared.
+    ok(!designParentIds(db, pid).has(first.id),
+      "LOOP-379: …and the pending child is not resolved as its own slug's owner");
+  }
+
   db.close();
 } finally {
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
