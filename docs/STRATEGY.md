@@ -417,6 +417,63 @@ discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-fiftieth fire) — a ticket this agent filed last fire carried a false
+  factual premise; the lens that found it produced no ticket of its own.**
+
+  **The correction is the fire's main output.** LOOP-534, filed at 20:57Z in fire 149, asserted in its
+  body and again in AC4: "There is no `_team` daemon, so no reminder of any kind." Measured this fire:
+  `dev-loop hub status` reports TWO daemons — `_team` at 127.0.0.1:8793 (pid 93353) and `loop` at
+  :8787 (pid 93333) — and `/api/health` on 8793 returns `{"ok":true,"project":"_team"}`. `ps -o etime`
+  gives 01:40:34 for both, so the `_team` daemon had been running for roughly 100 minutes when the
+  ticket claiming its absence was filed. The fire-149 check read one daemon and generalised.
+
+  **The ticket's conclusion survives; its mechanism was replaced.** `_team` has no entry in
+  `dev-loop.json.projects` (the projected view returns `fixture,loop`), so at that daemon's boot
+  `projCfg` is undefined, `commsConfigured` is false, `_team`'s `settings_json` is `{}`, and
+  `resolveBlockedReminderHours({}, false)` returns 0 — per `daemon-notifiers.ts:58` no reminder timer
+  is started. No out-of-band reminder can reach a `_team` park, caused by a missing config entry rather
+  than a missing process. This is the same root as the ticket's `deliveryProjects(ws)` finding: `_team`
+  is real to the database and absent from config. Both the body and AC4 were rewritten in place
+  (verified byte-identical to the intended patch on re-read) and the measurement posted as a comment.
+  AC4 now also carries an explicit negative — do not spawn a second `_team` process, one exists.
+
+  **Job C — `polish-performance`, the first sweep of that lens, yield zero tickets.** Three
+  measurements, all negative, all worth recording so the next sweep does not repeat them:
+  - CLI latency is healthy. `project --json` 76 ms, `ticket <id> --json` 68 ms, `queue` 125 ms, against
+    22 ms for `--version` (bare node start), over 3 runs each, min reported. No defect.
+  - §8 dedupe is not blind to the board's tail. `opListIssues` pushes the search into SQL via
+    `ticketSearchClause` inside the WHERE clause (`agentops.ts:201-203`); the row cap is applied after,
+    in JS. LOOP-419's "filters run after the SQL cap" defect is specific to the web `/api/tickets` path
+    and does not reach the op the agents use.
+  - The one surviving candidate did not survive dedupe. Every fire's env carries
+    `DEVLOOP_PROJECTS_JSON` (`run-agents.ts:1005`) pointing at `<workspace>/.dev-loop/projects.json`, a
+    v1 path 1.0 never creates, and `loadProjectsConfig()` treats the variable as authoritative when set
+    — returning null rather than falling through to workspace discovery. Capturing it is therefore
+    worse than capturing nothing. Four dedupe probes returned LOOP-469 (In Progress, senior) on all
+    four; it already owns `installAutostart()`'s env snapshot. Filed nothing; posted the chain as a
+    comment, because it changes the fix: AC2's `WorkingDirectory` restores the cwd walk, and a captured
+    `DEVLOOP_PROJECTS_JSON` short-circuits that walk before it runs, so the variable must be dropped
+    from the captured set rather than supplemented.
+
+  A second observation went to LOOP-507 rather than a new ticket: the same `agentops.ts:275` expression
+  it already quotes ends in `.slice(0, 100)`, a silent cap with no marker or count. Latent at 74 Backlog
+  rows, 26 away, and the two defects compose — truncating an unranked list drops an arbitrary 41 rows,
+  truncating a §5-ordered one drops the 41 lowest-priority rows.
+
+  **Mints STANDING RULE 45 — a negative existence claim requires the unfiltered enumeration, and a
+  probe run inside a fire is not a probe of the product.** Both halves cost something this fire. The
+  first put a false premise on the board: "there is no `_team` daemon" came from a partial read. The
+  second nearly produced a ticket: `loadProjectsConfig()` returned null under measurement, which reads
+  exactly like a defect, until `ps eww` showed neither daemon carries `DEVLOOP_PROJECTS_JSON` while
+  this fire's own shell does. With the variable unset the same call returns `projects: fixture,loop`
+  and `loop.comms` resolves. Before asserting that something does not exist, enumerate without a
+  filter; before calling a measured value a defect, re-measure with the fire markers stripped.
+
+  Jobs A and B were empty: no In Review, no `needs-pm`, no `Human-Blocked`. The §9c pass re-derived all
+  four parks (LOOP-483 → 464; LOOP-404/403/402 → 401) and both blockers are open, so nothing unparks.
+  Job B2 promoted nothing — senior 12/10 and junior 10/10, both at or over cap — which is the 41st
+  fire in 42 where the promotion gate was shut at close.
+
 - **2026-08-10 (pm, one-hundred-forty-ninth fire) — a visibility guarantee that holds at the module
   layer and is lost at the composition layer, found in the increment that shipped it.**
 
