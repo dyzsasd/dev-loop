@@ -31,7 +31,8 @@ import { pushApprovalKey, pushGuard, type PushGuardResult } from "../src/push-gu
 import { prMergeLockPath } from "../src/pr-merge.ts";
 import { repoLandingLockPath } from "../src/repo-lock-path.ts";
 import {
-  push, pushExit, pushArgvFor, setUpstreamArgvFor, documentedExitCodes, PUSH_EXIT, PUSH_HELP, type PushResult, type GitExec,
+  push, pushExit, pushArgvFor, setUpstreamArgvFor, documentedExitCodes, PUSH_EXIT, PUSH_HELP,
+  forcePublishEligible, pushFailureReason, type PushResult, type GitExec,
 } from "../src/push.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -615,6 +616,193 @@ try {
       encoding: "utf8", env: { ...scrubFireEnv() },
     });
     ok(swallowed.status === PUSH_EXIT.usage, `AC6 '--branch --dry-run' is a usage error, not a dry run of HEAD (exit ${swallowed.status})`);
+  }
+
+  // ══ LOOP-536 — publishing a REBASED branch ═══════════════════════════════════════════════════════
+  //
+  // §12c prescribes a rebase as the remedy for a stale ciFreshness hold or a DIRTY mergeStateStatus.
+  // A rebased branch is by construction not a fast-forward of its remote counterpart, so the plain
+  // refspec `<sha>:refs/heads/<branch>` is REJECTED and the remedy was unexecutable. Measured on this
+  // workspace 2026-08-10 (LOOP-396 @ 82ba4fa): gate CLEARS, exit 4, `pushError: "To github.com:…"`.
+  //
+  // These arms use a real git repo pair (AC6), never the injected double: the defect is git's own
+  // refusal, and a double that answers a push argv cannot reproduce a non-fast-forward.
+
+  // Push the branch to origin, advance main, then rebase the branch onto it — the exact state §12c's
+  // remedy leaves behind, and the only one in which a lease is spent.
+  const divergeFixture = (ws: { repo: string; origin: string; branch: string }): { publishedSha: string; rebasedSha: string } => {
+    git(ws.repo, ["push", "-q", "origin", ws.branch]);
+    const publishedSha = git(ws.repo, ["rev-parse", ws.branch]);
+    git(ws.repo, ["checkout", "-q", "main"]);
+    writeFileSync(join(ws.repo, "base.txt"), "the base moves\n");
+    git(ws.repo, ["add", "base.txt"]);
+    git(ws.repo, ["commit", "-qm", "chore: the base moves"]);
+    git(ws.repo, ["push", "-q", "origin", "main"]);
+    git(ws.repo, ["checkout", "-q", ws.branch]);
+    git(ws.repo, ["rebase", "-q", "origin/main"]);
+    git(ws.repo, ["fetch", "-q", "origin"]);
+    return { publishedSha, rebasedSha: git(ws.repo, ["rev-parse", ws.branch]) };
+  };
+  const originTip = (originDir: string, branch: string): string =>
+    execFileSync("git", ["-C", originDir, "rev-parse", `refs/heads/${branch}`], { encoding: "utf8" }).trim();
+
+  // ── AC1 — a rebased branch IS published, under a lease ───────────────────────────────────────────
+  {
+    const ws = mkWs("l536-ac1", [], "AP-536");
+    const { publishedSha, rebasedSha } = divergeFixture(ws);
+    ok(publishedSha !== rebasedSha, "AC1 fixture: the rebase really moved the tip (a same-sha fixture would prove nothing)");
+
+    const r = await push(ws.repo, { defaultBranch: "main", lockPath: join(ROOT, "lk-536-ac1") });
+    ok(pushExit(r) === PUSH_EXIT.pushed && r.pushed, `AC1 a rebased dev-loop/<id> branch is published (exit ${pushExit(r)}, pushError=${JSON.stringify(r.pushError)})`);
+    ok(originTip(ws.origin, ws.branch) === rebasedSha, "AC1 the REMOTE now carries the rebased tip — asserted on origin, not on the verb's own claim");
+    // The lease is the mechanism, and it is pinned to the sha the fetch saw — asserted on the recorded
+    // argv so "it force-pushed safely" is a checkable fact rather than an inference from success.
+    ok(r.pushArgv?.includes(`--force-with-lease=refs/heads/${ws.branch}:${publishedSha}`) === true,
+      `AC1 the argv carries the lease pinned to the fetched origin sha (${JSON.stringify(r.pushArgv)})`);
+    ok(r.forcePublish?.diverged === true && r.forcePublish.eligible === true, "AC1 the result reports the divergence and the eligibility that spent the lease");
+    // AC5's receipt half: the sha this push REPLACED is carried out of the verb, so the caller (and
+    // LOOP-500's observing consumer) can record what was destroyed, not just what was published.
+    ok(r.forcePublish?.overwrittenSha === publishedSha, `AC5 the result names the sha the force-publish overwrote (${r.forcePublish?.overwrittenSha?.slice(0, 12)})`);
+  }
+
+  // ── AC1/AC3 — there is no BARE force, ever ───────────────────────────────────────────────────────
+  {
+    // The argv builder is the only place force semantics can enter, so this is where "no bare --force"
+    // is pinned. Both shapes: with a lease and without.
+    const plain = pushArgvFor("origin", "dev-loop/AP-9", "a".repeat(40));
+    const leased = pushArgvFor("origin", "dev-loop/AP-9", "a".repeat(40), "b".repeat(40));
+    ok(!plain.includes("--force") && !plain.some((a) => a.startsWith("--force")), "AC1 no lease ⇒ a plain refspec, no force of any kind");
+    ok(leased.includes(`--force-with-lease=refs/heads/dev-loop/AP-9:${"b".repeat(40)}`), "AC1 a lease ⇒ --force-with-lease pinned to the expected sha");
+    ok(!leased.includes("--force") && !leased.includes("-f") && !leased.some((a) => a === "--force-with-lease"),
+      "AC1 the leased argv contains NO bare --force and no bare --force-with-lease (which would read remote-tracking refs this verb just refreshed)");
+  }
+
+  // ── AC2 — the lease is HONOURED: a remote that moved after the fetch refuses the push ────────────
+  {
+    const ws = mkWs("l536-ac2", [], "AP-537");
+    const { rebasedSha } = divergeFixture(ws);
+    // A CONCURRENT writer publishes to the same branch after our fetch — the exact race the lease
+    // exists for. `--force` would silently destroy this commit; the lease must refuse.
+    const other = join(ROOT, "l536-ac2-other");
+    execFileSync("git", ["clone", "-q", ws.origin, other]);
+    git(other, ["checkout", "-q", ws.branch]);
+    writeFileSync(join(other, "theirs.txt"), "another writer\n");
+    git(other, ["add", "theirs.txt"]);
+    git(other, ["commit", "-qm", "feat: the other writer's commit"]);
+    git(other, ["push", "-q", "origin", ws.branch]);
+    const theirs = git(other, ["rev-parse", "HEAD"]);
+
+    // NOTE: no `git fetch` in the fixture repo — its remote-tracking ref still holds the pre-race sha,
+    // which is precisely what the lease pins. (The verb fetches internally, but the lease sha is read
+    // before the push, and the race is what happens in between.)
+    const r = await push(ws.repo, { defaultBranch: "main", lockPath: join(ROOT, "lk-536-ac2") });
+    ok(!r.pushed, "AC2 the push did NOT succeed against a remote that moved after the lease was taken");
+    ok(originTip(ws.origin, ws.branch) === theirs, "AC2 the other writer's commit is STILL the remote tip — it was not overwritten");
+    ok(r.pushError !== null && /stale info|rejected|non-fast-forward/i.test(r.pushError),
+      `AC2 the failure says the remote moved, in git's own words (${JSON.stringify(r.pushError)})`);
+    ok(rebasedSha !== theirs, "AC2 fixture: the two writers really produced different tips");
+  }
+
+  // ── AC3 — the default branch and foreign branches are refused a force-publish outright ───────────
+  {
+    // The predicate, exhaustively, because it IS the safety boundary — and asserted independently of
+    // any divergence, per the AC's "whatever the divergence".
+    const cases: Array<[string, string, boolean]> = [
+      ["dev-loop/LOOP-536", "main", true],
+      ["dev-loop/AP-1", "main", true],
+      ["main", "main", false],                    // the default branch
+      ["dev-loop/main", "main", false],           // inside the namespace, but not a ticket id
+      ["dev-loop/LOOP-536-prefix", "main", false],// a real shape in this workspace's worktree list
+      ["dev-loop/LOOP-536/sub", "main", false],
+      ["feature/x", "main", false],               // a foreign branch
+      ["dev-loop/LOOP-536", "dev-loop/LOOP-536", false], // default branch wins over the pattern
+    ];
+    for (const [branch, db, want] of cases) {
+      const got = forcePublishEligible(branch, db).eligible;
+      ok(got === want, `AC3 forcePublishEligible('${branch}', default='${db}') === ${want}`);
+    }
+
+    // End to end: a DIVERGED branch that is not a ticket branch gets the plain refspec and git's
+    // rejection — the verb neither escalates nor pretends it succeeded.
+    const ws = mkWs("l536-ac3", [], "AP-538");
+    git(ws.repo, ["checkout", "-qb", "feature/foreign"]);
+    writeFileSync(join(ws.repo, "f.txt"), "foreign\n");
+    git(ws.repo, ["add", "f.txt"]);
+    git(ws.repo, ["commit", "-qm", "feat: foreign work"]);
+    git(ws.repo, ["push", "-q", "origin", "feature/foreign"]);
+    const foreignPublished = originTip(ws.origin, "feature/foreign");
+    git(ws.repo, ["commit", "-q", "--amend", "-m", "feat: foreign work, amended"]);   // diverge
+    git(ws.repo, ["fetch", "-q", "origin"]);
+
+    const r = await push(ws.repo, { branch: "feature/foreign", defaultBranch: "main", lockPath: join(ROOT, "lk-536-ac3") });
+    ok(r.forcePublish?.diverged === true && r.forcePublish.eligible === false,
+      "AC3 a diverged FOREIGN branch is reported diverged-but-ineligible, so the refusal is legible");
+    ok(r.pushArgv !== null && !r.pushArgv.some((a) => a.startsWith("--force")),
+      `AC3 no force argv was issued for the foreign branch (${JSON.stringify(r.pushArgv)})`);
+    ok(!r.pushed && pushExit(r) === PUSH_EXIT.pushFailed, `AC3 it fails as a remote error (exit ${pushExit(r)}), not as a silent success`);
+    ok(originTip(ws.origin, "feature/foreign") === foreignPublished, "AC3 the foreign branch on origin is UNCHANGED — nothing was rewritten");
+  }
+
+  // ── AC4 — a failed push reports git's REASON, not its banner line ────────────────────────────────
+  {
+    // The unit half: the parser, against git's real measured stderr shape. Pinned separately from the
+    // end-to-end arm so a future refactor of either one cannot quietly drop the other.
+    const realStderr = [
+      "To /tmp/x/origin.git",
+      " ! [rejected]        08b2af25899014d76d503aec5f7471261e857bf9 -> dev-loop/AP-1 (non-fast-forward)",
+      "error: failed to push some refs to '/tmp/x/origin.git'",
+      "hint: Updates were rejected because the tip of your current branch is behind",
+      "hint: its remote counterpart. If you want to integrate the remote changes,",
+    ].join("\n");
+    const reason = pushFailureReason(realStderr);
+    ok(/\(non-fast-forward\)/.test(reason), `AC4 the reason survives the parse (${JSON.stringify(reason)})`);
+    ok(!/^To\s/.test(reason), "AC4 the destination banner is not the whole reason any more");
+    // The fallback: an unrecognised shape must not be reported as an empty reason — that is the same
+    // defect one level down.
+    ok(pushFailureReason("To only.git") === "To only.git", "AC4 a stderr that is ONLY a banner falls back to it rather than reporting nothing");
+    ok(pushFailureReason("") === "git push failed", "AC4 an empty stderr still names a failure");
+    ok(pushFailureReason("fatal: Authentication failed") === "fatal: Authentication failed", "AC4 an unrelated failure shape passes through intact");
+
+    // The end-to-end half: a REAL rejected push, through the verb.
+    const ws = mkWs("l536-ac4", [], "AP-539");
+    git(ws.repo, ["push", "-q", "origin", ws.branch]);
+    const other = join(ROOT, "l536-ac4-other");
+    execFileSync("git", ["clone", "-q", ws.origin, other]);
+    git(other, ["checkout", "-q", ws.branch]);
+    writeFileSync(join(other, "theirs.txt"), "x\n");
+    git(other, ["add", "theirs.txt"]);
+    git(other, ["commit", "-qm", "feat: theirs"]);
+    git(other, ["push", "-q", "origin", ws.branch]);
+    // Ours diverges by amend; the branch IS a ticket branch, so a lease is spent — and the lease is
+    // stale, so git refuses with `(stale info)`.
+    git(ws.repo, ["commit", "-q", "--amend", "-m", "feat: the gated change (AP-539), amended"]);
+
+    const r = await push(ws.repo, { defaultBranch: "main", lockPath: join(ROOT, "lk-536-ac4") });
+    ok(r.pushError !== null && !/^To\s/.test(r.pushError),
+      `AC4 end to end: pushError is not the 'To <url>' banner (${JSON.stringify(r.pushError)})`);
+    ok(r.pushError !== null && /rejected|stale info|non-fast-forward/i.test(r.pushError),
+      "AC4 end to end: pushError names the rejection git printed");
+  }
+
+  // ── AC6 — the negative control: a NON-diverged branch still publishes as a plain fast-forward ────
+  //
+  // Without this, "force-push everything" passes every arm above. This is the arm that makes the fix
+  // narrow rather than merely effective.
+  {
+    const ws = mkWs("l536-ctl", [], "AP-540");
+    git(ws.repo, ["push", "-q", "origin", ws.branch]);
+    writeFileSync(join(ws.repo, "more.txt"), "a plain new commit\n");
+    git(ws.repo, ["add", "more.txt"]);
+    git(ws.repo, ["commit", "-qm", "feat: a fast-forwardable commit (AP-540)"]);
+    git(ws.repo, ["fetch", "-q", "origin"]);
+    const tip = git(ws.repo, ["rev-parse", ws.branch]);
+
+    const r = await push(ws.repo, { defaultBranch: "main", lockPath: join(ROOT, "lk-536-ctl") });
+    ok(r.pushed && originTip(ws.origin, ws.branch) === tip, "AC6 control: an ordinary ahead-only branch still publishes");
+    ok(r.forcePublish?.diverged === false, "AC6 control: it is reported as NOT diverged");
+    ok(r.pushArgv !== null && !r.pushArgv.some((a) => a.startsWith("--force")),
+      `AC6 control: NO lease is spent on a fast-forward (${JSON.stringify(r.pushArgv)})`);
+    ok(r.forcePublish?.overwrittenSha === null, "AC6 control: nothing was overwritten, and the result says so");
   }
 } finally {
   if (savedEnv.ws === undefined) delete process.env.DEVLOOP_WORKSPACE; else process.env.DEVLOOP_WORKSPACE = savedEnv.ws;
