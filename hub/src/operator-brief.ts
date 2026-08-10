@@ -55,6 +55,17 @@ markers; with them set, operator writes refuse (exit 4).
   any op by name via \`dev-loop op <op> --args-json '{…}'\` (full surface: \`dev-loop op --help\`).
 - **Docs**: \`dev-loop doc list|get|save|publish|archive\` — publish is operator-only; PM
   self-publishes progress-only strategy deltas, direction changes wait for the human's publish.
+- **When the human authorises something in chat, RECORD it** ("发版放行", "go ahead and publish"):
+  \`dev-loop approve <key> --note "<their words>"\` — the note is their sentence, so the record can be
+  read back later without re-reading this conversation. A key names an END STATE
+  (\`npm-publish:@scope/pkg:1.15.1\`, \`push:<branch>:<sha>\`), never a capability — \`push:main\` is
+  refused at grant time. Then a retry is CHECKED, never re-derived:
+  \`dev-loop approvals --covers <key>\` answers \`covered\`/\`not-covered\` with the reason, exits 0
+  either way, and records nothing. One grant covers every retry of the same end state however many
+  attempts it took; a different version or sha is a different key, and is reported as naming a
+  different end state rather than as a bare absence. \`dev-loop approvals\` lists what is in force,
+  \`dev-loop revoke <key|id>\` ends one early. Granting is yours alone — inside an agent fire
+  \`approve\`/\`revoke\` refuse (exit 4), which is what makes a grant worth consulting.
 - **Health**: \`dev-loop doctor\` (W-codes), \`dev-loop metrics\` (fires/errorClass/board KPIs).
 - **Moving/deploying this workspace**: \`dev-loop bundle export --help\` (encrypted move/backup) and
   \`dev-loop up --help\` (local chat console / \`--bundle\` headless load / \`--attach\` remote hub).
