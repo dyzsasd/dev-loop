@@ -22,6 +22,8 @@ import { ensureSeed, findProject } from "../src/seed.ts";
 import { humanWriteEnabled } from "../src/daemon.ts";
 import { resolveBlockedReminderHours } from "../src/daemon-notifiers.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
+import { restartHint } from "../src/settings-cli.ts"; // the SHIPPED hint builder, never a local copy (LOOP-429)
+import { TEAM_INTAKE_PROJECT } from "../src/team-config.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
@@ -29,7 +31,20 @@ let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "dl-settings-")));
-try {
+const SELF = fileURLToPath(import.meta.url);
+
+// NOT `try { … } finally { process.exit(…) }`. That shape swallows every unexpected exception: control
+// enters the finally, `process.exit` runs while `fails` is still 0 because no `ok()` ever recorded one,
+// and run-all.ts reads exit 0 as a pass for a suite whose remaining assertions never executed. A bare
+// block keeps the scope (and this file's indentation) while letting a throw propagate — node then exits
+// non-zero and prints the stack. The exit status is taken AFTER the block completes normally.
+{
+  // The fault the harness self-test at the bottom injects. It must be thrown from INSIDE this block,
+  // where a real unexpected exception happens (a failed JSON.parse of an empty stdout, a spawn that did
+  // not run) — a throw sited above the block escapes any `finally` and would exit non-zero under BOTH
+  // harness shapes, making the assertion unable to tell them apart. Mutation-tested: restoring the
+  // finally-block exit with this line above the block leaves the suite green.
+  if (process.env.DL_SETTINGS_SELFTEST_THROW) throw new Error("injected fault — harness self-test (LOOP-479)");
   mkdirSync(join(ROOT, "repo"), { recursive: true });
   mkdirSync(join(ROOT, ".dev-loop"), { recursive: true });
   writeFileSync(join(ROOT, "dev-loop.json"), JSON.stringify({
@@ -208,10 +223,18 @@ try {
   // start|stop|status|ensure), and printing an unrunnable procedure is this ticket's own defect class —
   // the reason it was filed was a doc naming three enablement paths that did not exist.
   const cadenceOut = run("set", "humanBlockedReminderHours", "6").stdout;
-  ok(/restart the daemon: dev-loop hub stop && dev-loop hub start/.test(cadenceOut),
+  ok(/restart the daemon: DEVLOOP_PROJECT=p dev-loop daemon down && DEVLOOP_PROJECT=p dev-loop daemon up/.test(cadenceOut),
     "a restart-required key prints the restart hint on write (the daemon never re-reads the row)");
   ok(!/hub restart\b/.test(cadenceOut),
     "…and the hint does NOT name `hub restart`, which is not a subcommand — an unrunnable hint is the defect this ticket exists to remove");
+  // `p` is a DELIVERY project, and `hub start|stop` dies on one (hub.ts:78-86) pointing at `daemon
+  // up`/`down`. So the hub form here would be the same defect class as `hub restart`: well-formed,
+  // discoverable, and refused when run. The hint is derived from the resolved key, so assert the wrong
+  // branch is absent as well as the right one present — otherwise printing BOTH would pass.
+  ok(!/hub stop && dev-loop hub start/.test(cadenceOut),
+    "…and it does NOT print the `hub stop && hub start` form, which REFUSES a delivery project — the hint must follow the project whose row was written");
+  ok(restartHint("p") !== restartHint(TEAM_INTAKE_PROJECT) && /dev-loop hub stop/.test(restartHint(TEAM_INTAKE_PROJECT)),
+    "…and the _team workspace hub still gets the `hub` form — the two lifecycles are distinct verbs, not one command with a preferred spelling");
   ok(!/restart the daemon/.test(run("set", "humanWrite.enabled", "true").stdout),
     "…and a per-request key prints no restart hint at all — the hint distinguishes the two, it is not boilerplate");
   run("unset", "humanWrite.enabled");
@@ -228,7 +251,20 @@ try {
     "AC4: `settings --help` names the settable paths");
   const top = spawnSync(process.execPath, [CLI, "--help"], { cwd: ROOT, encoding: "utf8", env: scrubFireEnv() });
   ok(/^\s+settings list\|get\|set\|unset/m.test(top.stdout), "AC4: the top-level `dev-loop --help` lists the verb");
-} finally {
-  console.log(fails ? `\n${fails} check(s) failed` : "\nall settings-cli checks passed");
-  process.exit(fails ? 1 : 0);
+  ok(!/hub stop && (dev-loop )?hub start/.test(top.stdout),
+    "…and the top-level help no longer prescribes `hub stop && hub start`, which refuses a delivery project");
+
+  // ── The harness's own exit path ──────────────────────────────────────────────────────────────
+  // Asserted by re-running THIS file with the fault injected, not by re-creating the harness shape in
+  // a fixture: a copy would be the LOOP-429 defect — a parity assertion whose two sides share a
+  // re-implementation stays green with the real thing broken. The child throws at the top, so it never
+  // reaches this spawn and cannot recurse.
+  const selfTest = spawnSync(process.execPath, [SELF], {
+    cwd: ROOT, encoding: "utf8", env: { ...scrubFireEnv(), DL_SETTINGS_SELFTEST_THROW: "1" },
+  });
+  ok(selfTest.status !== 0,
+    `harness: an unexpected exception FAILS the suite (got exit ${selfTest.status}) — a finally-block process.exit would swallow it and report a pass for assertions that never ran`);
 }
+
+console.log(fails ? `\n${fails} check(s) failed` : "\nall settings-cli checks passed");
+process.exit(fails ? 1 : 0);

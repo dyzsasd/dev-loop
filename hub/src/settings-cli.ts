@@ -28,6 +28,7 @@ import { openDb, STATES } from "./db.ts"; // STATES: the one legal-state list, s
 import { findProject } from "./seed.ts";
 import { activeFireMarker } from "./destructive-guard.ts"; // LOOP-367/417: the ONE fire-marker list, owned there
 import { resolveIdentity } from "./resolve-project.ts";     // §11 DEVLOOP_PROJECT-then-cwd ladder, shared with every hub verb
+import { TEAM_INTAKE_PROJECT } from "./team-config.ts";     // which project the `hub` verb owns — the restart hint below turns on it
 
 function die(msg: string, code = 2): never { console.error(`dev-loop settings: ${msg}`); process.exit(code); }
 
@@ -203,6 +204,23 @@ export function writeSettings(db: DatabaseSync, key: string, settings: Record<st
   db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify(settings), key);
 }
 
+// The restart a `restart:true` key needs is not ONE command — it depends on which project's row was
+// just written, and the two lifecycles are disjoint verbs:
+//   · `dev-loop hub start|stop`  manages ONLY the `_team` workspace hub. Given any other project it
+//     DIES (`hub.ts:78-86`) with "…is a per-project daemon — use 'DEVLOOP_PROJECT=<key> dev-loop
+//     daemon up'". It never restarts a delivery project's daemon.
+//   · `dev-loop daemon up|down`  is the per-project lifecycle, scoped by DEVLOOP_PROJECT.
+// This verb writes ANY project's row, so a single hard-coded hint is wrong for whichever case it does
+// not name — and every cadence key it applies to (`humanBlockedReminderHours`, `noProgressWindowHours`,
+// `fireHealth.*`) is read by the PER-PROJECT daemon, so the delivery-project form is the common case.
+// This is the third round of one defect on this ticket: printing an instruction nobody executed. The
+// hint is derived from the resolved key so it cannot be right for only one of them.
+export function restartHint(key: string): string {
+  return key === TEAM_INTAKE_PROJECT
+    ? `dev-loop hub stop && dev-loop hub start   (there is no 'hub restart' subcommand)`
+    : `DEVLOOP_PROJECT=${key} dev-loop daemon down && DEVLOOP_PROJECT=${key} dev-loop daemon up`;
+}
+
 // ── the verb ──────────────────────────────────────────────────────────────────
 const USAGE = `dev-loop settings — read/write the hub project's runtime switchboard (projects.settings_json)
 
@@ -218,11 +236,17 @@ Writes are ADDITIVE — every other key in the row survives untouched.
 WHEN A CHANGE TAKES EFFECT differs by key, so this verb reports it rather than promising one rule:
   humanWrite.enabled, workflow.transitions   take effect immediately — read per request/per write.
   humanBlockedReminderHours, noProgressWindowHours, fireHealth.*
-                                             need a daemon restart ('dev-loop hub stop && dev-loop hub
-                                             start' — there is no 'hub restart' subcommand): the daemon
-                                             reads these ONCE at
-                                             bootstrap and passes the numbers into the notifier timers,
-                                             which never re-read the row.
+                                             need a restart of the daemon that OWNS that project: the
+                                             daemon reads these ONCE at bootstrap and passes the numbers
+                                             into the notifier timers, which never re-read the row.
+                                             A delivery project — the per-project daemon:
+                                               DEVLOOP_PROJECT=<key> dev-loop daemon down && \\
+                                               DEVLOOP_PROJECT=<key> dev-loop daemon up
+                                             The '${TEAM_INTAKE_PROJECT}' workspace hub — the hub verb:
+                                               dev-loop hub stop && dev-loop hub start
+                                             ('hub start/stop' REFUSE a delivery project, and there is
+                                             no 'hub restart' subcommand.) The exact line for the
+                                             project you wrote is printed by the write itself.
 
 Settable paths:
 ${SETTABLE_SETTINGS.map((s) => `  ${s.re.source.replace(/^\^|\$$/g, "").replace(/\\/g, "")}\n      ${s.note}`).join("\n")}
@@ -318,7 +342,7 @@ export function main(argv: string[]): void {
         writeSettings(db, key, settings);
         console.log(`${key}: ${path} = ${JSON.stringify(value)}${before === undefined ? "" : ` (was ${JSON.stringify(before)})`}`);
         if (Object.keys(settings).length > 1) console.log(`  ${Object.keys(settings).length - 1} other settings_json key(s) preserved: ${Object.keys(settings).filter((k) => k !== path.split(".")[0]).join(", ") || "(same block)"}`);
-        if (spec.restart) console.log(`  ⚠️  not in effect yet — restart the daemon: dev-loop hub stop && dev-loop hub start. ${path} is read once at bootstrap and the notifier timers never re-read the row.`);
+        if (spec.restart) console.log(`  ⚠️  not in effect yet — restart the daemon: ${restartHint(key)}. ${path} is read once at bootstrap and the notifier timers never re-read the row.`);
         break;
       }
       case "unset": {
@@ -328,7 +352,7 @@ export function main(argv: string[]): void {
         if (!removed) { console.log(`${key}: ${args[0]} was already absent — nothing written`); break; }
         writeSettings(db, key, settings);
         console.log(`${key}: ${args[0]} unset`);
-        if (spec.restart) console.log(`  ⚠️  not in effect yet — restart the daemon: dev-loop hub stop && dev-loop hub start. ${args[0]} is read once at bootstrap and the notifier timers never re-read the row.`);
+        if (spec.restart) console.log(`  ⚠️  not in effect yet — restart the daemon: ${restartHint(key)}. ${args[0]} is read once at bootstrap and the notifier timers never re-read the row.`);
         break;
       }
       default: die(`unknown subcommand '${sub}'\n\n${USAGE}`);
