@@ -279,6 +279,18 @@ const SELF = fileURLToPath(import.meta.url);
     "…and it does NOT print the `hub stop && hub start` form, which REFUSES a delivery project — the hint must follow the project whose row was written");
   ok(restartHint("p") !== restartHint(TEAM_INTAKE_PROJECT) && /dev-loop hub stop/.test(restartHint(TEAM_INTAKE_PROJECT)),
     "…and the _team workspace hub still gets the `hub` form — the two lifecycles are distinct verbs, not one command with a preferred spelling");
+  // …and BOTH forms carry their own DEVLOOP_PROJECT. `--project` selects the row to write but does not
+  // rewrite the environment, while hubCmd refuses start/stop on the AMBIENT value (`hub.ts:74-78`) — so
+  // a bare `dev-loop hub stop` printed under `DEVLOOP_PROJECT=<delivery> … --project _team` dies in the
+  // very shell it was handed to. A hint that is runnable only when the environment already agrees is
+  // the same unrunnable-instruction defect this ticket exists to remove.
+  for (const key of ["p", TEAM_INTAKE_PROJECT]) {
+    const h = restartHint(key);
+    ok(h.split("&&").every((cmd) => /DEVLOOP_PROJECT=/.test(cmd)),
+      `restart hint for '${key}': every command carries its own DEVLOOP_PROJECT — self-contained, not true-only-if-the-env-agrees (${h.slice(0, 72)}…)`);
+  }
+  ok(restartHint(TEAM_INTAKE_PROJECT).includes(`DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT}`),
+    "…and the _team hint names _team explicitly, so it overrides an inherited delivery-project value rather than inheriting it");
   ok(!/restart the daemon/.test(run("set", "humanWrite.enabled", "true").stdout),
     "…and a per-request key prints no restart hint at all — the hint distinguishes the two, it is not boilerplate");
   run("unset", "humanWrite.enabled");

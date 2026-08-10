@@ -238,9 +238,17 @@ export function writeSettings(db: DatabaseSync, key: string, settings: Record<st
 // `fireHealth.*`) is read by the PER-PROJECT daemon, so the delivery-project form is the common case.
 // This is the third round of one defect on this ticket: printing an instruction nobody executed. The
 // hint is derived from the resolved key so it cannot be right for only one of them.
+//
+// BOTH branches carry an explicit `DEVLOOP_PROJECT=` prefix, and the `_team` one needs it for a reason
+// the delivery form makes obvious only in hindsight. The project this verb wrote comes from `--project`
+// when given, but `--project` does not rewrite the process environment — while `hubCmd` reads the
+// AMBIENT `DEVLOOP_PROJECT` (`hub.ts:74-78`) and refuses start/stop/ensure when it names anything but
+// `_team`. So `DEVLOOP_PROJECT=loop dev-loop settings set … --project _team` would print a bare
+// `dev-loop hub stop`, which then dies in the very shell that was told to run it. The prefix makes each
+// hint self-contained rather than true-only-when-the-environment-agrees.
 export function restartHint(key: string): string {
   return key === TEAM_INTAKE_PROJECT
-    ? `dev-loop hub stop && dev-loop hub start   (there is no 'hub restart' subcommand)`
+    ? `DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub stop && DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub start   (there is no 'hub restart' subcommand)`
     : `DEVLOOP_PROJECT=${key} dev-loop daemon down && DEVLOOP_PROJECT=${key} dev-loop daemon up`;
 }
 
@@ -266,7 +274,8 @@ WHEN A CHANGE TAKES EFFECT differs by key, so this verb reports it rather than p
                                                DEVLOOP_PROJECT=<key> dev-loop daemon down && \\
                                                DEVLOOP_PROJECT=<key> dev-loop daemon up
                                              The '${TEAM_INTAKE_PROJECT}' workspace hub — the hub verb:
-                                               dev-loop hub stop && dev-loop hub start
+                                               DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub stop && \\
+                                               DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub start
                                              ('hub start/stop' REFUSE a delivery project, and there is
                                              no 'hub restart' subcommand.) The exact line for the
                                              project you wrote is printed by the write itself.
