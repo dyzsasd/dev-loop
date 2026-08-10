@@ -7,16 +7,21 @@
 // stream) is invisible to every one of them.
 //
 // So this suite does two things no substring check can:
-//   1. It extracts the <script> the daemon ACTUALLY SERVES (one real spawned daemon, one real board
-//      request) and evaluates THOSE BYTES against DOM/EventSource/fetch/setInterval stubs. There is
-//      no second copy of the client logic to drift from — the code under test is the code shipped.
-//   2. It drives a REAL ok:false /api/health by swapping the db file's inode under the live daemon
+//   1. It CALLS the shipped client (`src/views/live-client.ts`) with DOM/EventSource/fetch/
+//      setInterval stubs and drives its transitions. There is no second copy of the client logic to
+//      drift from: ui.ts inlines that same function into the page via `liveClient.toString()`, and
+//      the first assertion below pins the served bytes to the function driven here. (The client
+//      cannot be evaluated from the served string instead — the repo's source-integrity gate forbids
+//      dynamic Function construction — so byte identity is what links shipped to tested.)
+//   2. It drives a REAL ok:false /api/health by swapping the db file's inode under a live daemon
 //      (the LOOP-367 `dbFileReplaced` arm), and feeds the server's own error string into the client
 //      render — so the two halves of the banner contract are linked end to end.
 import { rmSync, mkdirSync, copyFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { startTestDaemon } from "./daemon-harness.ts";
+import { liveClient } from "../src/views/live-client.ts";
+import type { LiveDocument, LiveEl, LiveEventSource } from "../src/views/live-client.ts";
 
 const DIR = "/tmp/hub-stale-banner";
 const DB = join(DIR, "hub.db");
@@ -34,11 +39,23 @@ const daemon = await startTestDaemon({
 });
 const base = daemon.url.replace(/\/$/, "");
 
-// ── the shipped client script, taken from a real served page ───────────────────────────────────
+// ── the page serves THIS function, and hands it the real browser globals ───────────────────────
 const html = await fetch(base + "/").then((r) => r.text());
 const scripts = html.match(/<script>[\s\S]*?<\/script>/g) ?? [];
-ok(scripts.length === 1, `page serves exactly ONE <script> block (got ${scripts.length}) — the extraction below is unambiguous`);
+ok(scripts.length === 1, `page serves exactly ONE <script> block (got ${scripts.length}) — the checks below are unambiguous`);
 const scriptBody = (scripts[0] ?? "").replace(/^<script>/, "").replace(/<\/script>$/, "");
+ok(scriptBody.includes(liveClient.toString()),
+  "the served page inlines liveClient's OWN source — the client driven below is the client shipped");
+// The one thing a Node test cannot drive: which browser globals the page hands in. So assert the
+// call site's argument list (not its formatting) — a page that dropped `fetch` would still serve a
+// byte-identical function and never poll.
+// (anchored to the invocation STATEMENT — an unanchored `liveClient(` would match the inlined
+// function's own declaration and assert its parameter names instead of the page's arguments)
+const callArgs = (/^\s*liveClient\((.*)\);\s*$/m.exec(scriptBody)?.[1] ?? "").split(",").map((s) => s.trim());
+ok(callArgs.slice(0, 5).join(",") === "document,EventSource,fetch,setInterval,location",
+  `the page calls it with the real browser globals in order (got [${callArgs.slice(0, 5).join(", ")}])`);
+ok((callArgs[5] ?? "").startsWith('"') && (callArgs[5] ?? "").includes("/api/stream"),
+  `the stream path is passed as a JSON-quoted string (got ${callArgs[5]})`);
 
 // AC4 — the page shell: banner element present, hidden by default (server-rendered HTML, so a
 // substring check IS the right instrument here; it asserts markup, not logic).
@@ -48,7 +65,7 @@ ok(!html.includes('class="stale-banner show"'),
   "AC4: banner is NOT visible in server-rendered HTML (JS-activated only)");
 
 // ── DOM / EventSource / fetch / setInterval stubs ──────────────────────────────────────────────
-function mkEl() {
+function mkEl(): LiveEl & { classList: { contains(c: string): boolean } } {
   const classes = new Set<string>();
   return {
     innerHTML: "",
@@ -60,17 +77,20 @@ function mkEl() {
   };
 }
 const bannerEl = mkEl(), dotEl = mkEl();
-const doc = {
+const doc: LiveDocument = {
   getElementById: (id: string) => (id === "stale-banner" ? bannerEl : id === "live" ? dotEl : null),
   activeElement: null,
   addEventListener: () => { /* focusout — not exercised here */ },
 };
-type ES = { url?: string; onmessage?: (e: { data: string }) => void; onerror?: () => void };
-// Captured through a sink object, then read into consts below: a `let` assigned inside a callback
-// loses its narrowing at every intervening call, and `es!.onerror!()` everywhere would hide a real
-// null from the reader.
-const sink: { es: ES | null; poll: (() => void) | null; pollMs: number } = { es: null, poll: null, pollMs: 0 };
-function EventSourceStub(this: ES, url: string) { this.url = url; sink.es = this; }
+// Captured through a sink object: a `let` assigned inside the constructor loses its narrowing at
+// every intervening call, and `stream!.onerror!()` everywhere would hide a real null from the reader.
+const sink: { es: LiveEventSource | null; poll: (() => void) | null; pollMs: number } = { es: null, poll: null, pollMs: 0 };
+class EventSourceStub implements LiveEventSource {
+  onmessage?: ((e: { data: string }) => void) | null;
+  onerror?: (() => void) | null;
+  url: string;
+  constructor(url: string) { this.url = url; sink.es = this; }
+}
 let healthPayload: unknown = { ok: true };
 let healthFetches = 0;
 const fetchStub = (url: string) => {
@@ -81,19 +101,18 @@ const setIntervalStub = (fn: () => void, ms: number) => { sink.poll = fn; sink.p
 let reloads = 0;
 const locationStub = { reload: () => { reloads++; } };
 
-// Evaluate the served bytes. The script's own outer try/catch would swallow a stub mismatch, so the
-// non-vacuity preconditions below are load-bearing: without them a broken harness reads as green.
-const run = new Function("document", "EventSource", "fetch", "setInterval", "location", scriptBody) as
-  (...a: unknown[]) => void;
-run(doc, EventSourceStub, fetchStub, setIntervalStub, locationStub);
+liveClient(doc, EventSourceStub, fetchStub, setIntervalStub, locationStub, "/p/sb/api/stream");
 
 const es = sink.es, pollFn = sink.poll;
+// Non-vacuity preconditions: without them a harness that wired nothing up still reads as green.
 ok(es !== null && typeof es.onerror === "function" && typeof es.onmessage === "function",
-  "precondition: the served script ran to completion and registered both SSE handlers (not swallowed by its own try/catch)");
+  "precondition: the client registered both SSE handlers");
 ok(pollFn !== null && sink.pollMs === 15000,
-  `precondition: the served script registered the 15s health poll (got ${sink.pollMs}ms)`);
-if (es === null || pollFn === null || es.onmessage === undefined || es.onerror === undefined) {
-  console.log("❌ harness could not drive the script — remaining assertions would be vacuous");
+  `precondition: the client registered the 15s health poll (got ${sink.pollMs}ms)`);
+ok(es instanceof EventSourceStub && es.url === "/p/sb/api/stream",
+  "the client subscribes to the stream path it was handed, not a hard-coded one");
+if (es === null || pollFn === null || es.onmessage == null || es.onerror == null) {
+  console.log("❌ harness could not drive the client — remaining assertions would be vacuous");
   process.exit(1);
 }
 const onMessage = es.onmessage, onError = es.onerror;

@@ -6,6 +6,7 @@
 // markdown renderer, and the small shared shape/format helpers (toTicket / ownerOf / prioOf /
 // noticeHtml / countPill / stateDot). Pure string-returning functions only — no res handling, no
 // writes, no network (daemon.ts owns HTTP). daemonviews.ts re-exports this module's public surface.
+import { liveClient } from "./live-client.ts";
 
 // ticket row → API shape (mirrors the MCP server's toTicket; labels/related_to are JSON columns).
 // Shared by the HTML views and the daemon.ts JSON API routes (a row-shape helper, not view-only).
@@ -359,48 +360,15 @@ export function page(title: string, project: string, inner: string, opts: PageOp
 // typing a roadmap edit / new ticket). JSON.stringify embeds the server-built path safely (the project
 // key inside it is percent-encoded by href(), so no quote or </script> can reach the script body).
 //
-// LOOP-532 — the banner has TWO independent fault sources (a lost stream, an unhealthy daemon) and
-// exactly ONE element. LOOP-386 shipped them as two direct writers, so the 15s poll's `else` arm
-// cleared a banner it did not own: stream dies + daemon healthy ⇒ banner raised, then silently
-// removed within 15s while the page keeps rendering its last HTML — LOOP-386's own failure mode. It
-// is not a flicker: EventSource retries a transport failure, but a 401 closes the stream for good
-// (and /api/health is the one path enforceBearer exempts, so it keeps answering ok:true). So the two
-// sources are now STATE, and renderBanner() is the single writer that derives the element from them.
-// A health fault outranks a lost stream (it is the more specific, more actionable message); the
-// banner clears only when BOTH are clear. The remedy is appended only when the server's error does
-// not already end with it — the dbFileReplaced and projectRowGone arms both do.
+// The client itself lives in ./live-client.ts and is inlined here by `liveClient.toString()` — the
+// served bytes are that function's own source, so the test suite drives the shipped client by
+// importing it rather than by re-evaluating a served string (LOOP-532; the module header explains
+// why the banner has one writer and what the two constraints on that function are).
 const liveScript = (streamPath: string) => `<script>
 (function(){
   try{
-    var dot=document.getElementById('live'), base=null, pending=false, banner=document.getElementById('stale-banner'), streamLost=false, healthErr=null;
-    var REMEDY='Restart it: dev-loop daemon up';
-    var es=new EventSource(${JSON.stringify(streamPath)});
-    function typing(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT');}
-    function showBanner(msg,remedy){if(banner){banner.innerHTML=esc(msg)+(remedy?'<span class=\"sb-remedy\">'+esc(remedy)+'</span>':'');banner.classList.add('show');}}
-    function hideBanner(){if(banner){banner.classList.remove('show');banner.innerHTML='';}}
-    function esc(s){return String(s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
-    function renderBanner(){
-      if(healthErr!==null){showBanner(healthErr, healthErr.slice(-REMEDY.length)===REMEDY?'':REMEDY);}
-      else if(streamLost){showBanner('Connection to daemon lost — this view may be stale','The page will reload automatically when the connection returns.');}
-      else{hideBanner();}
-    }
-    es.onmessage=function(e){
-      var id=e.data; if(base===null){base=id;return;}
-      if(id!==base){ if(dot)dot.classList.add('on'); pending=true; if(!typing())location.reload(); }
-      if(streamLost){streamLost=false;if(!pending)renderBanner();}
-    };
-    es.onerror=function(){
-      streamLost=true; renderBanner();
-    };
-    document.addEventListener('focusout',function(){ if(pending&&!typing())location.reload(); });
-    setInterval(function(){
-      try{
-        fetch('/api/health').then(function(r){return r.json();}).then(function(h){
-          healthErr=(h&&h.ok===false)?(h.error||'Daemon unhealthy'):null;
-          renderBanner();
-        }).catch(function(){});
-      }catch(_){}
-    },15000);
+${liveClient.toString()}
+    liveClient(document, EventSource, fetch, setInterval, location, ${JSON.stringify(streamPath)});
   }catch(_){/* no EventSource ⇒ static page, fine */}
 })();
 </script>`;
