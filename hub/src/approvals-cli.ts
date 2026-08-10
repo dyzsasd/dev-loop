@@ -27,8 +27,8 @@ import { resolveIdentity } from "./resolve-project.ts";
 import { activeFireMarker } from "./destructive-guard.ts"; // the ONE fire-marker list, owned there
 import {
   ACTION_CLASSES, DEFAULT_EXPIRY, NEVER, ApprovalError,
-  grantApproval, listApprovals, requestApproval, revokeApproval, parseActionKey,
-  type ApprovalErrorCode, type ApprovalListItem, type ApprovalState,
+  coverageQuery, grantApproval, listApprovals, requestApproval, revokeApproval, parseActionKey,
+  type ApprovalErrorCode, type ApprovalListItem, type ApprovalState, type CoverageVerdict,
 } from "./approvals.ts";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -117,10 +117,19 @@ dev-loop approve --request <approval-id> [--expires …] [--note …] [--json]
 
     approvals: `dev-loop approvals [--key <key>] [--state <state>] [--project <key>|--workspace|--all]
                    [--json]
+dev-loop approvals --covers <key> [--project <key>|--workspace|--all] [--json]
 
   List approvals with their state derived at read time (states: requested, granted, revoked,
   discharged, expired). Read-only, agent-callable, and appends nothing to the ledger — reading the
   record is not an event on it.
+
+  --covers <key>  answer ONE question instead of listing: does a grant still cover this exact end
+                  state right now? Prints 'covered' or 'not-covered' with the reason, and EXITS 0
+                  either way — the answer is the payload, not the exit code, because a query that
+                  signalled 'no' as a failure could not be scripted apart from a broken one.
+                  A grant is not consumed by being used, so one grant covers every retry of the SAME
+                  end state; the next version/sha is a different key, and is reported as such rather
+                  than as a bare absence. Records no attempt — asking is not attempting.
 
   --all         every scope (default: the resolved project plus workspace-scoped grants)
   --workspace   workspace-scoped rows only`,
@@ -162,7 +171,7 @@ interface Parsed {
   error: string | null;
 }
 
-const VALUE_FLAGS = new Set(["expires", "note", "ticket", "project", "request", "key", "state"]);
+const VALUE_FLAGS = new Set(["expires", "note", "ticket", "project", "request", "key", "state", "covers"]);
 const BOOL_FLAGS = new Set(["json", "workspace", "all", "help"]);
 
 /**
@@ -255,7 +264,7 @@ export function parseArgs(argv: readonly string[]): Parsed {
 export const VERB_FLAGS: Record<Verb, ReadonlySet<string>> = {
   approve: new Set(["expires", "note", "ticket", "project", "workspace", "request", "json", "help"]),
   revoke: new Set(["note", "project", "workspace", "json", "help"]),
-  approvals: new Set(["key", "state", "project", "workspace", "all", "json", "help"]),
+  approvals: new Set(["key", "state", "covers", "project", "workspace", "all", "json", "help"]),
   request: new Set(["ticket", "note", "project", "workspace", "json", "help"]),
 };
 
@@ -408,7 +417,13 @@ export function approvalsCmd(argv: readonly string[] = process.argv.slice(2)): n
   }
 
   try {
-    if (v === "approvals") return listVerb(db, flags, positional, json, now);
+    // `--covers` asks ONE question and the listing answers a different one, so it dispatches to its
+    // own handler rather than growing a mode inside listVerb — the two share only the scope rule.
+    if (v === "approvals") {
+      return str(flags, "covers") !== undefined
+        ? coversVerb(db, flags, positional, json, now)
+        : listVerb(db, flags, positional, json, now);
+    }
     if (v === "request") return requestVerb(db, flags, positional, json, actor);
     if (v === "approve") return approveVerb(db, flags, positional, json, actor);
     return revokeVerb(db, flags, positional, json, actor, now);
@@ -468,6 +483,66 @@ function listVerb(
   }
   console.log(`approvals — ${label} (state derived at ${now})`);
   for (const i of items) console.log(fmt(i));
+  return 0;
+}
+
+/**
+ * `dev-loop approvals --covers <key>` — the CONSULTING consumer (design §7, LOOP-395 / C6).
+ *
+ * EXIT 0 IN BOTH DIRECTIONS is the load-bearing property, not a convenience. A read-only query that
+ * signalled "not covered" through a non-zero exit would be indistinguishable, to every caller that
+ * checks `$?`, from "the db is missing" or "you typed the key wrong" — and this surface already uses
+ * 1/2/4/5 to mean exactly those. The verdict is in the payload; the exit code says whether the
+ * QUESTION was answerable.
+ */
+export function coversVerb(
+  db: DatabaseSync, flags: Record<string, string | true>, positional: string[], json: boolean, now: string,
+): number {
+  if (positional.length) { console.error(`dev-loop approvals: unexpected argument '${positional[0]}' (the key goes in --covers)`); return 2; }
+  // `--key`/`--state` filter a LISTING; --covers answers about one key. Passing both says two things,
+  // and this file's rule for that is to refuse rather than to pick one (see parseArgs' repeat rule).
+  const clash = ["key", "state"].filter((f) => str(flags, f) !== undefined);
+  if (clash.length) {
+    console.error(`dev-loop approvals: --covers asks about ONE key and ${clash.map((f) => `--${f}`).join("/")} filter${clash.length > 1 ? "" : "s"} a listing — pass one or the other`);
+    return 2;
+  }
+  if (flags.all === true && (flags.workspace === true || str(flags, "project") !== undefined)) {
+    console.error("dev-loop approvals: --all already means every scope — pass it alone, not with --project/--workspace");
+    return 2;
+  }
+
+  const asked = str(flags, "covers")!;
+  // A key that does not parse is a USAGE error here, not a not-covered verdict. `covered:false` would
+  // be true but misleading: it reads as "the operator has not granted this yet", inviting them to
+  // grant a key the grant-time lint will refuse (design §4). Same string the writers refuse with.
+  const parsed = parseActionKey(asked);
+  if (!parsed.ok) { console.error(`dev-loop approvals: ${parsed.message}`); return 2; }
+
+  let projectId: string | null | undefined;
+  let label: string;
+  if (flags.all === true) { projectId = undefined; label = "every scope"; }
+  else {
+    const scope = resolveScope(db, flags);
+    if (typeof scope === "string") { console.error(`dev-loop approvals: ${scope}`); return 2; }
+    projectId = scope.projectId;
+    label = scope.projectId === null ? "workspace scope" : `project ${scope.label} (+ workspace-scoped)`;
+  }
+
+  const verdict: CoverageVerdict = coverageQuery(db, parsed.parsed.key, now, { projectId });
+  if (json) { console.log(JSON.stringify(verdict, null, 2)); return 0; }
+  console.log(`${verdict.verdict.toUpperCase()}  ${verdict.key}`);
+  console.log(`  end state: ${parsed.parsed.endState}`);
+  console.log(`  scope: ${label} (evaluated at ${now})`);
+  if (verdict.covered && verdict.approval) {
+    console.log(`  by: ${verdict.approval.id} granted by ${verdict.approval.grantor ?? "?"} at ${verdict.approval.granted_at} (expires ${verdict.approval.expires_at ?? "never"})`);
+    // Said on every covered answer, because the question this verb exists to retire is "does the
+    // grant still cover the RETRY" — and the answer only reads as safe once you know the key, not
+    // the attempt count, is what bounds it.
+    if (verdict.approval.note) console.log(`  note: ${verdict.approval.note}`);
+    console.log("  a grant is not consumed by being used: every retry of THIS end state is covered until it expires, is revoked, or is discharged.");
+  } else if (verdict.reason) {
+    console.log(`  reason: ${verdict.reason}`);
+  }
   return 0;
 }
 
