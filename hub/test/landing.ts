@@ -3,7 +3,7 @@
 import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deltaIsCiIrrelevant, readCiFreshness, readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
+import { deltaIsCiIrrelevant, readCiFreshness, shellArg, readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 
 let fails = 0;
@@ -700,6 +700,110 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
     "LOOP-335: a non-slash entry is an EXACT match, not a prefix");
   ok(!deltaIsCiIrrelevant([], ["docs/STRATEGY.md"]), "LOOP-335: an empty delta is never exempt");
 }
+// ── LOOP-365: surface the ciIrrelevantPaths knob in the stale reason ─────────────
+{
+  // Reuse the LOOP-335 exec helper pattern: green checks, head 2 behind.
+  const mkExec = (revFiles: string[] | "fail" | "unparseable", extra: Record<string, unknown> = {}): ExecFn => (args) => {
+    if (args[0] === "pr" && args[1] === "view") {
+      return { ok: true, stdout: JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [{ name: "Test", conclusion: "SUCCESS", status: "COMPLETED" }] }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/main...")) {
+      return { ok: true, stdout: JSON.stringify({ behind_by: 2, base_commit: { sha: "tip999" } }), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1]).includes("/compare/abc123...")) {
+      if (revFiles === "fail") return { ok: false, stdout: "", stderr: "compare failed" };
+      if (revFiles === "unparseable") return { ok: true, stdout: "{not json", stderr: "" };
+      return { ok: true, stdout: JSON.stringify({ files: revFiles.map((f) => ({ filename: f })), ...extra }), stderr: "" };
+    }
+    return { ok: false, stdout: "", stderr: "unexpected" };
+  };
+  const read = (revFiles: string[] | "fail" | "unparseable", irrelevant?: string[], extra: Record<string, unknown> = {}, repoRef?: string) =>
+    readCiFreshness(mkExec(revFiles, extra), "o/r", 1, ["Test"], "main", irrelevant, repoRef);
+
+  // AC1 — hint present when stale, delta known, ciIrrelevantPaths unset.
+  const a1 = read(["docs/STRATEGY.md", "docs/strategy-archive/2026-08.md"], undefined);
+  ok(a1.verdict === "stale", `LOOP-365 AC1: stale with unset ciIrrelevantPaths (got ${a1.verdict})`);
+  ok((a1.reason ?? "").includes("ciIrrelevantPaths"),
+    `LOOP-365 AC1: reason names the unset knob (${a1.reason?.slice(0, 120)})`);
+  ok((a1.reason ?? "").includes("dev-loop team set"),
+    "LOOP-365 AC1: reason includes the mutator invocation");
+
+  // AC2 — no hint when ciIrrelevantPaths IS configured.
+  const a2 = read(["docs/STRATEGY.md", "hub/src/landing.ts"], ["docs/STRATEGY.md"]);
+  ok(a2.verdict === "stale", `LOOP-365 AC2: stale with configured ciIrrelevantPaths but mixed delta (got ${a2.verdict})`);
+  ok(!(a2.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC2: no hint when ciIrrelevantPaths IS configured");
+
+  // AC3 — no hint when composition is unknown (fail, unparseable, empty).
+  const a3a = read("fail", undefined);
+  ok(a3a.verdict === "stale", `LOOP-365 AC3(i): stale from failed compare (got ${a3a.verdict})`);
+  ok(!(a3a.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC3(i): no hint when composition unknown (compare failed)");
+
+  const a3b = read("unparseable", undefined);
+  ok(a3b.verdict === "stale", `LOOP-365 AC3(ii): stale from unparseable compare (got ${a3b.verdict})`);
+  ok(!(a3b.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC3(ii): no hint when composition unknown (unparseable)");
+
+  const a3c = read([], undefined);
+  ok(a3c.verdict === "stale", `LOOP-365 AC3(iii): stale from empty delta (got ${a3c.verdict})`);
+  ok(!(a3c.reason ?? "").includes("ciIrrelevantPaths"),
+    "LOOP-365 AC3(iii): no hint when delta empty (no files)");
+
+  // AC4 — the hint is a REMEDY, so what it prints must be runnable AS PRINTED.
+  //
+  // The defect this closes: the hint read `dev-loop team set repos.<ref>.ciIrrelevantPaths
+  // <comma-separated paths>`, described as the command to run. Pasted into a shell, `<ref>` and
+  // `<comma-separated paths>` are input redirections — the line does not run, and the repo ref is an
+  // operator-chosen registry key that cannot be inferred from `ghRepo`, so no reader could repair it
+  // either. The property asserted is therefore not a fixed string: WHENEVER the hint presents a
+  // command ("set it with: …"), that command carries no shell-metacharacter placeholder.
+  const cmdOf = (reason: string): string | null => {
+    const m = /set it with: (.*)$/.exec(reason);
+    return m ? m[1]! : null;
+  };
+  const a4 = read(["docs/STRATEGY.md"], undefined, {}, "dev-loop");
+  const c4 = cmdOf(a4.reason ?? "");
+  ok(c4 !== null, `LOOP-365 AC4: a resolved repoRef yields a command form (${a4.reason?.slice(0, 160)})`);
+  ok((c4 ?? "").includes("repos.dev-loop.ciIrrelevantPaths"),
+    `LOOP-365 AC4: the command names the REAL registry ref, not a placeholder (${c4})`);
+  ok(!/[<>]/.test(c4 ?? "<"),
+    `LOOP-365 AC4: the printed command carries no angle-bracket placeholder — it would redirect (${c4})`);
+
+  // AC5 — with NO resolved ref the hint must NOT pose as a command. Naming the knob is useful;
+  // handing over an unrunnable line as "the command to run" is the same defect one layer down.
+  const a5 = read(["docs/STRATEGY.md"], undefined, {}, undefined);
+  ok((a5.reason ?? "").includes("ciIrrelevantPaths"), "LOOP-365 AC5: the knob is still named without a ref");
+  ok(cmdOf(a5.reason ?? "") === null,
+    `LOOP-365 AC5: no command form is offered when the ref did not resolve (${a5.reason?.slice(0, 200)})`);
+
+  // AC4, the case quoting cannot reach (PR #273 review): a ref the MUTATOR cannot address.
+  // `team set` matches `^repos\.[^.]+\.ciIrrelevantPaths$` and splits its path on dots, while
+  // `validateRepoRegistry` → `validateName` → `KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/` accepts a
+  // dot in a repo ref. `repos.web.app.ciIrrelevantPaths` is therefore a legal knob with no runnable
+  // command, and the failure is inside the tool, not in the shell — so the AC4 property ("if a
+  // command is printed, it runs") needs this arm, which the angle-bracket check above passes.
+  const aDot = read(["docs/STRATEGY.md"], undefined, {}, "web.app");
+  ok(cmdOf(aDot.reason ?? "") === null,
+    `LOOP-365 AC4: a dotted repo ref offers NO command — team set cannot address it (${aDot.reason?.slice(0, 220)})`);
+  ok((aDot.reason ?? "").includes("repos.web.app") && (aDot.reason ?? "").includes("ciIrrelevantPaths"),
+    `LOOP-365 AC4: …while still naming the knob and the real ref, so the operator knows what is unset (${aDot.reason?.slice(0, 220)})`);
+
+  // AC6 — a ref needing shell quoting stays runnable. `team-config.ts` validates the
+  // ciIrrelevantPaths ENTRIES, not the ref, so a ref carrying a space is a config it accepts.
+  const a6 = read(["docs/STRATEGY.md"], undefined, {}, "my repo");
+  const c6 = cmdOf(a6.reason ?? "");
+  ok((c6 ?? "").includes("'repos.my repo.ciIrrelevantPaths'"),
+    `LOOP-365 AC6: a ref needing quoting is single-quoted in the printed command (${c6})`);
+
+  // shellArg, directly — the quoting rule AC4/AC6 ride on.
+  ok(shellArg("dev-loop") === "dev-loop", "LOOP-365: a shell-safe ref is left unquoted (the common hint does not grow noise)");
+  ok(shellArg("repos.a/b-c_1.d") === "repos.a/b-c_1.d", "LOOP-365: the safe charset covers a real knob path");
+  ok(shellArg("my repo") === "'my repo'", "LOOP-365: a space forces quoting");
+  ok(shellArg("a;rm -rf /") === "'a;rm -rf /'", "LOOP-365: a metacharacter forces quoting");
+  ok(shellArg("it's") === "'it'\\''s'", "LOOP-365: an embedded single quote is escaped POSIX-style");
+}
+
 
 // ── LOOP-424: W22 landing-health line blind to missing PR checks ──────────────────
 

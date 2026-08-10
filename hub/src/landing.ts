@@ -138,6 +138,14 @@ export interface CiFreshness {
 // Read CI freshness for a single PR. Returns a verdict based on check conclusions and
 // whether the tested head is behind the current default branch tip.
 // Never throws; all forge failures degrade to `unknown`.
+// POSIX single-quote quoting for a value interpolated into a printed command (LOOP-365). A repo ref
+// is an operator-chosen key with no enforced charset — `team-config.ts` validates the
+// ciIrrelevantPaths ENTRIES, not the ref — so an unquoted ref carrying a space or a metacharacter
+// would emit a line that parses as a different command than the one described.
+export function shellArg(v: string): string {
+  return /^[A-Za-z0-9_.\/-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
 export function readCiFreshness(
   exec: ExecFn,
   ghRepo: string,
@@ -145,6 +153,7 @@ export function readCiFreshness(
   mergeChecks: string[],
   defaultBranch: string,
   ciIrrelevantPaths?: string[], // LOOP-335: paths whose change cannot alter any check result
+  repoRef?: string, // LOOP-365: this repo's KEY in dev-loop.json — the only thing that makes the hint runnable
 ): CiFreshness {
   try {
     // 1. PR view — get headRefOid + statusCheckRollup
@@ -211,6 +220,8 @@ export function readCiFreshness(
       // beats the exempt rule specifically: a truncated list of exempt files says nothing about the
       // files that were cut.
       let exempt = false;
+      // LOOP-365: when the delta is known AND ciIrrelevantPaths is unset, surface the knob.
+      let hint = "";
       const revResult = exec(["api", `/repos/${ghRepo}/compare/${testedHead}...${defaultBranch}`]);
       if (revResult.ok) {
         try {
@@ -227,6 +238,35 @@ export function readCiFreshness(
               exempt = true;
               composition = `delta touches ${names.length} CI-irrelevant file(s): ${shown}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`;
             }
+            // LOOP-365: when the delta is known and not truncated and ciIrrelevantPaths is unset, surface the knob.
+            //
+            // The hint is a REMEDY, so it is held to the standard a remedy has to meet: what it prints
+            // must be runnable as printed. Two things stop that from being automatic.
+            //
+            // 1. The knob is keyed by the repo's key in `dev-loop.json` (`repos.<ref>`) — an arbitrary
+            //    operator-chosen string, NOT derivable from `ghRepo` (`owner/name`), the directory
+            //    name, or the remote. So it is threaded in from the resolver that read the entry, and
+            //    when no entry resolved we do NOT print a command: a literal `<ref>` is not a value,
+            //    and `<` opens a shell redirection, so the copy-paste fails in a way that reads like
+            //    the tool is broken rather than like a placeholder was left for you.
+            // 2. The VALUE is the operator's judgement (which paths cannot affect a check), so it
+            //    stays an example — but a quoted one, for the same reason.
+            // 3. Even a RESOLVED ref is not always addressable, and shell quoting does not reach this
+            //    one (PR #273 review): `team set` matches its target with
+            //    `^repos\.[^.]+\.ciIrrelevantPaths$` and splits the path on dots, while
+            //    `team-config.ts` validates a repo ref through KEY_RE — which PERMITS dots. So
+            //    `repos.web.app.ciIrrelevantPaths` names a knob the validator accepts and the mutator
+            //    refuses, and printing it as the command to run fails INSIDE the tool, past where any
+            //    quoting could help. A ref the mutator cannot address therefore gets the description
+            //    rather than a command — the same rule as an unresolved ref for a different reason,
+            //    so both keep the one property the arm asserts: if a command is printed, it runs.
+            if (!truncated && !exempt && (!ciIrrelevantPaths || ciIrrelevantPaths.length === 0)) {
+              hint = repoRef === undefined
+                ? `no ciIrrelevantPaths is configured for this repo \u2014 set repos.<ref>.ciIrrelevantPaths through \`dev-loop team set\`, where <ref> is this repo's key in dev-loop.json; it did not resolve here, so this is a description and not a command to copy`
+                : repoRef.includes(".")
+                  ? `no ciIrrelevantPaths is configured for repos.${repoRef} \u2014 \`dev-loop team set\` cannot address a repo ref containing a dot (it splits the path on dots), so this is a description and not a command to copy; the mutator reaches this knob only for a dot-free ref`
+                  : `no ciIrrelevantPaths is configured for this repo \u2014 if none of these files can affect a check result, set it with: dev-loop team set ${shellArg(`repos.${repoRef}.ciIrrelevantPaths`)} 'path/one.md,dir/two/'`;
+            }
           } else {
             composition = "delta touches 0 files (empty commits)";
           }
@@ -235,7 +275,8 @@ export function readCiFreshness(
       if (exempt) {
         return { verdict: "stale-exempt", behindBy, testedHead, currentTip, reason: `head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"}, but every file in the delta is configured CI-irrelevant (repos.<ref>.ciIrrelevantPaths) — re-verifying could not change a check result; ${composition}` };
       }
-      return { verdict: "stale", behindBy, testedHead, currentTip, reason: `checks green but head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"} — not re-verified against the current tip; ${composition}` };
+      // LOOP-365: the hint was set inside the try block where names/truncated are in scope
+      return { verdict: "stale", behindBy, testedHead, currentTip, reason: `checks green but head is ${behindBy} commit(s) behind ${defaultBranch} tip ${currentTip ?? "unknown"} — not re-verified against the current tip; ${composition}${hint ? ` ${hint}` : ""}` };
     }
     return { verdict: "fresh-green", behindBy: behindBy ?? 0, testedHead, currentTip, reason: "checks green and head is up to date with current tip" };
   } catch (e) {
