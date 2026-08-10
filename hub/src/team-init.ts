@@ -11,6 +11,7 @@ import { validateTeamFile, TEAM_INTAKE_PROJECT, normalizeAutonomy, type TeamFile
 import { ensureStateDirs, upsertWorkspaceIndex, wsHubDb } from "./workspace.ts";
 import { scaffoldOperatorBriefs } from "./operator-brief.ts";
 import { openDb } from "./db.ts";
+import { syncProjectRows } from "./project-row-sync.ts"; // LOOP-409 — the config → hub-row projection
 import { ensureSeed } from "./seed.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop team init: ${msg}`); process.exit(code); }
@@ -178,7 +179,12 @@ export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } 
 // Only called for a service backend, so the linear path never touches sqlite / the hub schema.
 function seedServiceHub(ws: Workspace): void {
   const db = openDb(wsHubDb(ws));
-  try { ensureSeed(db, TEAM_INTAKE_PROJECT, "Team Intake", "TEAM"); } finally { db.close(); }
+  try {
+    ensureSeed(db, TEAM_INTAKE_PROJECT, "Team Intake", "TEAM");
+    // LOOP-409 — the first row on the workspace. `team init --mode dry-run` must be true of `_team`
+    // from the moment it exists, not from the first later `team set`.
+    try { syncProjectRows(db, ws); } catch (e) { console.error(`•  hub row projection skipped (${(e as Error).message}) — \`dev-loop doctor\` reports the divergence`); }
+  } finally { db.close(); }
 }
 
 // ── D8: workspace Claude-settings permission for the CLI interface ───────────────────────────────

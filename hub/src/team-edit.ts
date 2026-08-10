@@ -18,6 +18,7 @@ import { actionClasses } from "./approvals.ts"; // LOOP-394 — the ONE action-c
 import { snapshotBeforeDestructive, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-339 trigger 2
 import { provisionClaudePermissions } from "./team-init.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
+import { syncProjectRows, syncProjectRowsBestEffort } from "./project-row-sync.ts"; // LOOP-409 — the config → hub-row projection
 
 function die(msg: string, code = 2): never { console.error(`dev-loop team: ${msg}`); process.exit(code); }
 
@@ -256,6 +257,12 @@ export async function teamSet(argv: string[]): Promise<number> {
       try { syncScratchProjectRow(db, key, coerced as boolean); console.log(`projected scratch=${JSON.stringify(coerced)} to hub row '${key}'`); } finally { db.close(); }
     } catch { /* best-effort — never fail the set command */ }
   }
+  // LOOP-409 — the "on every subsequent config change" half. Unconditional on a service backend
+  // rather than keyed to the mode/autonomy paths: `team set` is the only mutator an operator uses
+  // after seeding, and a projection that runs only when someone remembered to list the path is the
+  // same class of defect (a writer that exists but is never reached) this ticket closes. A run that
+  // changes nothing is silent and costs one indexed SELECT per described row.
+  syncProjectRowsBestEffort(ws, () => openDb(wsHubDb(ws)), (line) => console.log(line));
   return 0;
 }
 
@@ -396,6 +403,11 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
     try { ensureSeed(db, key, name ?? key, chosen); }
     catch (e) { die(`config written, but the hub row could not be seeded: ${(e as Error).message}\n  fix it by hand: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>  (doctor reports the gap as W08)`, 1); }
     if (scratch) syncScratchProjectRow(db, key, true);
+    // LOOP-409 — seed time is the first moment the row exists, so it is the first moment it can
+    // disagree with config. Best-effort: the config write already landed and must not be lost to a
+    // busy db; `hub start` re-converges and doctor reports a persistent divergence.
+    try { for (const c of syncProjectRows(db, ws)) console.log(`projected '${c.key}': mode ${c.to.mode}, autonomy ${c.to.autonomy}`); }
+    catch (e) { console.error(`•  hub row projection skipped (${(e as Error).message}) — \`dev-loop doctor\` reports the divergence`); }
     console.log(existed
       ? `hub row for '${key}' already present in ${dbPath} (labels backfilled; find-or-create)`
       : `seeded hub row '${key}' (prefix ${chosen}) in ${dbPath}`);
