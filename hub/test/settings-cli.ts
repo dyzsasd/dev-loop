@@ -183,6 +183,15 @@ try {
   const badKey = run("set", "workflow.transitions", '{"Todo=>In Progress":{"assignTo":"owner"}}');
   ok(badKey.status === 2 && /transition key/.test(badKey.stderr),
     "transitions: a key that is not \"<From>-><To>\" is refused — it would never match, so it would silently never fire");
+  // The delimiter is the typo an operator NOTICES. These are the ones they don't: a well-formed key naming
+  // a state that does not exist. The consumer looks the key up exactly, so it is just as inert.
+  const badTo = run("set", "workflow.transitions", '{"Todo->Review":{"assignTo":"owner"}}');
+  ok(badTo.status === 2 && /not a board state/.test(badTo.stderr),
+    `transitions: a well-formed key naming a nonexistent To state is refused (got ${badTo.status})`);
+  const badFrom = run("set", "workflow.transitions", '{"todo->In Review":{"assignTo":"owner"}}');
+  ok(badFrom.status === 2 && /not a board state/.test(badFrom.stderr),
+    "transitions: …and a miscased From state too — the check is both halves, against db.ts's STATES");
+  ok(/Legal states:/.test(badTo.stderr), "transitions: …and the refusal prints the legal state list, so the operator can correct it without reading the source");
   const goodDirective = run("set", "workflow.transitions", '{"In Review->Done":{"assignTo":"owner"}}');
   ok(goodDirective.status === 0, `transitions: the valid directive is still accepted (got ${goodDirective.status}: ${goodDirective.stderr.trim()})`);
   ok(((settingsRow().workflow as { transitions?: Record<string, unknown> })?.transitions ?? {})["In Review->Done"] !== undefined,

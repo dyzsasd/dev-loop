@@ -24,7 +24,7 @@
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb } from "./workspace.ts";
-import { openDb } from "./db.ts";
+import { openDb, STATES } from "./db.ts"; // STATES: the one legal-state list, so a directive key is checked against the board's real states
 import { findProject } from "./seed.ts";
 import { activeFireMarker } from "./destructive-guard.ts"; // LOOP-367/417: the ONE fire-marker list, owned there
 import { resolveIdentity } from "./resolve-project.ts";     // §11 DEVLOOP_PROJECT-then-cwd ladder, shared with every hub verb
@@ -53,10 +53,18 @@ type SettingSpec = { re: RegExp; kind: SettingKind; note: string; validate?: (v:
 //   · the KEY, because a misspelled state pair (`"Todo→In Progress"`, `"todo->in progress"`) simply never
 //     matches, so the directive silently never fires. That is this ticket's own defect class — a control
 //     that reads as configured and does nothing — and refusing it at the writer is the only place it shows.
-const TRANSITION_KEY_RE = /^[^->][^>]*->[^>].*$/;
+//     Both HALVES are checked against the real `STATES` list, not just the delimiter: `Todo->Review` has a
+//     perfectly good `->` and still never fires, because the consumer does an exact `${from}->${to}` lookup
+//     and `Review` is not a state. A delimiter-only check would refuse the typo an operator notices and
+//     accept the one they do not.
+const TRANSITION_KEY_RE = /^([^>]+)->(.+)$/;
 function validateTransitions(v: unknown, path: string): void {
   for (const [k, dir] of Object.entries(v as Record<string, unknown>)) {
-    if (!TRANSITION_KEY_RE.test(k)) die(`${path}: '${k}' is not a "<From>-><To>" transition key (ASCII '->', both states non-empty) — it would never match a transition`);
+    const m = TRANSITION_KEY_RE.exec(k);
+    if (!m) die(`${path}: '${k}' is not a "<From>-><To>" transition key (ASCII '->', both states non-empty) — it would never match a transition`);
+    for (const [half, state] of [["From", m[1]], ["To", m[2]]] as const) {
+      if (!(STATES as readonly string[]).includes(state)) die(`${path}: '${k}' names '${state}' as its ${half} state, which is not a board state — the consumer looks the key up exactly, so this directive would never fire. Legal states: ${STATES.join(", ")}`);
+    }
     if (dir === null || typeof dir !== "object" || Array.isArray(dir)) die(`${path}: '${k}' must map to an object like {"assignTo":"owner"}, got ${dir === null ? "null" : Array.isArray(dir) ? "an array" : typeof dir}`);
     const assignTo = (dir as Record<string, unknown>).assignTo;
     if (assignTo !== undefined && assignTo !== null && typeof assignTo !== "string") die(`${path}: '${k}'.assignTo must be a string ("owner", "self", or an actor handle), got ${typeof assignTo}`);

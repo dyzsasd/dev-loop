@@ -101,7 +101,8 @@ Usage: dev-loop <command> [args]
                               the TTY (echo off) or reads stdin; a value never rides an argument (§16)
   settings list|get|set|unset the hub project's runtime switchboard (projects.settings_json): humanWrite.enabled
                               (the web-write forms), workflow.transitions, the notifier cadences. Additive by
-                              path; the daemon re-reads per request, so a flip needs no restart
+                              path. humanWrite/workflow take effect immediately (read per request); the
+                              cadences need a hub restart (read once at daemon bootstrap)
   up [--cli claude|opencode] [--dry-launch]   one-click: scaffold-if-needed + board daemon + EXEC an
                               interactive operator-console chat (setup happens by talking, not shell);
                               --bundle <f> = headless remote load → run; --attach <url> = console → remote hub
