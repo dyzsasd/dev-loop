@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
-import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
+import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug, designChildrenOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 import { handoffGateRejection } from "./handoff-gate.ts";
 import { acCompletenessRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
@@ -144,11 +144,18 @@ function designParentGate(
   // PASS action, and §21a's pass action is "promote every staged child Backlog → Todo FIRST, THEN
   // move the parent Done". Backlog is invisible to every dev pick-query, so a parent closed over
   // Backlog children strands them with no owner and no signal.
-  // R2's own row set, fetched where it is used. It is NOT the predicate's input (LOOP-378): this
-  // asks which children are stranded, which is a question about rows, not about who the parent is.
-  const rows = db.prepare("SELECT id, description, state FROM tickets WHERE project_id=?")
-    .all(projectId) as unknown as Array<{ id: string; description: string; state: string }>;
-  const stranded = rows.filter((t) => t.state === "Backlog" && isChildOf(t, id, rows));
+  // WHICH tickets are this parent's children is the shared derivation's answer, not a local one
+  // (PR #278 review, P1 — `designChildrenOf`). It used to be decided here by matching the child's
+  // slug against a slug scanned out of the PARENT'S description, which stopped being the same
+  // relation the parent was derived from the moment ownership moved to §21a's back-link: a parent
+  // that names its doc nowhere is now a design parent, and this scan found NONE of its children,
+  // so R2 measured zero strandings for exactly the parents LOOP-379 admits.
+  // R2's own row set is still fetched where it is used. It is NOT the predicate's input (LOOP-378):
+  // this asks which of the children are stranded, which is a question about STATE.
+  const children = designChildrenOf(db, projectId, id);
+  const rows = db.prepare("SELECT id, state FROM tickets WHERE project_id=?")
+    .all(projectId) as unknown as Array<{ id: string; state: string }>;
+  const stranded = rows.filter((t) => t.state === "Backlog" && children.has(t.id));
   if (stranded.length)
     return `verify gate: In Review → Done blocked — ${id} is a design parent with ${stranded.length} staged child(ren) still in Backlog (${stranded.map((t) => t.id).join(", ")}). §21a's pass action promotes every child Backlog → Todo FIRST, then closes the parent; Backlog is invisible to every dev pick-query, so closing now strands them.`;
   return DESIGN_PARENT_DECIDED;
@@ -179,23 +186,6 @@ function designParentHandoffExemption(
   if (!(fromState === "In Progress" && next.state === "In Review")) return false;
   const me = { id, description: next.description ?? storedRow?.description ?? "" };
   return isDesignParent(me, designParentIds(db, projectId));
-}
-
-// A child of `parentId`: it carries a Design: pointer that resolves to this parent — either directly
-// (`Design: parent <id>`) or through the doc slug the parent owns.
-function isChildOf(t: { id: string; description: string }, parentId: string, rows: Array<{ id: string; description: string }>): boolean {
-  const ptr = designPointerOf(t.description ?? "");
-  if (!ptr) return false;
-  const direct = /^parent\s+(\S+)/i.exec(ptr);
-  if (direct) return direct[1] === parentId;
-  const slug = docSlugOf(ptr);
-  if (!slug) return false;
-  const parent = rows.find((r) => r.id === parentId);
-  if (!parent) return false;
-  const parentPtr = designPointerOf(parent.description ?? "");
-  const parentSlug = (parentPtr ? docSlugOf(parentPtr) : null)
-    ?? (/(?:hubDoc:design\/|docs\/design\/)([A-Za-z0-9._-]+?)(?:\.md)?\b/i.exec(parent.description ?? "")?.[1] ?? null);
-  return parentSlug === slug;
 }
 
 /**

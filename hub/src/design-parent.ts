@@ -135,17 +135,55 @@ export function designOwnerOfSlug(
   return resolveDesignParents(db, projectId, pending).ownerBySlug.get(slug) ?? null;
 }
 
+/**
+ * The children `parentId` staged — the SAME relation the ownership derivation reads, inverted
+ * (PR #278 review, P1).
+ *
+ * LOOP-345's R2 refuses to close a design parent whose staged children still sit in `Backlog`, and
+ * it decided childhood by matching the child's slug against a slug read out of the PARENT'S OWN
+ * DESCRIPTION. Under the back-link rule that predicate is no longer the same relation the parent
+ * was derived from: a parent now owns a slug because its children NAME it, so a parent that
+ * mentions its doc nowhere — LOOP-399 is one, and it is the case this ticket exists to fix — is a
+ * design parent whose children the body scan cannot find. R2 would then measure ZERO stranded
+ * children for exactly the parents the new derivation admits, and PM could close one over a
+ * Backlog child. §21a calls that out as the non-recoverable ordering: a `Done` parent with children
+ * still in `Backlog` gets no further gate, and Backlog is invisible to every dev pick-query.
+ *
+ * So childhood is read here, off the links, in the same pass that decides parenthood — the rule the
+ * rest of this module is built on (LOOP-344): a gate that re-derives its own half of a shared
+ * predicate is how the two halves come to enforce different things.
+ *
+ * A child is attributed to the parent it NAMES (`relatedTo`, mandatory at filing) where it names
+ * one, and otherwise to the slug's sole owner. That second clause is what keeps R2's protection
+ * whole for the non-conformant child LOOP-296's fixtures pin — one filed without its own link,
+ * which no increment can claim — while a slug with SEVERAL owners leaves it to nobody, which is
+ * BOUND 3's own posture for an ambiguity no recorded edge resolves.
+ */
+export function designChildrenOf(db: DatabaseSync, projectId: string, parentId: string): Set<string> {
+  return resolveDesignParents(db, projectId).childrenByParent.get(parentId) ?? new Set<string>();
+}
+
 interface DesignParentRow extends DesignParentTicket { related_to?: string }
 
 function resolveDesignParents(
   db: DatabaseSync,
   projectId: string,
   pending?: PendingDesignChild,
-): { parents: Set<string>; ownerBySlug: Map<string, string> } {
+): { parents: Set<string>; ownerBySlug: Map<string, string>; childrenByParent: Map<string, Set<string>> } {
   const rows = db.prepare("SELECT id, description, related_to FROM tickets WHERE project_id=?")
     .all(projectId) as unknown as DesignParentRow[];
   const out = new Set<string>();
   const ownerBySlug = new Map<string, string>();
+  // The inverse of the ownership read — see `designChildrenOf`. The pending row is deliberately NOT
+  // recorded: it has no id yet and is not on the board, and the only consumer asks which BOARD rows
+  // a parent stranded.
+  const childrenByParent = new Map<string, Set<string>>();
+  const recordChild = (parent: string, child: string) => {
+    if (child === PENDING_ID) return;
+    const set = childrenByParent.get(parent) ?? new Set<string>();
+    set.add(child);
+    childrenByParent.set(parent, set);
+  };
   const onBoard = new Set(rows.map((t) => t.id));
   const slugToChildren = new Map<string, string[]>();
 
@@ -156,7 +194,10 @@ function resolveDesignParents(
     // BOUND 1 — the id a child names must be a ticket on THIS board. An unchecked id put `LOOP-2`,
     // which exists nowhere here, into an authorization set; a set of ids nobody can hold is a set
     // nobody can audit.
-    if (asParent) { if (onBoard.has(asParent[1])) out.add(asParent[1]); continue; }
+    if (asParent) {
+      if (onBoard.has(asParent[1])) { out.add(asParent[1]); recordChild(asParent[1], t.id); }
+      continue;
+    }
     // A doc pointer: normalise both spellings to the slug they share.
     const slug = docSlugOf(ptr);
     if (slug) slugToChildren.set(slug, [...(slugToChildren.get(slug) ?? []), t.id]);
@@ -285,13 +326,22 @@ function resolveDesignParents(
         ? [...declaredOwners]
         : (undirected.length === 1 ? undirected : []);
       for (const id of owners) out.add(id);
+      // The same attribution, inverted for R2's strand check (`designChildrenOf`). A child that
+      // names nobody falls to the slug's SOLE owner — which is every single-increment slug, so the
+      // gate keeps the reach it had — and to nobody once the doc has been designed twice, because
+      // then no recorded edge says which increment stranded it.
+      const soleOwner = owners.length === 1 ? owners[0] : null;
+      for (const c of allChildren) {
+        const p = ownerOfChild.get(c) ?? soleOwner;
+        if (p) recordChild(p, c);
+      }
       const owner = pendingHere && ownerOfChild.has(pendingHere)
         ? ownerOfChild.get(pendingHere)!
         : (owners.length === 1 ? owners[0] : null);
       if (owner !== null) ownerBySlug.set(slug, owner);
     }
   }
-  return { parents: out, ownerBySlug };
+  return { parents: out, ownerBySlug, childrenByParent };
 }
 
 /**

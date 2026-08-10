@@ -149,6 +149,34 @@ try {
     ok(r.ok === true, `LOOP-345 R2: once every child is promoted, pm closes it (got ${r.ok ? "ok" : r.error})`);
   }
 
+  // ── PR #278 review (P1): R2 finds a parent's children through the SAME relation ───────────────
+  // A parent owns a doc slug because its children NAME it (§21a's back-link), so it need not
+  // mention the doc anywhere — LOOP-399, the parent this ticket was filed about, does not. R2 used
+  // to find a parent's children by matching their slug against one scanned out of the PARENT'S
+  // body, which finds NONE of them for exactly those parents: the strand check measured zero and pm
+  // could close the parent over its Backlog children. §21a calls that ordering the non-recoverable
+  // one — a Done parent gets no further gate, and Backlog is invisible to every dev pick-query.
+  //
+  // The fixture is the shape the body scan cannot see: the parent's description never contains the
+  // slug, and only the links say the three belong together.
+  mk("DP-P7", "a design parent whose body names its doc NOWHERE", "In Review",
+    ["dev-loop", "Bug", "qa", "senior-dev"], ["DP-C7a", "DP-C7b"]);
+  mk("DP-C7a", "Design: hubDoc:design/delta-mod\n\nstaged child", "Backlog", ["dev-loop"], ["DP-P7"]);
+  mk("DP-C7b", "Design: hubDoc:design/delta-mod\n\nstaged child", "Backlog", ["dev-loop"], ["DP-P7"]);
+  {
+    ok(isDesignParent({ id: "DP-P7", description: "" }, designParentIds(db, pid)),
+      "PR #278 P1: a parent that names its doc nowhere IS a design parent — the premise of the gap");
+    const r = setState("pm", "DP-P7", "Done");
+    const err = r.error;
+    ok(r.ok === false && /still in Backlog/.test(err),
+      `PR #278 P1: …and R2 refuses to close it over its staged children (got ${JSON.stringify(err.slice(0, 90))})`);
+    ok(/DP-C7a/.test(err) && /DP-C7b/.test(err),
+      "PR #278 P1: …naming BOTH — the gate reads the recorded link, not the parent's prose");
+  }
+  for (const c of ["DP-C7a", "DP-C7b"]) setState("pm", c, "Todo");
+  ok(setState("pm", "DP-P7", "Done").ok === true,
+    "PR #278 P1: once promoted the close goes through — R2 gained a case, it did not become a wall");
+
   // The operator is never gated by §21a routing.
   mk("DP-P5", "operator path", "In Review", ["dev-loop", "Bug", "qa", "senior-dev"]);
   mk("DP-C5", "Design: parent DP-P5\n\nstaged", "Backlog", ["dev-loop"]);
