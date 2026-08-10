@@ -267,16 +267,23 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   window, 34.1% of the 507 non-successes** (LOOP-464 owns the real gap). `stalled` is the largest
   class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 + LOOP-463). **The
   numerator is frozen, not lagging:** across eleven readings the window grew **831 → … → 933 → 945**
-  while the classified count held at **exactly 173 every time** — 114 consecutive arrivals, none
+  while the classified count held at **exactly 173 every time** — 138 consecutive arrivals, none
   classified. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class
-  since the fixed anchor **2026-08-08 16:36Z** (38.3 h; **324** dead-lane fires, **zero** non-suspect),
-  so the outage feeds the denominator and nothing feeds the numerator. **The wait costs $562.11 =
-  $353.85/day**, all `pm` + `senior-dev`, buying a Backlog whose executor (`junior-dev`, 40 of 63 rows)
-  is dark — and since pass 100 the qa-owned verification exit is closed too (4 In Review, 0 Done since
-  the anchor), so the spend now also cannot land. Compare two readings only alongside the fire counts
-  they were measured over — and note that the per-agent half of this table is **anti-correlated**
-  until LOOP-508 lands: qa and junior-dev report 89.2% and 82.4% "healthy" against a delivered 44.3%
-  and 22.4%.
+  since the fixed anchor **2026-08-08 16:36Z** (39.0 h; **345** dead-lane fires, **zero** non-suspect),
+  so the outage feeds the denominator and nothing feeds the numerator. Compare two readings only
+  alongside the fire counts they were measured over — and note that the per-agent half of this table
+  is **anti-correlated** until LOOP-508 lands: qa and junior-dev report 89.2% and 82.4% "healthy"
+  against a delivered 44.3% and 22.4%.
+  **What the wait buys, measured rather than asserted (pass 104, the 39 h since the anchor).** The
+  cost side: `--window 2d` prices the two claude lanes at **$737.93** (pm $365.52 · senior-dev
+  $372.33) against **$0.08** for all three dead lanes combined — the 402'd fires are free, so the
+  spend is entirely the lanes that work. The output side, from the event ledger over the same 39 h:
+  **62 tickets filed** (pm 37 · senior-dev 25), **22 claims → 19 `In Review` hand-offs**, and **18
+  verified `Done`, every one closed by `pm`** — i.e. **≈2 senior fires and ≈$33 per verified
+  increment**. So the outage costs the loop its *executor and its bug-verifier*, not its throughput
+  to date: senior implements, pm verifies, and that pair closed 18 increments while dark. What it
+  cannot do is drain the half of the board that is junior-tier, or verify anything `qa`-owned — 5
+  rows now sit `In Review`, all `qa`-owned, 0 Done since the anchor.
   First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
   Todo at P1** (raised pass 94 — `PICK_RANK` rank 4.5 is the only lever that reaches a picker, so
   this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
@@ -287,41 +294,52 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
   unset here, so the board is still read-only and the CLI is still the only way to rule.
 
-### 2026-08-10 (pm, one-hundred-thirty-third fire): the AC that contradicted the ruling it was written to serve — and a flagged risk that measurement falsified
+### 2026-08-10 (pm, one-hundred-thirty-fifth fire): what the wait actually bought, and a demotion the board records with nothing attached
 
-**LOOP-379 verified `Done` against the merged tree `9ed0358`** — the doc-slug parent route no longer
-reads prose at all; a design's owner is derived from §21a's mandatory back-link, as ruled 08-06.
-Independently re-measured, not read off the hand-off: the post-fix fixture suite run against the
-**pre-fix** source (`BODY_SLUG_RE` present ×3) fails **22 assertions**, including both AC4 arms and
-every `sensitive`-inheritance arm; AC6 re-run on the CURRENT board (**495 rows**, up from the 461 the
-implementer measured) returns an EMPTY non-terminal parent set and resolves all four ruled slugs to
-their ruled owners — plus a **fifth** slug that appeared after the ruling (`state-locality` →
-LOOP-458), which is the stronger result: the rule generalised past the rows it was scored on.
+**The operator's 08-10 06:30Z ruling has a 48 h review point at 16:36Z, so this pass measures the
+thing that review will turn on** rather than restating the outage. Both halves are above in
+"Observable-and-safe": the claude lanes cost **$737.93/2 d** against **$0.08** for all three dead
+lanes, and over the same 39 h they filed 62 tickets, made 22 claims, produced 19 `In Review`
+hand-offs and closed **18 verified `Done`** — ≈$33 per verified increment. The productive-spend
+question is therefore answered by measurement, not by judgement: the outage removes the *executor*
+(junior-tier, half the Backlog) and the *bug-verifier* (`qa`, 5 rows now stranded `In Review`), and
+the senior→pm pair kept closing increments throughout.
 
-**Three deviations, all surfaced by the implementer rather than slipped, all ratified.** AC2's
-lifetime-wide "every child" was wrong for a doc §21a defines as *living per-module*; applied to a
-redesigned module it resolves the slug to nobody, which the fixtures measure landing as
-`["dev-loop"] / junior-dev` on a sensitive design's child — the exact failure the ruling existed to
-prevent. The shipped per-increment read follows the ruling more closely than my own AC prose did.
-BOUND 3a removed (its input cannot arise once prose is not read); BOUND 3b narrowed to the mutual
-handshake. BOUND 3's posture is intact: an ambiguity the mandatory edge cannot break is still nobody.
+**LOOP-518 — the one filing, and it came out of the same ledger.** Reading those 39 h of transitions
+for the cost measurement surfaced a shape the cost numbers do not explain: **18 `In Progress → Todo`
+moves across 9 tickets, of which 10 carry no comment at all.** Root cause, read in the source and
+not inferred: `applyTrip`'s forge axis routes to `Todo` with **no state guard**, so LOOP-216's AC3 —
+written for a ticket found at `In Review`, where nobody is working it — now fires against the
+`In Progress` state §12c created, where the dev still owns landing. And `buildCommentBody`'s forge
+branch is composed from the PR number and reviewer login alone, so every repeat trip is
+byte-identical and the LOOP-65 dedup eats it while LOOP-130 keeps routing unconditional. Every
+bounced ticket carries **exactly one** guard comment, so the silence is structural, not incidental.
+The measured worst case is LOOP-479: 1 commented + 3 silent bounces, 5 re-claims, 8 review rounds,
+21:50Z → 05:52Z. It is filed as a `Bug` at P2, not P1 — for a `Bug`, `priority=1` is `PICK_RANK` 0
+and outranks the entire board; this does not outrank a dry-run that suppresses real fires.
 
-**The risk the hand-off asked me to file was falsified by measuring it.** "Mid-staging, the parent is
-linked to only some of its children, so it is not the owner" does not reproduce: the child's own
-mandatory `relatedTo` carries it alone, so both mid-staging shapes resolve. What survived is a
-different finding — `isDesignParent(P)` true while `designOwnerOfSlug(S)` is null for the same
-increment, harmless today only because each of the three consumers happens to call the arm that is
-right for it. Filed as **LOOP-515**; LOOP-396, which the hand-off named, is scoped to *approvals* and
-does not cover it.
+**The reading rule this breaks is one the team already relies on.** The lessons file says an
+`In Review → Todo` move is not evidence of a verify-fail and must be classified by its comment's
+verdict. Ten of eighteen moves in this window had no comment to classify by — the tell disappears
+exactly when the trip repeats, which is exactly when a reader most needs it.
 
-**Board and protocol.** Job A: one verified `Done`, the first pm verify in eight fires. `needs-pm`
-and `_team` empty; no `## Deferred findings` pending; §9c — no blocker in {401, 468, 472, 464, 463}
-is terminal, so none of the six parked rows can unpark. Promotion closed for the twenty-fifth
-consecutive fire: unblocked Todo **28** (senior 15, junior 13) against a cap of 10 per tier. Two
-filings, both measured before filing: LOOP-515 and LOOP-516 (W34 states a harm the same doctor run
-contradicts three lines later, while the finding it should make — two worktrees at two *different*
-wrong paths, both created after LOOP-132 closed — goes unstated).
+**Board and protocol.** Job A empty for the eighth consecutive fire — all 5 `In Review` rows are
+`qa`-owned, so PM verifying them would be lane-crossing, not helpfulness. `needs-pm` and `_team`
+empty; no `## Deferred findings` pending; §9c re-measured from a `hub.db` copy — no blocker in
+{401, 468, 472, 464, 463} is terminal, so none of the six parked rows can unpark and none is the
+zero-edge shape that must route back to step 1. LOOP-463 stays parked at the operator; its review
+point had not been reached at close, so it earned no comment. Promotion closed for the
+**twenty-seventh** consecutive fire: unblocked Todo **27** (senior 14, junior 13) against a cap of 10
+per tier. The Backlog stale sweep (`git grep` of every Backlog id against the merged tree) returned
+the same four code-referenced ids as last pass — LOOP-400 re-scoped, and 497/496/433 the deliberate
+deferral markers — so nothing went stale in the last 24 h; note the archive now matches ~50 ids by
+itself, so that sweep must exclude `docs/` to stay useful.
 
+**Pass price: +1,732 B (81,593 → 83,325), unoffset.** The prior fire's journal entry was rolled whole
+to `2026-08.md` block BH, so the entry slot is flat by construction; the growth is the measurement
+paragraph in "Observable-and-safe", which is the one thing the 16:36Z review needs. Per-pass trimming
+still cannot reach the budget from here — 32,956 of the 47,953 B in `Decisions` are the three
+standing blocks — and **LOOP-484 is still the only answer, still Backlog behind the closed cap.**
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
