@@ -273,26 +273,23 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T04:14Z over the 7d team ledger (**868 fires**) via `dev-loop metrics --window
-  7d`: **fire success 49%** (`successRate` 0.4896; 65% over 538 fires when Goals was written
-  2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 868** fires; the other
-  **695 carry `errorClass: null`** (LOOP-464), so the classes describe **19.9%** of the window.
+  Measured 2026-08-10T04:35Z over the 7d team ledger (**876 fires**) via `dev-loop metrics --window
+  7d --json`: **fire success 48.6%** (`successRate` 0.4863; 65% over 538 fires when Goals was
+  written 2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
+  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 876**; the other
+  **703 carry `errorClass: null`** (LOOP-464), so the classes describe **19.8%** of the window.
   `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked behind
-  LOOP-464 + LOOP-463). **The numerator is now demonstrably frozen, not merely lagging:** across
-  five readings the window grew **831 → 838 → 851 → 860 → 868** fires while the classified count
-  held at **exactly 173 every time** — thirty-seven consecutive arrivals, none classified, coverage
-  21% → 19.9%. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no
-  class since the fixed anchor **2026-08-08 16:36Z** (≈35 h; trailing sub-60 s streaks 114 / 113 /
-  20), so the outage feeds the denominator and nothing feeds the numerator. Compare two readings
-  only alongside the fire counts they were measured over.
-  First program: **3 of 5 shipped** — LOOP-382 Done · LOOP-383 Done · LOOP-385 Done (`6a4977d`,
-  verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo. **Both survivors are junior-tier, so both sit
-  in the lane that has produced nothing since the 2026-08-08 16:36Z anchor** — the program cannot
-  advance while that outage holds, whatever their rank. Their rank was nonetheless the wrong shape and
-  is fixed: raised P3/P2 → **P1** on 2026-08-10 (pass 94), which is the only lever that reaches
-  `PICK_RANK` 4.5 and therefore the only way this section's "outranks the current queue" is legible
-  to a picker. They are now 2nd and 3rd in junior's served slice, behind LOOP-365.
+  LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across six readings the window
+  grew **831 → 838 → 851 → 860 → 868 → 876** while the classified count held at **exactly 173 every
+  time** — forty-five consecutive arrivals, none classified, coverage 21% → 19.8%. The three
+  `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class since the fixed
+  anchor **2026-08-08 16:36Z** (≈36 h), so the outage feeds the denominator and nothing feeds the
+  numerator. Compare two readings only alongside the fire counts they were measured over.
+  First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
+  Todo at P1** (raised pass 94 — `PICK_RANK` rank 4.5 is the only lever that reaches a picker, so
+  this section's "outranks the current queue" is finally legible as a field; they sit 2nd and 3rd in
+  junior's slice behind LOOP-365). Both survivors are junior-tier, so the program cannot advance
+  while the outage holds, whatever their rank.
 - **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`).**
   Verified 2026-08-10 on the installed tree and on the corpus of the fire that verified it: the
   installed and merged renders are byte-identical for all ten agents (1,011,186 B total; pm
@@ -300,44 +297,32 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
   This is the third rung — source, installed `dist/`, observed effect — reached for this change.
 
-### 2026-08-10 (pm, one-hundred-twenty-fifth fire): the operator's stated ranking reached no reader, and the trail's only writer is the process that dies
+### 2026-08-10 (pm, one-hundred-twenty-sixth fire): the liveness check a dead lane satisfies best
 
-**The top-priority program's two unshipped controls were in the FIFO tail (LOOP-384, LOOP-386 → P1).**
-`Goals` says of the observable-and-safe program *"this outranks the current queue"*; the board has
-exactly ONE lever that can express that for an `Improvement`, and it is `priority=1` — LOOP-254
-shipped `PICK_RANK` rank **4.5** for this case under an operator ruling that DECLINED the larger
-variant (full priority as a secondary sort across rank 5) on anti-starvation grounds. So P2 and P3
-are indistinguishable to the pick order, and the two remaining controls carried P3 and P2:
-LOOP-384 was **7th of 13** in junior's slice, LOOP-386 **8th**, both behind five P3 rows filed the
-same day. Program membership was never the gap — the `operator-design-review` label marks exactly
-those five tickets and nothing else. The gap was that PM had not spent the one lever the operator
-ruled into existence for it. Both raised to P1; verified against a prediction rather than a re-read —
-junior's served order is now `365, 384, 386, 468`, then rank 5.
+**LOOP-505 filed: W16 answers *alive* for a verifier that has done nothing for 36 hours.**
+`ownerLiveness` (`hub/src/metrics.ts:782`) is the one check that owns *"does this ticket's owner
+still exist?"*, and `In Review` is in its owned set precisely so an unverifiable ticket surfaces —
+its own comment says the label there "names the VERIFIER". Its gate reads the fire ledger:
+`alive = last fire within 7d`. Since the 2026-08-08 16:36Z anchor, qa has fired **122 times, median
+6.4 s, and written zero events other than the scheduler's own `fire.completed`** (junior-dev 123,
+sweep 22 — same shape). So the four `qa`-owned Bugs In Review — LOOP-378 (35.7 h), 418, 429, 491,
+two of them `sensitive` — have no verifier at all, and `doctor` prints no W16 line for any of them.
+Two properties make this worse than a miss. **The sign is inverted:** a stalled lane's fires are
+cheap, so it fires MORE than a healthy one (qa 308 per 7 d against pm's 136), and the deader the
+lane the more emphatically it satisfies the proxy. **The window cannot resolve any outage on
+record:** 7 d at qa's ~5-minute cadence is ~2,000 fires, so the 24–32 h outage LOOP-447 documents
+could not have tripped W16 even in principle. Distinct from its neighbours by construction —
+LOOP-447 asks for a check that does not exist and never mentions W16 in its 7,813 characters;
+LOOP-450 is the SAME gate's other limb, `In Progress` claims whose assignee fires *and works* but
+never returns. Whoever lands first must not close the other's limb.
 
-**LOOP-504 filed: the §22 trail hole has detection three times over and no remedy.** `Goals` names
-gap 1's two exits — *"only surviving to close, or writing the trail incrementally"*. Detection is
-LOOP-412 / LOOP-425 / LOOP-388; survival is partly LOOP-461 / LOOP-462 / LOOP-476 / LOOP-483; the
-incremental half had **no ticket at all**. Measured on the claude lane only (the opencode lane is
-dark and would confound it), 2026-08-03 → 08-10: **311 fires, 80 killed, 161 narrated entries**. On
-both zero-kill pm days the trail is complete (0.95, 0.96); on the two heaviest-kill days narrated
-equals `fires − killed` EXACTLY (18−10 → 8; 15−12 → 3). LOOP-412's day-granularity instrument
-certifies pm and senior-dev at **0 untraced days** while both lose a quarter of their fires, because
-the day's FILE exists as soon as one fire that day survived. `grep` confirms **no code writes a daily
-report** — `views/reports.ts` only serves the tree — while `recordFire()` (`run-agents.ts:784`)
-outlives every fire and already holds `fireId`/`exitCode`/`timedOut`/`errorClass`. Code-only by
-construction: §22's write-at-close rule is conventions, so changing it would be a §17 proposal.
-
-**Three candidates killed before filing.** The quality-gauntlet discoverability gap is already
-LOOP-416 (and its `@v1.10.0` adoption pin is not stale — `quality-reusable.yml` is byte-identical
-between that tag and `origin/main`). Priority-inertness for Improvements is not a defect but the
-operator's explicit LOOP-254 ruling. Program membership is already queryable via
-`operator-design-review`. Filing any of the three would have contradicted a ruling or duplicated a row.
-
-**Board and protocol.** Job A empty — the four In Review rows are all `qa`-owned and that verifier is
-dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is Done/Canceled, so none of the seven parked
-rows can unpark — one state read answers all seven. `needs-pm` empty on both scans. Promotion closed
-for the eighteenth consecutive fire: unblocked Todo **28** (senior 15, junior 13) against the default
-cap of 10 per tier; Backlog 54 → 55.
+**Board and protocol.** Job A empty again — all four In Review rows are `qa`-owned and that verifier
+is dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is Done/Canceled, so none of the seven
+parked rows can unpark; `needs-pm` empty on both scans. LOOP-479's In Progress → Todo bounce at
+04:20Z was merge-guard's `applyTrip` inside senior's Step 0.5, not a verdict — the shared lesson
+held. Promotion closed for the nineteenth consecutive fire: unblocked Todo **29** (senior 16,
+junior 13) against the default cap of 10 per tier; Backlog 55 → 56, every row carrying both a tier
+and an owner label.
 
 ## Personas
 
@@ -687,7 +672,13 @@ cap of 10 per tier; Backlog 54 → 55.
      OVER budget, which a frozen file never is. Three checks, three real properties, none of them
      currency (LOOP-498; `reflect` is the sole writer and is absent from the `core` run set this
      workspace launches). Ask of any freshness-dependent artifact: which check fails if this stops
-     being updated — and if every answer tests presence, size, or activity, the answer is none.
+     being updated — and if every answer tests presence, size, or activity, the answer is none. **A proxy can
+     be worse than inadequate — it can be ANTI-correlated.** W16 answers "does this owner still
+     exist?" from the fire ledger, so an outage that produces cheap 6-second no-op fires satisfies it
+     MORE emphatically than working would (qa: 308 fires per 7 d against pm's 136, zero of them
+     writing anything but the scheduler's own `fire.completed`) — the check reads its own failure
+     case as maximal health, and a 7-day window is ~2,000 fires at that cadence (LOOP-505). Name the
+     ARTIFACT the work leaves behind and assert on that; an attempt is not an artifact.
   **RETIRED, do not re-derive:** *"a new `hub/test/*.ts` is a two-file change, the second being
   `hub/package.json`"* — superseded by `run-all.ts`'s glob discovery (LOOP-138/LOOP-139): a new
   test file with no `package.json` script now runs. *"The release gate is the loop's single
@@ -790,6 +781,16 @@ cap of 10 per tier; Backlog 54 → 55.
   be un-bypassable acquired a bypass through the sanctioned tool. The same question is owed to every
   future switch, which is STANDING RULE 29 (a switch with no reader) turned around: a switch whose
   writer is un-gated is the same defect seen from the other end.
+
+- **2026-08-10 (pm, one-hundred-twenty-sixth fire) — extend STANDING RULE 40, do not add rule 41.**
+  W16 reads a dead verifier as alive because its proxy is the fire ledger, and an outage produces the
+  MAXIMUM number of ledger rows with zero work (LOOP-505, measured in the journal above). Rule 40
+  already ends *"if every answer tests presence, size, or activity, the answer is none"* — *activity*
+  is exactly this proxy, so a new rule would have restated it. What rule 40 did not say is that such
+  a proxy can be **anti-correlated** rather than merely weak; that sentence is now in it. **The
+  generalisable half: doctrine grows by sharpening the rule that already names the shape.** A second
+  rule for one shape splits the evidence and halves the chance either is recalled when it applies —
+  and this block is re-read every fire by ten agents, so its growth is a tax on all of them.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
