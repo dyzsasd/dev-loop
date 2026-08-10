@@ -23,6 +23,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { scrubFireEnv } from "./env-scrub.ts";
 import { openDb } from "../src/db.ts";
 import { acquireLock } from "../src/locks.ts";
 import { requestApproval, grantApproval } from "../src/approvals.ts";
@@ -246,7 +247,10 @@ try {
     // The CLI surface, once, end to end: the wiring, the exit code, and the words a caller reads.
     const cli = spawnSync(process.execPath, [join(hubRoot, "src", "push.ts"), "--repo", ws.repo], {
       encoding: "utf8",
-      env: { ...process.env, DEVLOOP_WORKSPACE: ws.root, DEVLOOP_HUB_DB: ws.db },
+      // scrubFireEnv, not a raw spread (LOOP-193): this suite runs INSIDE a fire, so the ambient
+      // DEVLOOP_* markers would out-rank the fixture and point the CLI at the live workspace. The two
+      // explicit overrides still win, which is the helper's documented contract.
+      env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: ws.root, DEVLOOP_HUB_DB: ws.db },
     });
     ok(cli.status === 0 && /nothing to push/.test(cli.stdout),
       `AC7 the CLI says "nothing to push" in its own words (exit ${cli.status})`);
