@@ -8,7 +8,7 @@
 //         property, and it is the ONE assertion that distinguishes this from a capability grant. A
 //         happy-path-only test passes just as well against `push:<branch>` matching by prefix.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -351,6 +351,57 @@ try {
       "R3 and it names push — and ONLY push — as the uncovered class, not the one already enforced");
 
     ok(w40For(["push", "reopen"]).length === 0, "R3 every class covered → W40 stays silent");
+  }
+
+  // ── R4 (PR #283 review) — an EMPTY remote is not an empty push: the widest range, not no range ───
+  //
+  // R1 closed "the record is unreadable ⇒ nothing is gated". The same fail-open survived one input
+  // further out: when NEITHER `origin/<branch>` NOR `origin/<defaultBranch>` resolves — a brand-new or
+  // empty remote — the range resolved to `null` and the gate inspected no commits at all, so `--strict`
+  // exited 0 on a push carrying an ungranted `push:` request. That first push is the most dangerous
+  // one (nothing of it is on the forge yet) and it was the only one entirely outside the gate.
+  //
+  // Fixture is a SEPARATE empty bare origin, not the shared one: the defect only appears when the
+  // remote has no refs whatsoever, so reusing `origin` (which carries `main`) cannot reach it.
+  {
+    const emptyOrigin = join(ROOT, "empty-origin.git");
+    const fresh = join(ROOT, "fresh-clone");
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", emptyOrigin]);
+    execFileSync("git", ["clone", "-q", emptyOrigin, fresh]);
+    git(fresh, ["checkout", "-qb", "dev-loop/AP-1"]);
+    writeFileSync(join(fresh, "first.txt"), "first\n");
+    git(fresh, ["add", "first.txt"]);
+    git(fresh, ["commit", "-qm", "feat: the very first push (AP-1)"]);
+    const firstSha = git(fresh, ["rev-parse", "HEAD"]);
+
+    // Nothing on the remote to compare against — assert the premise, or the test could pass because
+    // the fixture accidentally resolved one of the two refs and never exercised the null branch.
+    ok(!existsSync(join(emptyOrigin, "refs", "heads", "main")),
+      "R4 fixture premise: the remote carries neither origin/<branch> nor origin/<defaultBranch>");
+
+    requestApproval(conn, {
+      projectId: "p", actionKey: pushApprovalKey("dev-loop/AP-1", firstSha),
+      requestedBy: "senior-dev", ticketId: "AP-1",
+    });
+
+    const first = pushGuard(fresh, "dev-loop/AP-1", dbPath, "main", { enforcePush: true, actor: "senior-dev" });
+    ok(first.approvals.length === 1,
+      "R4 enforcement ON + no remote refs → the first push IS gated (pre-fix: silently waved through)");
+    ok(first.approvals[0]?.key === pushApprovalKey("dev-loop/AP-1", firstSha) && first.approvals[0]?.state === "requested",
+      "R4 and it is the real evaluated refusal on this commit's own key, not an unverifiable fallback");
+
+    // A granted approval for THIS sha still passes: the widened range must gate the first push, not
+    // make it unpushable. Without this arm the fix is indistinguishable from a blanket refusal.
+    grantApproval(conn, {
+      projectId: "p", actionKey: pushApprovalKey("dev-loop/AP-1", firstSha),
+      grantor: "operator", ticketId: "AP-1", expires: "24h",
+    });
+    ok(pushGuard(fresh, "dev-loop/AP-1", dbPath, "main", { enforcePush: true, actor: "senior-dev" }).approvals.length === 0,
+      "R4 a granted, matching approval clears the same first push");
+
+    // AC2's byte-identity binds this path too — the widened range is reachable only with the switch on.
+    ok(pushGuard(fresh, "dev-loop/AP-1", dbPath, "main", { enforcePush: false }).approvals.length === 0,
+      "R4 enforcement OFF over the same repo stays silent");
   }
 
 } catch (e) {

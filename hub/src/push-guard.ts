@@ -312,6 +312,12 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const hasUpstream = gitOk(["rev-parse", "--verify", "--quiet", `origin/${br}`]);
   const range = hasUpstream ? `origin/${br}..${br}`
     : gitOk(["rev-parse", "--verify", "--quiet", `origin/${defaultBranch}`]) ? `origin/${defaultBranch}..${br}`
+    // Neither remote ref resolves — an empty or brand-new remote, i.e. the first push the forge has
+    // ever seen from this repo. That push publishes the branch's ENTIRE history, so that history is
+    // the range. Absent refs make the published set WIDER, never narrower, and a `null` here read as
+    // "no commits" — the same unavailable-is-not-empty fail-open R1 closed for the record itself.
+    // Guarded on the branch resolving: an unborn branch genuinely publishes nothing.
+    : gitOk(["rev-parse", "--verify", "--quiet", br]) ? br
     : null;
   // Whether the class is enforced is a property of the WORKSPACE, not of who called this function.
   // Left unspecified it resolves from the repo's own config, so a programmatic caller — doc-land's
