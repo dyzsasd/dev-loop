@@ -13,7 +13,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { resolveWorkspace } from "../src/workspace.ts";
-import { syncProjectRows } from "../src/project-row-sync.ts";
+import { syncProjectRows, projectRowDivergences } from "../src/project-row-sync.ts";
+import { warnProjectRowDivergence } from "../src/doctor.ts"; // LOOP-410 — W42's helper, driven directly
+import { DatabaseSync } from "node:sqlite";
 import { scrubFireEnv } from "./env-scrub.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -121,6 +123,78 @@ try {
       ok(syncProjectRows(db, ws).length === 0, "AC6: the immediately following call reports no changes (idempotent)");
       ok(!syncProjectRows(db, ws).some((c) => c.key === GHOST), "AC6: the undescribed row is never in the change set");
     } finally { db.close(); }
+  }
+
+  // ── LOOP-410 / W42 — doctor reports what the projection would repair ──
+  //
+  // Child C's whole point is that the checker and the writer cannot disagree, so the assertions
+  // below drive the DOCTOR helper against rows made stale by hand and compare against the writer's
+  // own answer. Direction matters here exactly as it does above: the fixture resolves to
+  // `dry-run`/`full`, so a stale row is written back to the SQL defaults `live`/`ask` — an
+  // assertion that merely found "some W42 line" would pass against a check that warns
+  // unconditionally, so each one pins the values and the key.
+  {
+    const lines: string[] = [];
+    const collect = (m: string) => { lines.push(m); };
+
+    // In-sync first (AC2): rows are converged at this point in the fixture.
+    {
+      const db = openDb(WS_DB);
+      try { warnProjectRowDivergence(db, ws, collect); } finally { db.close(); }
+    }
+    ok(lines.length === 0, `AC2: an in-sync workspace produces no divergence warning (got ${JSON.stringify(lines)})`);
+
+    // Now desync exactly one described row, and the undescribed one too (AC4).
+    {
+      const db = openDb(WS_DB);
+      try {
+        db.prepare("UPDATE projects SET mode='live', autonomy='ask' WHERE key=?").run(PROJ);
+        db.prepare("UPDATE projects SET mode='live', autonomy='ask' WHERE key=?").run(GHOST);
+      } finally { db.close(); }
+    }
+    lines.length = 0;
+    {
+      const db = openDb(WS_DB);
+      try { warnProjectRowDivergence(db, ws, collect); } finally { db.close(); }
+    }
+    const w42 = lines.filter((l) => l.startsWith("[W42]"));
+    ok(w42.length === 1, `AC1: exactly one W42 line for the one desynced described row (got ${JSON.stringify(lines)})`);
+    ok(w42[0]?.includes(`projects.${PROJ}`), `AC1: the warning names the project key (got ${w42[0]})`);
+    // Both values, both fields, config side and row side — the operator cannot act on "they differ".
+    ok(/mode 'live' \(config: 'dry-run'\)/.test(w42[0] ?? ""), `AC1: names the row mode and the config mode (got ${w42[0]})`);
+    ok(/autonomy 'ask' \(config: 'full'\)/.test(w42[0] ?? ""), `AC1: names the row autonomy and the config autonomy (got ${w42[0]})`);
+    ok(/dev-loop hub start/.test(w42[0] ?? ""), `AC1: names the remedy command (got ${w42[0]})`);
+    ok(!lines.some((l) => l.includes(GHOST)),
+      `AC4: a hub row with no dev-loop.json entry is never a divergence warning (got ${JSON.stringify(lines)})`);
+
+    // AC5's real content — one definition of "diverged". The checker's answer IS the writer's
+    // answer; a re-derived comparison could drift from it and this is what would catch that.
+    {
+      const db = openDb(WS_DB);
+      try {
+        const detected = projectRowDivergences(db, ws);
+        ok(detected.length === 1 && detected[0].key === PROJ,
+          `AC5: the shared detector reports the same single row (got ${JSON.stringify(detected)})`);
+        ok(detected.length === w42.length,
+          `AC5: the doctor helper warns once per detected divergence (detector ${detected.length}, warnings ${w42.length})`);
+        // Read-only is the constraint that forced the split: doctor opens hub.db read-only, so the
+        // detector must not share a code path with the UPDATE. Prove it against a real RO handle.
+        const ro = new DatabaseSync(WS_DB, { readOnly: true });
+        try {
+          ok(projectRowDivergences(ro, ws).length === 1,
+            "AC5: the detector runs on a READ-ONLY handle — the surface doctor actually has");
+        } finally { ro.close(); }
+        // And it is a detector, not a repair: the row it reported is still stale.
+        ok(row(PROJ)?.mode === "live", "AC5: detecting does not write — the stale row is untouched");
+      } finally { db.close(); }
+    }
+
+    // AC3 — end to end through the real verb: the warning is emitted and doctor still exits 0.
+    const doc = cli("doctor");
+    ok(doc.status === 0, `AC3: doctor exits 0 with a divergence present (got ${doc.status})`);
+    ok(/\[W42\]/.test((doc.stdout ?? "") + (doc.stderr ?? "")),
+      "AC3: the W42 warning reaches doctor's real output");
+    ok(/DOCTOR_OK|✅/.test((doc.stdout ?? "") + (doc.stderr ?? "")), "AC3: warn-never-fail — DOCTOR_OK is unaffected");
   }
 
   // ── AC7 — the heal path: `hub start` converges rows that predate the projection ──

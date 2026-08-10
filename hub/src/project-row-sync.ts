@@ -61,19 +61,37 @@ function resolvedRow(ws: Workspace, key: string): ProjectionRow {
  * close (this workspace's own `fixture` is such a row). The undescribed-row rule is untouched.
  */
 export function syncProjectRows(db: DatabaseSync, ws: Workspace): ProjectionChange[] {
-  const sel = db.prepare("SELECT mode, autonomy FROM projects WHERE key=?");
+  const changes = projectRowDivergences(db, ws);
   const upd = db.prepare("UPDATE projects SET mode=?, autonomy=? WHERE key=?");
-  const changes: ProjectionChange[] = [];
+  for (const c of changes) upd.run(c.to.mode, c.to.autonomy, c.key);
+  return changes;
+}
+
+/**
+ * The ONE definition of "this row disagrees with config" — read-only, and the detector
+ * `syncProjectRows` applies (LOOP-410).
+ *
+ * Split out rather than duplicated because the two callers must never be able to disagree: the
+ * mutator's console line and `doctor`'s W42 answer the same question, so a drift the writer would
+ * repair is exactly a drift the checker reports, by construction. Everything scope-related — which
+ * keys are in play, the undescribed-row rule, the `_team` case, the resolution precedence — lives
+ * here once and is inherited by both.
+ *
+ * Read-only is load-bearing, not incidental: `doctor` opens `hub.db` in READ-ONLY mode, so a
+ * detector that shared a code path with the UPDATE could not be called from there at all.
+ */
+export function projectRowDivergences(db: DatabaseSync, ws: Workspace): ProjectionChange[] {
+  const sel = db.prepare("SELECT mode, autonomy FROM projects WHERE key=?");
+  const diverged: ProjectionChange[] = [];
   for (const key of [...deliveryProjects(ws, { includeUnschedulable: true }), TEAM_INTAKE_PROJECT]) {
     const row = sel.get(key) as ProjectionRow | undefined;
     // No row yet: seeding creates it and then projects onto it. Writing here would invent a row.
     if (!row) continue;
     const to = resolvedRow(ws, key);
     if (row.mode === to.mode && row.autonomy === to.autonomy) continue;
-    upd.run(to.mode, to.autonomy, key);
-    changes.push({ key, from: { mode: row.mode, autonomy: row.autonomy }, to });
+    diverged.push({ key, from: { mode: row.mode, autonomy: row.autonomy }, to });
   }
-  return changes;
+  return diverged;
 }
 
 /**

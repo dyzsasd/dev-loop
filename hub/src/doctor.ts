@@ -25,6 +25,7 @@ import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts"
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
+import { projectRowDivergences } from "./project-row-sync.ts"; // LOOP-410: W42 shares the ONE "diverged" definition with the projection that repairs it
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
 import { loadWorkspaceSecrets, loosePermsFinding, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
@@ -173,6 +174,7 @@ export async function runDoctor(dbPath: string, opts: { reconcile?: boolean; pre
       if (!hubKeys.has(key)) { unseeded.push(key); warn(`[W08] projects.${key}: config project '${key}' has no hub.db row — its fires get no board access; seed it once: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>`); }
     }
     warnTombstonedProjects(db, unseeded, warn);
+    warnProjectRowDivergence(db, ws, warn);
     for (const p of projects) {
       if (!isTeamProject(p.key) && !Object.hasOwn(ws.file.projects, p.key)) info(`hub project '${p.key}' has no dev-loop.json entry (unscheduled; historical or hand-seeded)`);
     }
@@ -1447,6 +1449,31 @@ function warnTombstonedProjects(db: DatabaseSync, unseededKeys: string[], warn: 
       warn(`[W29] projects.${key}: config still lists '${key}', but it was REMOVED on ${tomb.removed_at} by ${tomb.removed_by} (${tomb.ticket_count} ticket(s) destroyed, via ${tomb.verb}) — a re-seed would resurrect it as an empty board. Either delete the config entry (dev-loop team remove-project ${key}) or re-create deliberately with DEVLOOP_ALLOW_RESURRECT=1.`);
     } catch { /* pre-tombstone db (table absent) — nothing to report; W08 already covered the gap */ }
   }
+}
+// W42 — config↔row divergence (LOOP-410, design `project-config-projection` child C). W08's
+// neighborhood and W08's posture: warn, never fail.
+//
+// Child B made the resolved §12 `mode` / §12a `autonomy` a PROJECTION into the `projects` row, and
+// `dev-loop project --json` — the first op every `interface:"cli"` fire runs — answers from that
+// row. So an undetected divergence is served to every fire as fact: a workspace configured
+// `dry-run` whose row still says `live` announces `mode: live` and then writes to the board. The
+// projection is best-effort by design (`syncProjectRowsBestEffort` swallows a busy `hub.db` rather
+// than losing the operator's config write), which is exactly why it needs a backstop — the routes
+// that reach a stale row are a mutator write racing a busy db, a `team import` / `bundle` load whose
+// destination config differs from the source's projected columns, and rows that predate the
+// projection on a workspace that has not run `hub start` since.
+//
+// The comparison is NOT re-derived here: `projectRowDivergences` is the same detector
+// `syncProjectRows` applies, so a drift the writer would repair is a drift this reports. That also
+// inherits its scope rule — described rows only — so an undescribed row stays the `info` line above
+// (unscheduled, not diverged) rather than becoming a warning nobody can act on.
+//
+// A named helper, not inline, per the CRAP-90 ratchet (same reason as W29 above).
+export function warnProjectRowDivergence(db: DatabaseSync, ws: Workspace, warn: (m: string) => void): void {
+  try {
+    for (const d of projectRowDivergences(db, ws))
+      warn(`[W42] projects.${d.key}: hub row disagrees with config — mode '${d.from.mode}' (config: '${d.to.mode}'), autonomy '${d.from.autonomy}' (config: '${d.to.autonomy}'). Every fire reads the ROW, so it is running on the wrong governing knobs; re-project it: dev-loop hub start`);
+  } catch { /* pre-projection db (columns absent) — nothing to compare; W19 covers schema age */ }
 }
 function checkNullAssigneeStranded(db: DatabaseSync, projectId: string, devSplitOn: boolean, warn: (m: string) => void): void {
   try {
