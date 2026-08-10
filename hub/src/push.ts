@@ -75,7 +75,28 @@ export interface PushResult {
   // published. The refspec is pinned to the audited sha, so a commit made while the gate ran stays
   // local; a caller who is not told that would have to diff the remote to find out.
   advancedTo?: string;
+  // LOOP-536 — the divergence verdict, ALWAYS reported once the branch and its upstream are both
+  // resolved, not only when a force-publish happens. A caller whose push was refused as a
+  // non-fast-forward must be able to read WHY the verb did not escalate, and `null` here would make
+  // "not diverged" and "not eligible" indistinguishable.
+  forcePublish: ForcePublish | null;
   dryRun: boolean;
+}
+
+// Publishing a rebased branch REWRITES a ref this same verb already published, so it is not a free
+// addition — §16.8 records the spec call and this type is its shape.
+export interface ForcePublish {
+  // `origin/<branch>` exists and is NOT an ancestor of the tip being published: a plain push cannot
+  // fast-forward it, which is precisely the state §12c's rebase remedy leaves behind.
+  diverged: boolean;
+  // Whether THIS branch may be force-published at all (§16.8 rule 2). Eligibility is a property of
+  // the branch name, decided independently of the divergence, so a refusal can name which half
+  // failed.
+  eligible: boolean;
+  reason: string;
+  // The upstream tip the lease pins — and, after a successful force-publish, the sha this push
+  // REPLACED on the remote. Carried out rather than ledgered here: §16.8 rule 3.
+  overwrittenSha: string | null;
 }
 
 // This verb's exit contract — deliberately `pr merge`'s numbering (§16.3 D4): the two ship-path verbs
@@ -120,8 +141,60 @@ export const defaultGitExec = (repoDir: string): GitExec => (args) => {
 // git accepts `-u` with a sha source and then silently does not set the upstream (no warning, exit
 // 0) — measured, not assumed — so keeping the flag here would have left an argv that claims a
 // tracking write it never performs.
-export function pushArgvFor(remote: string, branch: string, sha: string): string[] {
-  return ["push", remote, `${sha}:refs/heads/${branch}`];
+// LOOP-536 — `leaseSha` is the ONLY way this argv acquires force semantics, and it always spends it
+// on `--force-with-lease=<ref>:<expected>`. There is deliberately no parameter, flag, or env that
+// produces a bare `--force`: a lease whose expected value the caller could omit degrades to
+// `--force-with-lease` reading remote-tracking refs, which this verb's own `git fetch` has just
+// refreshed — i.e. a lease that leases nothing. Pinning the expected sha explicitly is what makes a
+// concurrent writer's push FAIL here instead of being overwritten (§16.8 rule 1).
+export function pushArgvFor(remote: string, branch: string, sha: string, leaseSha?: string): string[] {
+  const lease = leaseSha ? [`--force-with-lease=refs/heads/${branch}:${leaseSha}`] : [];
+  return ["push", ...lease, remote, `${sha}:refs/heads/${branch}`];
+}
+
+// Which branches may be force-published (§16.8 rule 2). A ticket branch is the loop's own scratch
+// space — this verb published every commit on it — so rewriting it destroys only work this verb
+// owns. Everything else is somebody's shared history, and the default branch is the one ref whose
+// rewrite the whole team feels; both are refused whatever the divergence (AC3).
+//
+// Anchored to `dev-loop/<PREFIX>-<n>` rather than to the `dev-loop/` prefix alone: the prefix is a
+// namespace and `dev-loop/main` would sit inside it.
+export const TICKET_BRANCH = /^dev-loop\/[A-Za-z][A-Za-z0-9_]*-\d+$/;
+
+export function forcePublishEligible(branch: string, defaultBranch: string): { eligible: boolean; reason: string } {
+  // Checked separately from the pattern, and first: a workspace whose default branch is literally
+  // named `dev-loop/X-1` must still never be force-published. The pattern is a heuristic about
+  // ownership; this is the invariant.
+  if (branch === defaultBranch) {
+    return { eligible: false, reason: `'${branch}' is the default branch — never force-published, whatever the divergence` };
+  }
+  if (!TICKET_BRANCH.test(branch)) {
+    return { eligible: false, reason: `'${branch}' is not a dev-loop/<ticket-id> branch — only the loop's own ticket branches may be force-published` };
+  }
+  return { eligible: true, reason: `'${branch}' is a dev-loop ticket branch, so a rebase may be republished under a lease` };
+}
+
+// git puts the REASON a push failed on the second line and the destination banner on the first, so
+// `stderr.split("\n")[0]` reports `To github.com:owner/repo.git` — a line that says a push happened
+// to somewhere. Measured shape of a rejected push:
+//
+//   To /tmp/x/origin.git
+//    ! [rejected]  08b2af2 -> dev-loop/AP-1 (non-fast-forward)
+//   error: failed to push some refs to '/tmp/x/origin.git'
+//   hint: Updates were rejected because ...
+//
+// So: drop the banner and the hints, keep everything else, join it. The hints are dropped because
+// they restate the rejection for a human at a terminal and trebled the length of a field that ends
+// up inside a one-line message; the `! [rejected] … (reason)` and `error:`/`fatal:` lines are what
+// name the cause. FALLS BACK to the raw text whenever that filter leaves nothing — an unrecognised
+// failure shape must not be reported as an empty reason, which is the defect one level down.
+export function pushFailureReason(stderr: string): string {
+  const lines = stderr.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim().length > 0);
+  const kept = lines.filter((l) => !/^To\s/.test(l) && !/^hint:/.test(l));
+  const chosen = kept.length > 0 ? kept : lines;
+  const joined = chosen.join("; ").trim();
+  if (!joined) return "git push failed";
+  return joined.length > 600 ? `${joined.slice(0, 600)}…` : joined;
 }
 
 // The tracking `git push -u origin <branch>` used to set, restored as its own local step so the §17
@@ -202,7 +275,7 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   const base: PushResult = {
     pushed: false, nothingToPush: false, branch: null, remote, sha: null, holds: [],
     gateUnevaluated: null, guard: null, pushArgv: null, pushError: null, unresolved: null,
-    lockUnavailable: null, dryRun,
+    lockUnavailable: null, forcePublish: null, dryRun,
   };
 
   // ── Readiness ────────────────────────────────────────────────────────────────────
@@ -242,6 +315,17 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   // by count: the dry run writes nothing OUTWARD (no remote, no approvals ledger) and refreshes the
   // same base the real run reads. Skipping the fetch here would buy an untrue "mutates nothing" line
   // at the price of the one property the mode exists for.
+  // LOOP-536 — the lease's expected value, read BEFORE the fetch, and this ordering is the whole
+  // safety property. A lease pinned to the value our OWN fetch just retrieved expects whatever is on
+  // the remote right now, so it authorises overwriting a commit we never looked at — a lease that
+  // leases nothing. The honest expected value is "the tip we last SAW", which is the remote-tracking
+  // ref as it stood on entry. Absent (never fetched) ⇒ we have seen nothing, so there is no lease to
+  // take and no force-publish; that is the safe direction.
+  const seenBefore = (() => {
+    const r = git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]);
+    return r.ok && r.stdout ? r.stdout : null;
+  })();
+
   const fetched = git(["fetch", remote]);
   // Said out loud, as `doc-land` does: a silent fetch failure would let the reader believe the
   // ranges below were measured against a base they were not.
@@ -251,10 +335,51 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   // Publishing zero commits publishes nothing, so there is no gate question to answer. It is checked
   // here rather than after the guard so a re-run of an already-pushed branch costs no db handle and
   // reports the same line every time (AC7).
-  if (git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok) {
+  const upstreamRef = `refs/remotes/${remote}/${branch}`;
+  const hasUpstream = git(["rev-parse", "--verify", "--quiet", upstreamRef]).ok;
+  if (hasUpstream) {
     const ahead = git(["rev-list", "--count", `${remote}/${branch}..${branch}`]);
     if (ahead.ok && Number(ahead.stdout) === 0) {
       return { ...base, branch, sha, nothingToPush: true };
+    }
+  }
+
+  // ── Divergence — LOOP-536 ────────────────────────────────────────────────────────
+  // Measured BEFORE the gate so the verdict is reported on every path below, refusals included: a
+  // caller held on ciFreshness needs to know whether the rebase §12c prescribes is publishable here
+  // before they run it, not only after the gate clears.
+  //
+  // `merge-base --is-ancestor` rather than a `rev-list --count` of the reverse range: the question is
+  // "can this push fast-forward", which is exactly ancestry. A rebase makes the answer no even though
+  // the replayed commits carry the same patch-ids — the shas differ, and refs move by sha.
+  let forcePublish: ForcePublish | null = null;
+  if (hasUpstream && sha) {
+    const up = git(["rev-parse", upstreamRef]);
+    const upstreamSha = up.ok && up.stdout ? up.stdout : null;
+    if (upstreamSha) {
+      // Divergence is measured against the FETCHED tip — that is the state a plain push would hit.
+      const diverged = !git(["merge-base", "--is-ancestor", upstreamSha, sha]).ok;
+      const branchEligible = forcePublishEligible(branch, defaultBranch);
+      // …but the LEASE is `seenBefore` (above). When the two disagree, the remote moved under us and
+      // git will refuse with `stale info` — which is the correct outcome, produced atomically at the
+      // push rather than by a check that could go stale between here and there.
+      const eligible = branchEligible.eligible && seenBefore !== null;
+      const reason = !branchEligible.eligible
+        ? branchEligible.reason
+        : seenBefore === null
+          ? `${remote}/${branch} was never fetched into this checkout before this call, so there is no tip we can claim to have seen — nothing to lease against`
+          : branchEligible.reason;
+      forcePublish = {
+        diverged,
+        eligible,
+        // The reason names the half that decided the outcome. "Not diverged" is the common case and
+        // says so plainly, because a caller reading `eligible:true, diverged:false` should not have
+        // to infer that no lease was spent.
+        reason: diverged ? reason : `${remote}/${branch} is an ancestor of ${sha.slice(0, 12)} — a plain fast-forward, no lease needed`,
+        // The sha a successful force-publish REPLACES is the one the lease expects: if the remote
+        // holds anything else, the push does not happen at all.
+        overwrittenSha: diverged ? seenBefore : null,
+      };
     }
   }
 
@@ -274,14 +399,14 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
   } catch (e) {
     // A gate that threw has not cleared anything. It is exit 3, not 2: the invocation was fine, the
     // evaluation was not.
-    return { ...base, branch, sha, gateUnevaluated: `push-guard failed: ${(e as Error).message.split("\n")[0]}` };
+    return { ...base, branch, sha, forcePublish, gateUnevaluated: `push-guard failed: ${(e as Error).message.split("\n")[0]}` };
   }
   const holds = holdsFrom(guard);
   const gateUnevaluated = guard.unresolvedDefaultBranch
     ? `${remote}/${guard.unresolvedDefaultBranch} does not exist — passenger detection did NOT run, so this gate has not checked what it could have`
     : null;
   if (holds.length > 0 || gateUnevaluated) {
-    return { ...base, branch, sha, guard, holds, gateUnevaluated };
+    return { ...base, branch, sha, guard, holds, gateUnevaluated, forcePublish };
   }
 
   // ── The push ─────────────────────────────────────────────────────────────────────
@@ -294,24 +419,30 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
     // Unreachable via the readiness checks above (the branch resolved), so this is a guard against a
     // future refactor rather than a live path — but a null sha must not silently fall back to a
     // name-resolved refspec, which is the defect this block exists to close.
-    return { ...base, branch, sha, guard, gateUnevaluated: `could not resolve the tip of '${branch}' — refusing to push a ref the gate cannot name` };
+    return { ...base, branch, sha, guard, forcePublish, gateUnevaluated: `could not resolve the tip of '${branch}' — refusing to push a ref the gate cannot name` };
   }
-  const argv = pushArgvFor(remote, branch, sha);
+  // LOOP-536 — the lease is spent on BOTH halves being true, and on nothing else. A diverged branch
+  // that is not eligible gets the plain refspec and git's own rejection: the verb does not escalate
+  // silently, and AC4's reason now says why the push failed (§16.8 rule 2).
+  const leaseSha = forcePublish?.diverged && forcePublish.eligible ? forcePublish.overwrittenSha : null;
+  const argv = pushArgvFor(remote, branch, sha, leaseSha ?? undefined);
   if (dryRun) {
     // Every check above ran and would have refused; the only thing skipped is the mutation. The argv
     // stays null because none was issued — a dry run must not leave a trace that reads like a push.
-    return { ...base, branch, sha, guard };
+    return { ...base, branch, sha, guard, forcePublish };
   }
   const r = git(argv);
   if (!r.ok) {
-    return { ...base, branch, sha, guard, pushArgv: argv, pushError: (r.stderr || "git push failed").split("\n")[0]! };
+    // LOOP-536 — git's REASON, not its destination banner. The old `split("\n")[0]` reported
+    // `To <url>` for every rejection, in the human line and in `--json` alike.
+    return { ...base, branch, sha, guard, forcePublish, pushArgv: argv, pushError: pushFailureReason(r.stderr || "git push failed") };
   }
   // Tracking, restored (see `setUpstreamArgvFor`). Reported, never fatal: the push already happened.
   const up = git(setUpstreamArgvFor(remote, branch));
   if (!up.ok) process.stderr.write(`push: pushed, but setting upstream failed: ${up.stderr.split("\n")[0]}\n`);
   const movedTo = git(["rev-parse", branch]);
   const advancedTo = movedTo.ok && movedTo.stdout !== sha ? movedTo.stdout : null;
-  return { ...base, branch, sha, guard, pushArgv: argv, pushed: true, ...(advancedTo ? { advancedTo } : {}) };
+  return { ...base, branch, sha, guard, forcePublish, pushArgv: argv, pushed: true, ...(advancedTo ? { advancedTo } : {}) };
 }
 
 // `dev-loop push` — the gate AND the push under ONE per-repo lock.
@@ -327,7 +458,7 @@ export async function push(repoDir: string, opts: PushOpts = {}): Promise<PushRe
   const base: PushResult = {
     pushed: false, nothingToPush: false, branch: opts.branch ?? null, remote, sha: null, holds: [],
     gateUnevaluated: null, guard: null, pushArgv: null, pushError: null, unresolved: null,
-    lockUnavailable: null, dryRun: opts.dryRun ?? false,
+    lockUnavailable: null, forcePublish: null, dryRun: opts.dryRun ?? false,
   };
 
   // CANONICALIZE before matching the registry. The match compares absolute paths by string equality
@@ -413,6 +544,15 @@ no such assertion, so it inherits no such downgrade.
 
 Nothing to push is a SUCCESS in its own words (exit 0), not a refusal — re-running after a
 successful push says so instead of printing nothing.
+
+A REBASED branch is published under a lease. §12c prescribes a rebase as the remedy for a stale
+ciFreshness hold or a DIRTY mergeStateStatus, and a rebased branch is by construction not a
+fast-forward of what is on the remote. So when the branch has diverged from \`<remote>/<branch>\`
+AND it is a \`dev-loop/<ticket-id>\` branch, the push carries
+\`--force-with-lease=refs/heads/<branch>:<the sha the fetch above saw>\`: a concurrent writer's push
+makes it FAIL rather than be overwritten. THERE IS NO BARE \`--force\`, and no flag adds one. The
+default branch and any non-\`dev-loop/\` branch are never force-published, whatever the divergence —
+those pushes stay plain, and git's own rejection is reported with its reason.
 
 The gate AND the push run under ONE per-repo lock this verb takes itself — the same lock
 \`dev-loop pr merge\` and \`dev-loop with-repo-lock <ref>\` take, because the \`git fetch\` that
@@ -511,10 +651,25 @@ if (isMainEntry(import.meta.url)) {
     console.log(`${label}: nothing to push — ${result.remote}/${result.branch} already carries ${result.branch} (${result.sha?.slice(0, 12) ?? "?"})`);
   } else if (result.pushError) {
     console.error(`push: the gate CLEARED but \`git ${result.pushArgv?.join(" ")}\` failed — ${result.pushError}`);
+    // LOOP-536 — the one failure the verb can explain rather than merely relay. A diverged branch it
+    // declined to force-publish would otherwise report a bare `(non-fast-forward)` and leave the
+    // caller to guess whether the verb tried and failed or never tried.
+    if (result.forcePublish?.diverged && !result.forcePublish.eligible) {
+      console.error(`  ${result.branch} has diverged from ${result.remote}/${result.branch}, and this verb did NOT force-publish it: ${result.forcePublish.reason}.`);
+      console.error("  Republishing it is a history rewrite somebody else owns — do it yourself, deliberately, or re-target the work onto a dev-loop/<ticket-id> branch.");
+    }
   } else if (result.dryRun) {
-    console.log(`push (dry-run): the gate CLEARS — would push ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}. Nothing was written outward: not the remote, not the approvals ledger (the base was fetched, as the real run would).`);
+    const wouldForce = result.forcePublish?.diverged && result.forcePublish.eligible
+      ? ` It has diverged from ${result.remote}/${result.branch}, so the real run would republish it under a lease pinned to ${result.forcePublish.overwrittenSha?.slice(0, 12)} — the sha it would overwrite.`
+      : "";
+    console.log(`push (dry-run): the gate CLEARS — would push ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}.${wouldForce} Nothing was written outward: not the remote, not the approvals ledger (the base was fetched, as the real run would).`);
   } else {
     console.log(`push: ✅ gate clear — pushed ${result.branch} (${result.sha?.slice(0, 12) ?? "?"}) to ${result.remote}`);
+    // The force-publish receipt the operator reads (§16.8 rule 3): a push that REPLACED a published
+    // sha says which one, in its own output, rather than describing an append that did not happen.
+    if (result.forcePublish?.diverged && result.forcePublish.eligible) {
+      console.log(`  force-published under a lease: this REPLACED ${result.forcePublish.overwrittenSha?.slice(0, 12)} on ${result.remote}/${result.branch}. The lease held, so no other writer's commit was overwritten.`);
+    }
     // The refspec is pinned to the audited sha, so a commit made while the gate ran is still local.
     // Said out loud: the alternative is a caller who believes their newest commit is on the forge.
     if (result.advancedTo) console.log(`  note: ${result.branch} has since advanced to ${result.advancedTo.slice(0, 12)} — that commit was NOT gated and NOT pushed; re-run to publish it.`);
