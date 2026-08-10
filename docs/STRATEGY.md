@@ -417,6 +417,56 @@ discipline.
 
 ## Decisions (running log)
 
+- **2026-08-10 (pm, one-hundred-forty-ninth fire) — a visibility guarantee that holds at the module
+  layer and is lost at the composition layer, found in the increment that shipped it.**
+
+  **LOOP-393 (approvals C3) verified against the merged tree and closed `Done`.** PR #289 squashed at
+  20:45Z as `225713d`; main's own run for that sha reads `completed success`. All six ACs were
+  exercised by running `hub/test/decision-queue-approvals.ts` on a detached worktree at that sha — 30
+  assertions, exit 0 — rather than read off the diff. Three mutations confirmed the suite
+  discriminates: tagging the ticket arm `kind:"ticket"` fails 3 assertions, so design §8's inertness
+  claim is genuinely pinned; routing approvals through `decisionEnteredAt` fails AC3; filtering
+  approvals out of `checkDecisionQueueStall` fails AC6 four times. Stage-1 triage clean —
+  `doctor.ts`/`doctor-registry.ts` fall outside the ticket's named Scope but AC6 cannot be satisfied
+  anywhere else, so they are in-scope-by-necessity. Verified against the merged tree, not published.
+
+  **The trust-safety lens then found what that increment does not reach: LOOP-534** (P2, `Bug`+`qa`,
+  `sensitive` ⇒ senior). LOOP-393 exists so that a pending approval request is never a row nobody is
+  told about; the closure covers the delivery projects only. Measured chain: the steward agents fire
+  at `project = _team` (`fires.jsonl` — sweep 214, reflect 6; `run-agents.ts:833` states the same rule
+  for ops and communication); a `dev-loop request` from that identity resolves scope through
+  `resolveIdentity().projectKey`, and `_team` is a seeded board row, so the insert succeeds and the
+  verb exits 0 printing the grant command; both consumers iterate `deliveryProjects(ws)`, which drops
+  `_team` at `team-config.ts:215`. Evaluated on this workspace, `deliveryProjects(ws)` returns
+  `["loop"]`. The daemon does not compensate — it binds one `projectId` at boot and the running
+  instance is `loop` — and the default `dev-loop approvals` listing does not either, since `inScope`
+  matches own-project ∪ workspace-scoped rows while a `_team` row is neither. The ticket arm carries
+  the same gap, so a §9b team intake parked for the operator would also be silent. Exposure is latent:
+  `approvals` holds 0 rows and the `_team` board 0 tickets.
+
+  **This mints STANDING RULE 44 — a correctness claim proven at the module layer says nothing about
+  the SET its callers enumerate.** `pendingApprovalItems` is correct: given a project id it resolves
+  each row into exactly one queue, and its docstring's "never invisible" holds for every id it is
+  handed. The guarantee is lost one layer up, in which ids the consumers pass. When a mechanism
+  promises coverage, check the enumeration as a question separate from the rule.
+
+  **Job B2: promotion opened and closed inside one fire, the 40th time in 41.** junior stood at 9/10
+  at boot, so LOOP-502 promoted — rank 3 by `PICK_RANK`, where a `Bug` outranks every P1 Improvement
+  at 4.5, and FIFO made it the oldest of the four junior Bugs. Grooming it produced a correction worth
+  more than the promotion: its "Live reproductions" section names PRs #271 and #273, both since
+  landed, so the verification step it prescribes would now mislead. Measured all three open PRs —
+  reverse compares of 194,288 B / 77,557 B / 79,794 B against the 1 MiB cap — so no live reproduction
+  exists on the board, and the injected-exec seam its own ACs name is the only remaining path.
+  Recorded on the ticket; no AC changed.
+
+  **Also observed, already ticketed:** `35f70b6` (pass 117) reads `cancelled` — the `225713d` code
+  push cancelled the docs run beneath it. LOOP-486 is filed for the docs-cancels-code direction; this
+  is the same defect in the code-cancels-docs direction, so it is evidence on that ticket rather than
+  a new one.
+
+  **Pass price: +4,055 B (137,984 → 142,039).** Rolled nothing; the per-pass lever stays exhausted and
+  the real lever remains LOOP-484 (Backlog, behind the cap).
+
 - **2026-08-10 (pm, one-hundred-forty-eighth fire) — two artifacts that were true when written and
   false when read: a mutation left staged in the shared tree, and this doc's own commit citation.**
   Both cost real work this fire, and both are the same failure with different clocks.
