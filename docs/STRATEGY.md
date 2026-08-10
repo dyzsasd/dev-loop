@@ -248,45 +248,31 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
   below — this section no longer keeps a second copy of it (pass 48).
 
-- **§0a boot-corpus delivery is SPLIT BY LANE, and it is a PUSH for every expensive agent.
-  RE-MEASURED 2026-08-10 (pass 86); the previous reading here was wrong for two days.** Pass 76
-  recorded "16 of 1,082 fires ever carried `bootBytes` > 0 — 12 on 07-31, 4 on 08-01, none since …
-  the live delivery path is and has been PULL". Every clause after the premise is false on the
-  current ledger. `.dev-loop/team/fires.jsonl` (1,306 rows) now holds **52 rows carrying 7,048,829 B
-  of pushed corpus** — 12 on 07-31, 4 on 08-01, **31 on 08-09 and 5 on 08-10** — the most recent two
-  hours before the fire that re-measured it, whose own prompt carried the assembled block.
-  **The split is clean and it is by CLI lane:** of the rows since 2026-08-09, claude-lane fires are
-  **36/36 pushed** and opencode-lane fires **0/166**, because `run-agents.ts:971` gates the push on
-  `profile.codingAgent === "claude"` (a stable cache prefix; Linux `MAX_ARG_STRLEN` caps one `execve`
-  arg at 128 KiB). So pm/senior-dev/reflect/architect receive ~140 KB and ~131 KB per fire
-  pre-assembled, and qa/junior-dev/sweep/ops/communication pull at §0a. Delivery is deterministic per
-  agent (pm = 140,097 B across eight consecutive fires), which is the design intent — **nothing about
-  the push path is broken.**
-  **What was wrong was reading a config key as a report of what happened.** The premise still holds
-  (`team.bootCorpus` is absent from team and project config here); the live switch is
-  `DEVLOOP_ASSEMBLE_BOOT=1` in the SCHEDULER's env (`run-agents.ts:427`, OR-ed at `:970`), which is
-  empty inside the fire it delivers to and invisible to `doctor` by deliberate design
-  (`lessons.ts:69`). Doctor's **W03** therefore still prints "fires run in PULL mode"; this section
-  repeated that conclusion as fact. **The durable rule: config says what is configured, the ledger
-  says what was delivered — and a doc that quotes a warning inherits its errors.** Filed as
-  **LOOP-482** (P1: re-measured onto the ticket at pass 86). Consequence to carry: any per-fire
-  context or cost figure that does not split by lane is averaging two delivery regimes.
+- **§0a boot-corpus delivery is SPLIT BY LANE — a PUSH for the claude agents, a PULL for the
+  opencode ones** (measured pass 86; full text rolled to `2026-08.md` block **BE**).
+  `run-agents.ts:971` gates the push on `profile.codingAgent === "claude"`, so
+  pm/senior-dev/reflect/architect receive ~140 KB pre-assembled while qa/junior-dev/sweep/ops/
+  communication pull at §0a. Doctor's **W03** still prints "fires run in PULL mode" because it reads
+  config, while the live switch is `DEVLOOP_ASSEMBLE_BOOT=1` in the scheduler's env — **LOOP-482**
+  owns that correction. Carried forward: config says what is configured, the ledger says what was
+  delivered, and any per-fire context or cost figure that does not split by lane is averaging two
+  delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T04:50Z over the 7d team ledger (**886 fires**) via `dev-loop metrics --window
-  7d --json`: **fire success 48.3%** (`successRate` 0.4831; 65% over 538 fires when Goals was written
-  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 886 = **428
-  delivered + 173 classified failures + 285 no-op** (`suspectError`, 0 interrupted). Classes:
+  Measured 2026-08-10T05:05Z over the 7d team ledger (**894 fires**) via `dev-loop metrics --window
+  7d --json`: **fire success 48.1%** (`successRate` 0.4810; 65% over 538 fires when Goals was written
+  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 894 = **430
+  delivered + 173 classified failures + 291 no-op** (`suspectError`, 0 interrupted). Classes:
   `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30, `timeout` ×4, `network` ×2, `auth` ×1,
-  `budget-deadline` ×1 — **19.5% of the window, 37.8% of the 458 non-successes** (the older "703
-  carry `errorClass: null`" framing counted the 428 successes as unclassified; LOOP-464 owns the
+  `budget-deadline` ×1 — **19.4% of the window, 37.3% of the 464 non-successes** (the older "703
+  carry `errorClass: null`" framing counted the successes as unclassified; LOOP-464 owns the
   real gap). `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked
-  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across seven readings the
-  window grew **831 → 838 → 851 → 860 → 868 → 876 → 886** while the classified count held at
-  **exactly 173 every time** — fifty-five consecutive arrivals, none classified. The three
+  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across eight readings the
+  window grew **831 → 838 → 851 → 860 → 868 → 876 → 886 → 894** while the classified count held at
+  **exactly 173 every time** — sixty-three consecutive arrivals, none classified. The three
   `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class since the fixed
-  anchor **2026-08-08 16:36Z** (≈36 h), so the outage feeds the denominator and nothing feeds the
-  numerator. Compare two readings only alongside the fire counts they were measured over — and note
+  anchor **2026-08-08 16:36Z** (≈36.6 h; 281 dead-lane fires since, zero non-suspect), so the outage
+  feeds the denominator and nothing feeds the numerator. Compare two readings only alongside the fire counts they were measured over — and note
   that the per-agent half of this table is **anti-correlated** until LOOP-508 lands: qa and
   junior-dev report 88.5% and 80.7% "healthy" against a delivered 47.4% and 24.6%.
   First program: **3 of 5 shipped** — LOOP-382 · LOOP-383 · LOOP-385 Done; **LOOP-384 and LOOP-386
@@ -301,37 +287,38 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
   This is the third rung — source, installed `dist/`, observed effect — reached for this change.
 
-### 2026-08-10 (pm, one-hundred-twenty-seventh fire): a justification delivered to the agent it is false for, and a health table that ranks the dead lanes first
+### 2026-08-10 (pm, one-hundred-twenty-eighth fire): the ask that freezes while its condition grows, and a ticket filed against a tree that was already fixed
 
-**LOOP-507 filed: PM's promotion list is the one queue arm nobody ranks, and the reason it isn't
-ranked is delivered to PM as an assurance that it already is.** conventions §5a tells PM to promote
-"the top of the §5 pick order"; the boot pruner drops §5 from every `service` fire because *"the
-queue op pre-ranks on service"* (`boot-prefix.ts:78` — the predicate takes `backend`, no agent). True
-for the dev arms (`servable.ts:73` sorts by `PICK_RANK`), false for PM's (`agentops.ts:275` is a bare
-state filter, no sort, no `blocked` exclusion, `PICK_RANK` module-private so it could not reuse it
-anyway). On this fire's own 57-row payload the §5 top pick **LOOP-459 is served at position 33**,
-four of the first eight served rows are the bottom rank class, and LOOP-483 (`Backlog` + `blocked`)
-is offered as a promotion candidate that no promotion can reach. Latent only because the cap has
-held promotion shut for twenty fires — it bites on the fire that re-seeds both dev queues.
+**LOOP-509 filed (P1): the operator's re-engagement surface can only show a string written before
+the problem got worse.** The decision queue projects a parked ticket to `{id, title, state,
+updatedAt}` — no body, no comments — so `title` is the only free text any surface can carry, and it
+is written once, at filing. Measured on the live park: LOOP-463's title says *38 consecutive fires /
+29h*, while the ledger since the fixed outage anchor holds **281 dead-lane fires** (junior-dev 129,
+qa 129, sweep 23, zero of them non-suspect) over 36.6 h. The number the operator is asked to act on
+is **7.4× smaller than the true one**, and it decays in the direction that makes the ask read as
+less urgent the longer it is ignored. Two of the three console surfaces print no magnitude at all;
+the third truncates the title at 57 characters, and LOOP-463's first digit sits at index 78 — the
+cut lands before every number by construction, not by luck. The loop *does* keep the ask current:
+PM wrote the then-current 231 onto the park as a comment at 02:57Z, into the one field no consumer
+reads.
 
-**LOOP-508 filed (P1): the per-agent health table ranks `qa` and `junior-dev` — the two dark lanes —
-first.** `byAgent`/`byProject` carry `{fires, failures}` and no suspect term, so the 285 no-op fires
-the team line DOES report are attributable to nobody. Recomputing the same 886 rows with
-`suspectError` subtracted: qa **88.5% → 47.4%** (128 no-ops of 312), junior-dev **80.7% → 24.6%**
-(128 of 228), senior-dev 63.0% → 59.0% — the working lane last, the dead lanes first. At team level
-the comment at `metrics.ts:220` and the formula at `:221` disagree by **28.9 points** (48.3% vs
-71.2%) on the number this doc quotes and the §22a digest is told to quote verbatim; LOOP-219 wrote
-the rule and deferred the axis to LOOP-155, which only ever covered `interrupted`. The call is in
-the Decisions log below rather than left to the implementer.
+**LOOP-467 re-scoped rather than canceled: its diagnosis was measured against a tree that had
+already been fixed, and the live bug sits in a consumer it described backwards.** Its premise — that
+the metrics render takes the oldest by `updated_at` — stopped being true in `21143e6` on 2026-08-05,
+**four days before it was filed**; both surfaces it names now re-sort by `enteredAt`, and its cited
+line numbers no longer resolve. An implementer would have found the fix present and either blocked
+or "fixed" a function for no observable change. The bug is alive in the daemon reminder, which its
+implementer note calls a reader of `decisionQueue()` — it is not; it carries its own copy of the SQL
+and never re-sorts, so fixing the shared function leaves the one broken consumer broken. AC4 (send
+order, asserted on the sequence of emitted lines) is now the core of the ticket, and the mutation
+check is split per surface so a fix to one cannot certify the other.
 
-**Board and protocol.** Job A empty for the third consecutive fire — all four In Review rows are
+**Board and protocol.** Job A empty for the fourth consecutive fire — all four In Review rows are
 `qa`-owned and that verifier is dark. §9c: no blocker in {401, 468, 472, 479, 464, 463} is
 Done/Canceled, so none of the seven parked rows can unpark; `needs-pm` empty on both scans; no
-`## Deferred findings` awaiting triage. Promotion closed for the twentieth consecutive fire:
-unblocked Todo **28** (senior 15, junior 13) against the default cap of 10 per tier; Backlog 56 → 58,
-every row carrying both a tier and an owner label. Clock note: fire 126 stamped its state file
-04:52Z and its last lens 04:45Z while the wall clock at fire 127's boot read 04:40Z — those were
-estimates, not `date -u` reads.
+`## Deferred findings` awaiting triage. Promotion closed for the twenty-first consecutive fire:
+unblocked Todo **28** (senior 15, junior 13) against the default cap of 10 per tier; Backlog 58 → 60,
+every row carrying both a tier and an owner label.
 
 ## Personas
 
@@ -366,6 +353,24 @@ estimates, not `date -u` reads.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-twenty-eighth fire) — a mis-diagnosed ticket is re-scoped, not
+  canceled, when the bug outlives the diagnosis.** **(1) LOOP-467's** premise was false: the ordering
+  fix it asks for landed in `21143e6` four days before it was filed. The §5a reflex is to `Cancel` it
+  as obsolete, and that would have been wrong — reading it out found the same bug ALIVE in the daemon
+  reminder, which the ticket's own implementer note describes backwards as a reader of
+  `decisionQueue()` when it carries a private copy of the SQL. **The call: when a premise fails,
+  finish the measurement before choosing the verdict** — a false premise says the diagnosis decayed,
+  not that the defect did, and cancel-then-refile loses the ACs and the provenance with it. Here the
+  AC block survived (its mutation check still discriminated); only the "Why" had to go. **(2)** It
+  stays **P2 deliberately**: `PICK_RANK` reads an `Improvement`'s priority only at `priority=1`, so
+  P2 and P3 are one bucket ordered by `created_at` (the LOOP-254 ruling) and moving between inert
+  buckets performs concern without changing anything a picker sees. **(3) LOOP-509 pins the property,
+  not the carrier** — the refresh field may be the latest comment or a body marker; the ACs fix what
+  must be OBSERVABLE and leave the mechanism open, with AC3's fixture specified by the shape that
+  caused the bug (first digit past index 57) because a short title passes vacuously. **(4)** Both new
+  doctrine clauses this pass went into rules 32 and 35 rather than a rule 41 — doctrine grows by
+  sharpening the rule that already names the shape (fire 126's call, now demonstrated twice).
 
 - **2026-08-10 (pm, one-hundred-twenty-seventh fire) — a no-op fire counts against success, and an
   omission's justification is an assurance to everyone it reaches.** **(1) `successRate`'s treatment
@@ -415,14 +420,6 @@ estimates, not `date -u` reads.
   that way.** Generalizes the same shape already recorded for `Blocked-by:`/`Unblocked-by:`.
   Cost of the mis-encoding: a verified increment sat closeable-but-refused, and the refusal surfaced
   only at the parent's close, not at the child's filing. LOOP-455, LOOP-480.
-
-- **2026-08-09 (pm, ninety-fourth fire) — a coverage predicate must select on the PROPERTY it
-  certifies, not on one spelling of it.** LOOP-368's AC6 enumerates its covered set as "files
-  importing `isolationVerdict`/`workspaceIsolationVerdict`" — which selects neither `secret-cli` nor
-  `cli-agentops`, the two verbs gated precisely *because* they were the residual AC6 exists to
-  enumerate. Such a test certifies a set excluding its own motivating members, and stays green when
-  their gate is dropped. Key it on importing the module at all. Sent as a comment, not a ticket:
-  **when a ticket is live, a fact its AC needs is a comment on it.** LOOP-368.
 
 - **2026-08-09 (pm, ninety-second fire) — where the taxonomy already determines the answer, a write
   path should COMPLETE the input rather than refuse it.** The hub's create path derives a ticket's
@@ -615,7 +612,14 @@ estimates, not `date -u` reads.
      the LANDED tree before promoting it — where it does not, its `Blocked-by:` edge is a PREMISE
      edge, not a courtesy. **And check the tier: the hand-off is where §21b gets skipped, the filer
      being busy closing something else.** Both arrived `assignee: —` — invisible to every dev pick
-     query, one of them `sensitive`.
+     query, one of them `sensitive`. **The mirror case is a finding measured against a tree that is
+     BEHIND, and it is harder to catch because nothing is pending to remind you.** LOOP-467 was filed
+     2026-08-09 against an ordering bug whose fix had landed in `21143e6` on **08-05**: its cited
+     line numbers no longer resolved, its predicted symptom was unreachable, and its acceptance
+     criteria would have certified a no-op. One test covers both directions — **date the fix, not
+     the code.** `git log -S` / `git blame` the line the finding turns on and compare that date with
+     the finding's own; a premise is a claim about a tree at a moment, so it is only checkable with
+     both.
   33. **A fixture derived from the constant it is checking is not a test of that constant.** The
      LOOP-406 band fixtures compute `warnAt` from a spec literal `0.8` rather than importing
      `STRATEGY_DOC_WARN_FRACTION`: change the product's fraction and a fixture lands inside the
@@ -653,7 +657,14 @@ estimates, not `date -u` reads.
      (**172 of 807 fires — 21%**; the other 635 are `errorClass: null`, LOOP-464), because *a number
      without its coverage is how `Goals` got falsified the first time*. Ask of any recorded fact:
      **who may write this, how often, and how fast does it go wrong?** A correction round is the
-     wrong instrument for a fact that decays faster than the round takes.
+     wrong instrument for a fact that decays faster than the round takes. **The "section" can be a
+     PROJECTION, not just a heading — the same rule one layer down.** The operator's decision queue
+     renders a parked ticket from `{id, title, state}`, and `title`'s write rate is once, at filing,
+     while the condition it describes grows hourly: LOOP-463's ask still read *38 fires* when the
+     ledger held 281, and the refresh PM did write went to a comment, which no consumer of that
+     projection reads (**LOOP-509**). Ask it of every field a surface renders, not only of every
+     heading a document carries — and where the rates diverge, the fix is a field whose write rate
+     matches, never a discipline of remembering to rewrite the old one.
   36. **Read `gh run list --branch main` before a doc-land.** `test.yml` is
      `concurrency: test-${{ github.ref }}` with `cancel-in-progress: true` and no `paths-ignore`, so
      pushes to `main` cancel each other's runs — and the docs-only side is the one that can silently
@@ -760,6 +771,9 @@ estimates, not `date -u` reads.
     (LOOP-385), the `local` backend's retirement verified across the taught surface (LOOP-465), and
     the north star shedding facts it cannot keep (LOOP-494) → `2026-08.md`, incl. block **AX**.
     Doctrine: RULES 35–38.
+  - **2026-08-10** (fires 121–127; R2 passes 91–97) — the per-fire journals of the approvals-gate
+    arc and the boot-corpus lane split → `2026-08.md`, blocks **BC–BF**. Doctrine: RULES 39–40, plus
+    the mirror clause folded into 32 and the projection clause into 35.
 - **2026-08-10 — operator ruling on LOOP-499: build the seam, and close the silent-enable window
   in the same arc.** `approvals.enforce: ["push"]` reaches no reader on `landing:"pr"` — the mode
   this workspace runs — because the pr-mode ship path pushes the ticket branch with a bare
@@ -808,16 +822,6 @@ estimates, not `date -u` reads.
   be un-bypassable acquired a bypass through the sanctioned tool. The same question is owed to every
   future switch, which is STANDING RULE 29 (a switch with no reader) turned around: a switch whose
   writer is un-gated is the same defect seen from the other end.
-
-- **2026-08-10 (pm, one-hundred-twenty-sixth fire) — extend STANDING RULE 40, do not add rule 41.**
-  W16 reads a dead verifier as alive because its proxy is the fire ledger, and an outage produces the
-  MAXIMUM number of ledger rows with zero work (LOOP-505, measured in the journal above). Rule 40
-  already ends *"if every answer tests presence, size, or activity, the answer is none"* — *activity*
-  is exactly this proxy, so a new rule would have restated it. What rule 40 did not say is that such
-  a proxy can be **anti-correlated** rather than merely weak; that sentence is now in it. **The
-  generalisable half: doctrine grows by sharpening the rule that already names the shape.** A second
-  rule for one shape splits the evidence and halves the chance either is recalled when it applies —
-  and this block is re-read every fire by ten agents, so its growth is a tax on all of them.
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
