@@ -231,27 +231,67 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
   const NAMED_LIST = /^export\s*\{([^}]*)\}/;
   // The KIND is captured with the name, because what counts as exercising an export depends on it
   // (PR #271 review, third round): a function is exercised by being CALLED, a constant by being
-  // READ. A re-exported name has no declaration on the line, so it takes the weaker value rule —
-  // there are none today, and a form the classifier cannot read already fails the arm below.
-  const runtime: Array<{ name: string; callable: boolean }> = [];
-  const unreadable: string[] = [];
-  for (const line of src.split("\n")) {
-    if (!/^export\b/.test(line)) continue;
-    if (TYPE_ONLY.test(line)) continue;
-    const declared = DECLARED.exec(line);
-    if (declared) { runtime.push({ name: declared[2], callable: declared[1] === "function" }); continue; }
-    const list = NAMED_LIST.exec(line);
-    if (list) {
-      for (const spec of list[1].split(",")) {
-        const s = spec.trim();
-        if (!s || /^type\b/.test(s)) continue;
-        const parts = s.split(/\s+as\s+/);       // a suite imports the EXPORTED name, not the local one
-        runtime.push({ name: (parts[1] ?? parts[0]).trim(), callable: false });
+  // READ. So the kind must survive every export FORM, not just the declaration form — a name
+  // re-exported as `export { activeFireMarker }` carries no kind on its own line, and defaulting it
+  // to "not callable" would silently drop it to the weaker read rule, where `const f = <name>`
+  // counts and no suite need ever call it (PR #271 review, fourth round). The kind is therefore
+  // resolved from the LOCAL declaration the list names; a spec whose local declaration this file
+  // cannot find is UNREADABLE and fails the arm, rather than being guessed at.
+  const LOCAL_CALLABLE = (local: string) =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:async\\s+)?(?:function\\s*\\*?\\s+${local}\\b|class\\s+${local}\\b` +
+      `|(?:const|let|var)\\s+${local}\\s*=\\s*(?:async\\s*)?(?:function\\b|\\(|[\\w$]+\\s*=>))`, "m");
+  const LOCAL_VALUE = (local: string) =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:async\\s+)?(?:function\\s*\\*?\\s+${local}\\b|class\\s+${local}\\b` +
+      `|(?:const|let|var)\\s+${local}\\b)`, "m");
+  const classifyExports = (source: string) => {
+    const runtime: Array<{ name: string; callable: boolean }> = [];
+    const unreadable: string[] = [];
+    for (const line of source.split("\n")) {
+      if (!/^export\b/.test(line)) continue;
+      if (TYPE_ONLY.test(line)) continue;
+      const declared = DECLARED.exec(line);
+      if (declared) { runtime.push({ name: declared[2], callable: declared[1] === "function" }); continue; }
+      const list = NAMED_LIST.exec(line);
+      if (list) {
+        for (const spec of list[1].split(",")) {
+          const s = spec.trim();
+          if (!s || /^type\b/.test(s)) continue;
+          const parts = s.split(/\s+as\s+/);     // a suite imports the EXPORTED name, not the local one
+          const local = parts[0]!.trim();
+          const name = (parts[1] ?? parts[0]).trim();
+          if (!LOCAL_VALUE(local).test(source)) { unreadable.push(`${line.trim()} (no local declaration of ${local})`); continue; }
+          runtime.push({ name, callable: LOCAL_CALLABLE(local).test(source) });
+        }
+        continue;
       }
-      continue;
+      unreadable.push(line.trim());
     }
-    unreadable.push(line.trim());
+    return { runtime, unreadable };
+  };
+
+  // The list branch is unreachable from today's module — every export there is a declaration — so
+  // it is asserted on synthetic sources, which is precisely why its defect survived three review
+  // rounds. Each probe pins ONE decision: the kind is read from the local declaration, and an
+  // unresolvable local fails rather than defaulting.
+  for (const [source, want, why] of [
+    ["function activeFireMarker() {}\nexport { activeFireMarker };",
+      { name: "activeFireMarker", callable: true }, "a named-exported function is still exercised only by a CALL"],
+    ["const arrow = (x) => x;\nexport { arrow };",
+      { name: "arrow", callable: true }, "…including one declared as an arrow"],
+    ["const TOKEN_PREFIX = \"--x-\";\nexport { TOKEN_PREFIX };",
+      { name: "TOKEN_PREFIX", callable: false }, "while a named-exported constant keeps the read rule"],
+    ["function local() {}\nexport { local as renamed };",
+      { name: "renamed", callable: true }, "a rename exports the new name and the old name's kind"],
+  ] as const) {
+    const got = classifyExports(source);
+    ok(got.unreadable.length === 0 && got.runtime.length === 1
+      && got.runtime[0]!.name === want.name && got.runtime[0]!.callable === want.callable,
+      `coverage map: ${JSON.stringify(want)} — ${why} (got: ${JSON.stringify(got.runtime)}${got.unreadable.length ? ` unreadable: ${got.unreadable.join(" | ")}` : ""})`);
   }
+  ok(classifyExports("export { mystery };").unreadable.length === 1,
+    "coverage map: a named export whose local declaration is not in the module is UNREADABLE — an unresolvable kind fails the arm instead of defaulting to the weaker rule");
+
+  const { runtime, unreadable } = classifyExports(src);
   ok(unreadable.length === 0,
     `coverage map: every export line is a form this inventory can read — extend the classifier before adding one it cannot (unreadable: ${unreadable.join(" | ") || "none"})`);
 
@@ -265,10 +305,13 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
     `coverage map: the module's runtime exports are the known set — a new export must be added here WITH a test (got: ${runtimeExports.join(",")})`);
 
   // Reduce a suite to the text that RUNS: comments and string literals hold prose, so they are
-  // dropped; a template SUBSTITUTION is code and is kept (`${confirmationToken(k)}` is a real call);
-  // a regex literal is evaluated, so it is kept too. Dropped constructs collapse to a space so two
-  // identifiers never fuse. In code, `\x` is consumed as an escape pair — that is what keeps the
-  // `\/\/` inside a regex from reading as the start of a comment.
+  // dropped; a template SUBSTITUTION is code and is kept (`${confirmationToken(k)}` is a real call).
+  // A regex BODY is dropped with them (PR #271 review, fourth round): evaluating `/FIRE_MARKERS/`
+  // runs code, but the identifier-shaped characters in its pattern never touch the binding of that
+  // name — so keeping the body let a suite that deleted its last real read of a constant still read
+  // as covering it. The literal is consumed by its own scanner rather than left to the escape-pair
+  // rule, which is what keeps a `\/` inside the pattern from ending it early and a `//` inside it
+  // from opening a comment. Dropped constructs collapse to a space so two identifiers never fuse.
   const codeOnly = (text: string): string => {
     const stack: ("code" | "tmpl")[] = ["code"];
     const outerDepths: number[] = [];
@@ -289,6 +332,32 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
         i += 2;
         while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
         i += 2; out += " "; continue;
+      }
+      if (c === "/") {
+        // Division, or a regex literal whose body must go? `//` and `/*` are already consumed
+        // above, so this `/` opens a literal only where a VALUE may start — after an operator, an
+        // opening bracket, a separator or a keyword. Anywhere else it divides and is KEPT, which
+        // is the safe default in only one direction: dropping real code makes the map fail loudly,
+        // keeping pattern text makes it pass quietly. So the named residual is a literal opening
+        // in a position this list does not carry (`if (x) /re/.test(y)` — after `)`), which still
+        // reads as division; closing that needs another entry here, not a different pattern.
+        const tail = out.slice(-64).replace(/\s+$/, "");
+        if (tail === "" || "(,=:[!&|?{};+-*%~^<>".includes(tail.slice(-1))
+          || /\b(?:return|typeof|case|in|of|new|delete|void|instanceof|yield|await|do|else)$/.test(tail)) {
+          i++;                                   // past the opening slash
+          let inClass = false;
+          while (i < text.length) {
+            const r = text[i];
+            if (r === "\\") { i += 2; continue; }
+            if (r === "\n") break;               // unterminated: it was never a literal
+            if (r === "[") inClass = true;
+            else if (r === "]") inClass = false;
+            else if (r === "/" && !inClass) { i++; break; }
+            i++;
+          }
+          while (i < text.length && /[a-z]/.test(text[i]!)) i++;   // flags
+          out += " "; continue;
+        }
       }
       if (c === '"' || c === "'") {
         i++;
@@ -314,15 +383,19 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
     "/* isolationVerdict, in a block comment */",
     'ok(x, "confirmationToken, in an assertion label");',
     "const s = `prose isScratchProject ${commitBothHalves(p)} more prose`;",
-    "const re = /FIRE_MARKERS/;",
+    "const re = /FIRE_MARKERS[/x]\\/TOKEN_PREFIX/g;",
+    "const half = total / notARegexRead / 2;",
   ].join("\n"));
-  for (const prose of ["activeFireMarker", "isolationVerdict", "confirmationToken", "isScratchProject"]) {
+  // FIRE_MARKERS sits inside the pattern's character class and TOKEN_PREFIX behind an escaped
+  // slash, so between them they pin both ways the scanner could end the literal early and hand the
+  // rest of the pattern back as code.
+  for (const prose of ["activeFireMarker", "isolationVerdict", "confirmationToken", "isScratchProject", "FIRE_MARKERS", "TOKEN_PREFIX"]) {
     ok(!new RegExp(`\\b${prose}\\b`).test(probe),
-      `coverage map: the scrub drops ${prose} when it survives only in prose — a deleted call arm cannot read as coverage`);
+      `coverage map: the scrub drops ${prose} when it survives only in prose or a regex PATTERN — neither touches the binding, so a deleted arm cannot read as coverage`);
   }
-  for (const code of ["commitBothHalves", "FIRE_MARKERS", "ok", "re"]) {
+  for (const code of ["commitBothHalves", "ok", "re", "notARegexRead"]) {
     ok(new RegExp(`\\b${code}\\b`).test(probe),
-      `coverage map: the scrub keeps ${code} — a template substitution, a regex literal and a call are executable references`);
+      `coverage map: the scrub keeps ${code} — a template substitution, a call, and an identifier BETWEEN two division operators are executable references`);
   }
   // The other half of "exercised", which no scrub can decide: a TYPE-ONLY import is erased before
   // anything runs, so it is not coverage however the name is then mentioned. Asserted on the
