@@ -259,21 +259,21 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T05:28Z over the 7d team ledger (**905 fires**) via `dev-loop metrics --window
-  7d --json`: **fire success 47.7%** (`successRate` 0.4773; 65% over 538 fires when Goals was written
-  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 905 = **432
-  delivered + 173 classified failures + 300 no-op** (`suspectError`, 0 interrupted). Classes:
+  Measured 2026-08-10T06:25Z over the 7d team ledger (**933 fires**) via `dev-loop metrics --window
+  7d --json`: **fire success 46.8%** (`successRate` 0.4684; 65% over 538 fires when Goals was written
+  2026-08-08). **Report the window as a decomposition, never as a rate alone** — 933 = **437
+  delivered + 173 classified failures + 323 no-op** (`suspectError`, 0 interrupted). Classes:
   `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30, `timeout` ×4, `network` ×2, `auth` ×1,
-  `budget-deadline` ×1 — **19.1% of the window, 36.6% of the 473 non-successes** (LOOP-464 owns the
+  `budget-deadline` ×1 — **18.5% of the window, 34.9% of the 496 non-successes** (LOOP-464 owns the
   real gap). `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked
-  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across nine readings the
-  window grew **831 → … → 894 → 905** while the classified count held at **exactly 173 every time** —
-  seventy-four consecutive arrivals, none classified. The three
-  `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no class since the fixed
-  anchor **2026-08-08 16:36Z** (≈36.9 h; **292** dead-lane fires since, zero non-suspect), so the
-  outage feeds the denominator and nothing feeds the numerator. **What that wait costs is now
-  measured and on the park:** $509.71 since the anchor = **$331.96/day**, all of it `pm` + `senior-dev`,
-  accumulating into a Backlog whose executor (`junior-dev`, 40 of 60 rows) is dark.
+  behind LOOP-464 + LOOP-463). **The numerator is frozen, not lagging:** across ten readings the
+  window grew **831 → … → 905 → 933** while the classified count held at **exactly 173 every time** —
+  102 consecutive arrivals, none classified. The three `openrouter` lanes (junior-dev, qa, sweep) have
+  returned in ~6 s with no class since the fixed anchor **2026-08-08 16:36Z** (≈37.7 h; **311**
+  dead-lane fires, zero non-suspect), so the outage feeds the denominator and nothing feeds the
+  numerator. **The wait costs $553.58 = $352.40/day**, all `pm` + `senior-dev`, buying a Backlog whose
+  executor (`junior-dev`, 40 of 62 rows) is dark — and since pass 100 the qa-owned verification exit
+  is closed too (4 In Review, 0 Done since the anchor), so the spend now also cannot land.
   Compare two readings only alongside the fire counts they were measured over — and note
   that the per-agent half of this table is **anti-correlated** until LOOP-508 lands: qa and
   junior-dev report 88.5% and 80.7% "healthy" against a delivered 47.4% and 24.6%.
@@ -286,43 +286,39 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
   unset here, so the board is still read-only and the CLI is still the only way to rule.
-- **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`)** —
-  verified 2026-08-10 to the third rung (source, installed `dist/`, observed effect), with a
-  control against the pre-retirement tree. Full measurements: archive block BI.
 
-### 2026-08-10 (pm, one-hundred-thirtieth fire): a citation written in the keyword that binds it, and the merge gate's own bug filed twice
+### 2026-08-10 (pm, one-hundred-thirty-first fire): the backup that stopped 41 h ago, and the alarm its own remedy silences
 
-**LOOP-479 verified `Done` against the merged tree (`6b451ed`, landed mid-fire).** `dev-loop settings
-list|get|set|unset <path>` gives `projects.settings_json` its first writer; every AC met, AC5 being
-the split I made on 08-09 (LOOP-481, unparked this fire). Two things outlive the increment. The verb
-is **fire-gated** — exit 4 under `DEVLOOP_DEV_SPLIT`, "nothing has been read or written" — which is
-LOOP-503's ask already solved in-tree for a sibling verb, so that ticket now has a precedent to copy
-rather than a design to invent. And its test imports the shipped `humanWriteEnabled` instead of
-re-deriving it, citing the LOOP-429 shape unprompted. **Merged, not published:** fires still run
-`0cac647`/v1.15.1, so no fire can reach the verb yet.
+**The board's automatic backup has not run since 2026-08-08T13:26Z and `doctor` reports the gap as
+12 h (LOOP-513, filed P1).** The newest `reason=cadence` generation is 40.9 h old; the newest of *any*
+reason is a 12.2 h `manual` one. W32 ages `gens[0]` without reading `reason`, which `listSnapshots`
+already parses — so the arm built to prove the timer runs is satisfied by a file the timer did not
+write, and the warning's own closing instruction (*"take one by hand meanwhile: `dev-loop board
+snapshot`"*) **writes exactly such a file**, converting a permanent alarm into a 12-hourly one.
+Underneath, `startBoardSnapshot` is a bare `setInterval` with no initial tick and no persisted cursor,
+so every daemon restart pushes the next snapshot a full interval out. This is the mechanism that lost
+19 tickets and 79 comments on 2026-08-04, rebuilt and quietly disarmed. RULE 31's depth axis, third
+instance (after LOOP-505/450) and the first where the *remedy* closes the loop on itself — no new
+rule; a second rule for one shape splits the evidence.
 
-**A `Design:` line is a state-machine write — and this fire found the form that reports nothing.**
-LOOP-502 (the merge-gate bug holding PRs #271/#273) opened `Design: parent LOOP-448`, meant as
-provenance; `designParentIds` binds the `parent <id>` form on nothing but `onBoard.has(id)`, so a
-`Done` §17 proposal became a design parent and LOOP-502 its staged child. Pass 104 recorded this
-shape on LOOP-480, where it surfaced LOUDLY as a refused close. Here it surfaced nowhere — a `Done`
-parent's gate never fires again. Line removed, `relatedTo` untouched; recorded as pass 104's
-detection clause, not a new rule.
+**The outage opened a second failure mode while parked, recorded on LOOP-463.** For 37 h it meant
+*nothing gets built*; it now also means *finished work cannot leave the board*. Since the anchor,
+qa-owned tickets went **4 → In Review, 0 → Done** against pm-owned 15 → 17; all 17 closes were written
+by `pm`, none by `qa`. The queue is no longer only undrainable at the front (40 of 62 Backlog rows on a
+dark `junior-dev`) — it is sealed at the back, oldest strand LOOP-378 at 37.3 h.
 
-**The same defect, filed twice in 118 minutes, the second contradicting the first.** LOOP-511
-re-derived LOOP-502's cause (the reverse `compare` at `landing.ts:214` crossing Node's 1 MiB
-`spawnSync` ceiling) two hours after LOOP-502's thread established it. Closed `Duplicate` with its
-unique content merged up, not dropped: an AC bounding the REQUEST (`?per_page=1` + `behind_by`) and a
-test arm pinning the request SHAPE. The ordering was the risk — LOOP-511's *first* AC prescribed the
-bare `maxBuffer` bump LOOP-502 had already shown to be a deadline rather than a fix. LOOP-502's body
-also still claimed "a payload-size overflow is ruled out" against its own comments; the spec now says
-what its thread found.
+**One filing, not five — the restraint is the decision.** With 95 non-terminal rows, both tiers ~2.8×
+over the promotion cap, and the tier owning two thirds of the Backlog dark for 38 h, a filing is
+inventory, not throughput. LOOP-513 cleared the bar because it protects a board already destroyed
+once and will not surface itself: after any hand-taken snapshot, every future `doctor` reads healthy.
 
-**Job C, `polish-performance`: two candidates killed, nothing filed.** The `bootBytes` coverage gap
-is historical and closed (62/62 recent claude fires carry it); the 250-row cap does signal truncation
-precisely, on stderr — I had suppressed stderr, and re-ran the audit over all 493 rows rather than
-trust the narrower basis. With 48 of 61 Backlog rows owned by a tier dark for 37 h, a 62nd filing is
-inventory, not throughput.
+**Board and protocol.** Job A empty for the sixth consecutive fire (all four In Review rows are
+`qa`-owned); `needs-pm` and `_team` empty; no `## Deferred findings` pending; §9c — no blocker in
+{401, 468, 472, 464, 463} terminal, so none of the six parked rows can unpark. Promotion closed for
+the twenty-third consecutive fire: unblocked Todo **28** (senior 15, junior 13) against a cap of 10
+per tier. A full-board scan of all 101 non-terminal rows (sqlite, not the 250-capped read) found zero
+label/tier/assignee gaps, zero sensitive-on-junior, zero `Design: parent` land-mines and zero
+near-duplicate titles — hygiene holds with `sweep` dark 38 h.
 
 ## Personas
 
