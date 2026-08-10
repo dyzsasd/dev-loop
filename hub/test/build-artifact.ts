@@ -14,7 +14,7 @@ import { scrubFireEnv } from "./env-scrub.ts";
 import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), ".."); // hub/
 const repoRoot = join(hubRoot, "..");
@@ -49,6 +49,14 @@ try {
   // A1: the plugin payload is packaged ONCE, at the package root (the `files` array) — no duplicate
   // dist/plugin tree. The scheduler resolves it via resolve(here,"..") = the package root.
   ok(!existsSync(join(distDir, "plugin")), "no duplicate dist/plugin payload (A1: packaged once at the root)");
+  // LOOP-532: ui.ts inlines the live client into every page as `liveClient.toString()`. The in-repo
+  // suite only ever sees the type-STRIPPED source; if tsc's emit ever led with `export ` (or any
+  // other non-expression prefix) the served <script> would be a syntax error and the whole
+  // live-update + stale-banner client would die silently for installed users while the src-mode
+  // tests stayed green. So the shape is asserted against the COMPILED module.
+  const { liveClient } = await import(pathToFileURL(join(distDir, "views", "live-client.js")).href) as { liveClient: (...a: never[]) => void };
+  ok(/^function liveClient\(/.test(liveClient.toString()),
+    "dist: liveClient.toString() is a bare function declaration — ui.ts can inline it into a <script> (LOOP-532)");
   ok(existsSync(join(hubRoot, ".claude-plugin", "plugin.json")) && existsSync(join(hubRoot, "skills", "pm-agent", "SKILL.md")) && existsSync(join(hubRoot, "references", "conventions.md")),
     "npm package root includes the Claude plugin manifest + skills + references (the single packaged copy)");
   const pack = run("npm", ["--silent", "pack", "--dry-run", "--json"]);
