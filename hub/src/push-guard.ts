@@ -14,6 +14,7 @@ import { resolve } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite"; // R5 — the read-only probe below must NOT create/migrate
 import { openDb } from "./db.ts";
 import { resolveHubDbPath, tryResolveWorkspace, findWorkspaceRoot } from "./workspace.ts";
 import { resolveDefaultBranchForPath, approvalsEnforced, loadWorkspace } from "./team-config.ts";
@@ -191,6 +192,32 @@ const branchTicketId = (br: string): string | undefined => {
 };
 
 /**
+ * Was this path ALREADY a real approvals record, before anyone opened it? Returns the reason it is
+ * not, or `null` when it is usable (R5, PR #283 review).
+ *
+ * `existsSync` was not this question. `openDb` CREATES the current schema on any path it is handed —
+ * a zero-byte or newly-created file opens clean, `listApprovals` returns nothing, and the gate reads
+ * "no ticket is under approval" from a record it just fabricated. That is the R1 fail-open surviving
+ * one input further out: an unavailable record read as an empty one.
+ *
+ * So the probe is READ-ONLY and runs BEFORE `openDb`: no create, no migrate. A missing file, a
+ * non-SQLite file, and a SQLite file with no `approvals` table all answer the same way — unverifiable,
+ * which fails closed — while a real record answers `null` and is opened normally.
+ */
+export function approvalsRecordUnusable(dbFile: string): string | null {
+  if (!existsSync(dbFile)) return "the approvals record is unavailable";
+  let probe: DatabaseSync;
+  try { probe = new DatabaseSync(dbFile, { readOnly: true }); }
+  catch { return "the approvals record is unreadable (not a database)"; }
+  try {
+    const row = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='approvals'").get();
+    return row ? null : "the approvals record is uninitialised (no approvals table)";
+  } catch { return "the approvals record is unreadable"; }
+  // A handle that failed to read may also fail to close; that must not become the caller's exception.
+  finally { try { probe.close(); } catch { /* nothing usable to close */ } }
+}
+
+/**
  * The approvals gate over one commit range (LOOP-394 / design §5, §7).
  *
  * Under the gate = the commit's ticket has AT LEAST ONE `push:` approval row. That row is the
@@ -207,20 +234,21 @@ function checkPushApprovals(
   branch: string,
   dbFile: string,
   actor: string,
+  unusable: string | null,
 ): PushGuardApproval[] {
   const out: PushGuardApproval[] = [];
   if (!commits.length) return out;
   // Fail CLOSED when the record is unreadable (APPROVALS_UNVERIFIABLE above). Only a commit carrying a
   // ticket ref can ever be under this gate — it keys on `ticket_id` — so the refusal names those and
   // stays silent about the rest rather than blanket-refusing a range it never had a claim on.
-  if (!existsSync(dbFile)) {
+  if (unusable) {
     for (const c of commits) {
       const id = ([...new Set(c.msg.match(TICKET_RE) ?? [])] as string[])[0];
       if (!id) continue;
       out.push({
         sha: c.sha.slice(0, 7), subject: c.subject, key: pushApprovalKey(branch, c.sha), ticketId: id,
         state: APPROVALS_UNVERIFIABLE,
-        reason: `the approvals record is unavailable at ${dbFile}`,
+        reason: `${unusable} at ${dbFile}`,
       });
     }
     return out;
@@ -267,6 +295,23 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // ── LOOP-55: passenger detection runs off origin/<defaultBranch>, not origin/<br> ──
   // Runs BEFORE the upstream check so a fresh (never-pushed) feature branch is still caught.
   // Uses origin/<defaultBranch>..branch — the commits that would ride a first push of this branch.
+  // Resolved HERE, before anything opens the db, because `openDb` creates the current schema on any
+  // path it is handed — passenger detection below opens the very same file, so a probe run after it
+  // would be judging a record that call had just fabricated (R5, PR #283 review). Whether the class is
+  // enforced is a property of the WORKSPACE, not of who called this function: left unspecified it
+  // resolves from the repo's own config, so a programmatic caller — doc-land's ff-only push is the one
+  // that exists today — cannot fall outside an enabled gate by omitting an argument, and the next such
+  // caller inherits the gate instead of having to remember it. An explicit boolean still wins: the CLI
+  // passes the switch it already resolved, and the tests pin both states. Read the config, don't
+  // RESOLVE the workspace: resolveWorkspace hydrates secrets into process.env and upserts the
+  // machine-global index, and neither belongs in a guard this module documents as read-only.
+  const enforcePush = opts.enforcePush ?? approvalsEnforced(readTeamBlockFor(repoDir), "push");
+  // Default-OFF (design §8): with the class absent from `approvals.enforce` nothing here runs, no db
+  // handle is opened — not even the read-only probe — and the result is byte-identical to the
+  // pre-LOOP-394 output (AC2).
+  const approvalsDbFile = enforcePush ? (dbPath ?? resolveHubDbPath(repoDir)) : "";
+  const recordUnusable = enforcePush ? approvalsRecordUnusable(approvalsDbFile) : null;
+
   const passengers: PushGuardPassenger[] = [];
   let unresolvedDefaultBranch: string | undefined;
   const ownId = branchTicketId(br);
@@ -275,7 +320,12 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
       const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `origin/${defaultBranch}..${br}`]));
       // Open hub.db for passenger ticket-state lookups (read-only).
       const pgDb = dbPath ?? resolveHubDbPath(repoDir);
-      const pgConn = existsSync(pgDb) ? openDb(pgDb) : null;
+      // An unreadable db degrades to the SAME path an absent one already takes (no state lookups,
+      // passengers reported as unverifiable warnings). Before R5 it threw out of pushGuard entirely,
+      // which took the approvals gate down with it — a corrupt record must make the safety gate
+      // REFUSE, not disappear.
+      let pgConn = null;
+      if (existsSync(pgDb)) { try { pgConn = openDb(pgDb); } catch { pgConn = null; } }
       try {
         for (const c of pCommits) {
           const allIds = [...new Set(c.msg.match(TICKET_RE) ?? [])] as string[];
@@ -319,20 +369,8 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     // Guarded on the branch resolving: an unborn branch genuinely publishes nothing.
     : gitOk(["rev-parse", "--verify", "--quiet", br]) ? br
     : null;
-  // Whether the class is enforced is a property of the WORKSPACE, not of who called this function.
-  // Left unspecified it resolves from the repo's own config, so a programmatic caller — doc-land's
-  // ff-only push is the one that exists today — cannot fall outside an enabled gate by omitting an
-  // argument, and the next such caller inherits the gate instead of having to remember it. An explicit
-  // boolean still wins: the CLI passes the switch it already resolved, and the tests pin both states.
-  // Resolution is lazy so the default-off path opens no workspace and keeps AC2's byte-identity.
-  // Read the config, don't RESOLVE the workspace: resolveWorkspace hydrates secrets into process.env
-  // and upserts the machine-global index, and neither belongs in a guard this module documents as
-  // read-only. findWorkspaceRoot + loadWorkspace answer the same question with no side effect.
-  const enforcePush = opts.enforcePush ?? approvalsEnforced(readTeamBlockFor(repoDir), "push");
-  // Default-OFF (design §8): with the class absent from `approvals.enforce` nothing below runs, no db
-  // handle is opened, and the result is byte-identical to the pre-LOOP-394 output (AC2).
   const approvals = enforcePush && range
-    ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, dbPath ?? resolveHubDbPath(repoDir), opts.actor ?? "unknown")
+    ? checkPushApprovals(parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range])), br, approvalsDbFile, opts.actor ?? "unknown", recordUnusable)
     : [];
 
   if (!hasUpstream) return { branch: br, ahead: 0, unknownRefs: [], findings: [], passengers, governance: [], approvals, unresolvedDefaultBranch, note: `no upstream origin/${br} — nothing to compare (first push of this branch)` };
@@ -346,8 +384,12 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const findings: PushGuardFinding[] = [];
   const unknownRefs: string[] = [];
   const db = dbPath ?? resolveHubDbPath(repoDir);
-  if (refs.size && existsSync(db)) {
-    const conn = openDb(db);
+  // Same degrade as the passenger axis (R5): an UNREADABLE db is reported as unverifiable refs, the
+  // path an absent one already takes, instead of throwing out of the guard and taking the approvals
+  // gate with it.
+  let conn = null;
+  if (refs.size && existsSync(db)) { try { conn = openDb(db); } catch { conn = null; } }
+  if (conn) {
     try {
       for (const [id, cs] of refs) {
         // ticket ids are a GLOBAL primary key across projects sharing one hub.db (seed.ts) — no project scope needed
@@ -441,7 +483,11 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
   let r: PushGuardResult;
   try { r = pushGuard(repo, branch, undefined, defaultBranch, { enforcePush, actor: process.env.DEVLOOP_ACTOR }); }
   catch (e) { console.error(`push-guard: ${(e as Error).message.split("\n")[0]}`); process.exit(2); }
-  if (asJson) { console.log(JSON.stringify(r, null, 2)); }
+  // AC2's byte-identity binds the --json surface too (R5, PR #283 review): with the gate off,
+  // `approvals` is not part of the advertised contract, so it is not emitted and a script or snapshot
+  // written against the pre-LOOP-394 shape keeps parsing unchanged. `undefined` drops the key while
+  // leaving every other field in its original position. With the gate on, the field IS the point.
+  if (asJson) { console.log(JSON.stringify(enforcePush ? r : { ...r, approvals: undefined }, null, 2)); }
   else {
     if (r.note) console.log(`push-guard: ${r.note}`);
     else console.log(`push-guard: ${r.ahead} commit(s) ahead of origin/${r.branch}`);

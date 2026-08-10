@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
-import { pushGuard, pushApprovalKey, approvalRefusalLine, APPROVALS_UNVERIFIABLE } from "../src/push-guard.ts";
+import { pushGuard, pushApprovalKey, approvalRefusalLine, approvalsRecordUnusable, APPROVALS_UNVERIFIABLE } from "../src/push-guard.ts";
 import { grantApproval, requestApproval, actionClasses } from "../src/approvals.ts";
 import { approvalsEnforced, validateTeamFile } from "../src/team-config.ts";
 import { SETTABLE } from "../src/team-edit.ts";
@@ -402,6 +402,42 @@ try {
     // AC2's byte-identity binds this path too — the widened range is reachable only with the switch on.
     ok(pushGuard(fresh, "dev-loop/AP-1", dbPath, "main", { enforcePush: false }).approvals.length === 0,
       "R4 enforcement OFF over the same repo stays silent");
+  }
+
+  // ── R5 (PR #283 review) — an UNINITIALISED record is not an empty one, either ────────────────────
+  //
+  // R1 checked `existsSync`, which is not the question the gate needs answered. `openDb` CREATES the
+  // current schema on whatever path it is handed, so a zero-byte or newly-created file opened clean,
+  // `listApprovals` returned nothing, and the gate read "no ticket is under approval" off a record it
+  // had just fabricated — `--strict` exited 0 with the real record still unread.
+  {
+    const zero = join(ROOT, "zero-byte-hub.db");
+    writeFileSync(zero, "");
+    const notDb = join(ROOT, "not-a-database.db");
+    writeFileSync(notDb, "this is not a sqlite file\n");
+
+    for (const [label, path] of [["zero-byte", zero], ["non-database", notDb]] as const) {
+      const on = pushGuard(work, "dev-loop/AP-1", path, "main", { enforcePush: true, actor: "senior-dev" });
+      ok(on.approvals.length > 0 && on.approvals.every((a) => a.state === APPROVALS_UNVERIFIABLE),
+        `R5 enforcement ON + a ${label} record → REFUSED as unverifiable, not read as "nothing is gated"`);
+      ok(pushGuard(work, "dev-loop/AP-1", path, "main", { enforcePush: false }).approvals.length === 0,
+        `R5 enforcement OFF + a ${label} record → still silent (AC2)`);
+    }
+
+    // The probe must not be what CREATES the record it is judging. On a FRESH zero-byte file (the ones
+    // above have since been through pushGuard, whose passenger axis still opens the path via openDb and
+    // does write a schema into it — that is openDb's contract, and the reason the probe has to run
+    // FIRST rather than being made safe afterwards).
+    const untouched = join(ROOT, "untouched-zero.db");
+    writeFileSync(untouched, "");
+    ok(approvalsRecordUnusable(untouched) !== null && readFileSync(untouched, "utf8") === "",
+      "R5 the probe is read-only — it neither creates the schema nor migrates the file it rejects");
+    ok(approvalsRecordUnusable(untouched) !== null,
+      "R5 …and it says so again on a second look — the first probe did not make the file usable");
+
+    // …and the real record still answers usable, or the check would just be refusing everything.
+    ok(approvalsRecordUnusable(dbPath) === null,
+      "R5 a real hub record probes as usable — the gate still evaluates instead of blanket-refusing");
   }
 
 } catch (e) {
