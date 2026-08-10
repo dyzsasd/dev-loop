@@ -273,82 +273,64 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   context or cost figure that does not split by lane is averaging two delivery regimes.
 - **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
   `Goals` statement of this priority is deliberately number-free; the live values are here.
-  Measured 2026-08-10T03:10Z over the 7d team ledger (838 fires) via `dev-loop metrics --window
-  7d`: **fire success 50%** (`successRate` 0.5012; 65% over 538 fires when Goals was written
+  Measured 2026-08-10T03:52Z over the 7d team ledger (**851 fires**) via `dev-loop metrics --window
+  7d`: **fire success 50%** (`successRate` 0.4959; 65% over 538 fires when Goals was written
   2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
-  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover 173 of 838 fires; the other
-  **665 carry `errorClass: null`** (LOOP-464), so the classes describe 21% of the window. `stalled`
-  is the largest class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 +
-  LOOP-463). **Coverage decays while an outage runs, and the cleanest demonstration is this pass:**
-  against the 03:15Z reading the window grew 831 → 838 fires while the classified count held at
-  **exactly 173** — every one of the +7 arrivals carried `errorClass: null`. The three `openrouter`
-  lanes (junior-dev, qa, sweep) have fired every ~5 min for **35.4 h**, each returning in ~6 s with
-  no class, so the denominator is fed by the outage while the numerator stands still. Compare two
-  readings only alongside the fire counts they were measured over.
+  `timeout` ×4, `network` ×2, `auth` ×1, `budget-deadline` ×1 — cover **173 of 851** fires; the other
+  **678 carry `errorClass: null`** (LOOP-464), so the classes describe **20%** of the window.
+  `stalled` is the largest class and the only one with no owner (**LOOP-483**, parked behind
+  LOOP-464 + LOOP-463). **The numerator is now demonstrably frozen, not merely lagging:** across
+  three readings this morning the window grew **831 → 838 → 851** fires while the classified count
+  held at **exactly 173 every time** — twenty consecutive arrivals, none classified, coverage
+  21% → 20%. The three `openrouter` lanes (junior-dev, qa, sweep) have returned in ~6 s with no
+  class since the fixed anchor **2026-08-08 16:36Z** (≈35 h; trailing sub-60 s streaks 114 / 113 /
+  20), so the outage feeds the denominator and nothing feeds the numerator. Compare two readings
+  only alongside the fire counts they were measured over.
   First program: **3 of 5 shipped** — LOOP-382 Done · LOOP-383 Done · LOOP-385 Done (`6a4977d`,
   verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo.
+- **The `local` file-board retirement is DELIVERED, not merely merged (LOOP-465, `0cac647`).**
+  Verified 2026-08-10 on the installed tree and on the corpus of the fire that verified it: the
+  installed and merged renders are byte-identical for all ten agents (1,011,186 B total; pm
+  129,073 B/fire), `references/backend-local.md` is absent from the installed tree, and a control
+  against the pre-retirement tree `fc170bb` returns the predicted per-agent savings (pm −2,368 B).
+  This is the third rung — source, installed `dist/`, observed effect — reached for this change.
 
+### 2026-08-10 (pm, one-hundred-twenty-third fire): the retirement measured in the corpus that read it
 
-### 2026-08-10 (pm, one-hundred-twenty-first fire): the coverage number moves without the taxonomy changing
+**The `polish-performance` lens filed nothing, and closed a standing question instead.** LOOP-465's
+retirement of the `local` file board had been carried here as merged-but-unverified since `0cac647`
+— the standing rule is that a ticket closes on merge and delivery is a separate rung. It is now
+**delivered**, measured on this fire's own corpus: `dev-loop conventions --agent <a> --root <tree>
+--json` renders the installed tree and the merged tree at **byte-identical** sizes for all ten
+agents (pm 129,073 · qa 121,289 · sweep 116,057 · dev 105,454 · senior-dev 109,117 · junior-dev
+107,314 · ops 100,659 · reflect 80,449 · architect 77,843 · communication 63,931 — **1,011,186 B**
+total), and `references/backend-local.md` is absent from the installed tree. **The control is what
+makes that evidence rather than a null result:** a zero delta across ten agents is also exactly what
+an ignored `--root` produces, so the same command was pointed at `fc170bb` (the last pre-retirement
+tree) and returned pm −2,368 · qa −2,298 · senior-dev −2,126 — the per-agent savings predicted when
+the work landed. The flag discriminates; the trees agree because they are the same.
 
-**The `data-analytics` lens filed nothing, and that is the sweep's result.** Resumed from pass 89's
-partial pass, it exercised `dev-loop metrics` at three windows and a full `doctor` read against a
-board where two of five lanes are alive. Every blind spot it surfaced already has an owner: the 24 h
-view printing `success 17%` beside `errors: budget-deadline×1` is **LOOP-464**; the 7 d per-agent
-medians ranking the three dead lanes above the two live ones is **LOOP-447**, re-measured onto that
-ticket at pass 89; the queue-age-versus-outage-age gap is **LOOP-467**. Two candidates died on
-inspection rather than becoming tickets — `success` already discounts `suspectError` (17% of 263 =
-45, and 45 + 1 + 217 = 263, so the headline is honest), and the `$/accepted change` line discloses
-its own short denominator (*"incomplete history: ledger begins 2026-08-04"*). With 48 Backlog rows
-and both tiers over the §5a cap, confirming an instrument is honest is worth more than a 49th row.
+**Cost picture from the same lens, filed nowhere because nothing is wrong.** Operator surfaces
+answer in 0.04–4.0 s (`doctor` 4.0 · `metrics` 2.6 · `queue` 0.11 · `tickets` 0.10 · `/api/tickets`
+0.04). Per-fire state: `hub.db` 9.85 MB over 480 tickets, `fires.jsonl` 499 KB over 1,386 rows.
 
-**What the re-measure produced instead.** The `Observable-and-safe` bullet moved 52% → 50% success
-and 172/807 → 173/831 classified in 78 minutes, and the mechanism behind that is worth more than
-either value: the window's net growth was **+24 fires and +23 `errorClass: null`**. The three
-`openrouter` lanes have fired every ~5 min for 34.6 h, each returning in ~6 s with no class, so the
-denominator grows from the outage while the numerator stands still. The coverage percentage is a
-property of the outage's length as much as of the taxonomy's reach. That is the operator's LOOP-494
-coverage rule holding one layer deeper than it was written: a number needs its coverage, and the
-coverage needs the population it was measured over.
+**Two existing rows re-measured rather than duplicated.** **LOOP-419** reproduces and is worse than
+filed: `/api/tickets` returns `X-Total-Count: 480` on *every* filtered request, and because the four
+filters run in JS after the SQL `LIMIT`, **196 of 341 `Done` rows are unreachable** through the
+filter at the default limit. The sibling fix `dfed177` (LOOP-370) touched `views/board.ts` only and
+never reached this endpoint. Recorded there with a correction of my own first table, whose "truth"
+column was itself a capped read — `dev-loop tickets --state Done --json` returned exactly 250, the
+CLI's own cap, quoted as ground truth. **LOOP-487**: the worktree population grew 31 → **80 dirs /
+804 MB**, while the `node_modules` symlink this ticket blames is down to **one** — so the filed
+cause no longer explains the count. 58 of those dirs are empty husks invisible to `git worktree
+list` (worktrees nest as `wt/<ticket>/<repo-ref>`, so removal leaves `<ticket>/` behind), 17
+registrations point at absent directories, and a single tree is 72% of the bytes.
 
-**A measurement error caught inside the fire, distilled as STANDING RULE 39.** The first read of
-`.dev-loop/team/fires.jsonl` assumed a `durationSec` field and normalised anything above 10,000 as
-milliseconds. The ledger's field is `durationMs`, so a 5,336 ms fire scored as 5,336 s of work and
-the table reported junior-dev, qa and sweep as having done real work 0.2 h ago with zero trailing
-short fires — a clean bill of health for three lanes dead 34.6 h. A wrong unit does not announce
-itself, and it failed toward health, which is the direction that ends a lens early.
-
-**Board and protocol, unchanged and clean.** §9c: eight parked tickets, all eight holding live edges
-to open blockers (LOOP-394 In Progress · LOOP-401/468/472/479 Todo · LOOP-464 Backlog · LOOP-463
-Human-Blocked), zero unpark candidates, zero zero-edge rows. `needs-pm` empty on both scans. Job A
-empty — the four In Review rows are all `qa`-owned and belong to a verifier that has not fired in
-34.6 h. Promotion stayed closed: unblocked Todo 27 (senior 14, junior 13) against the default cap of
-10 per tier.
-
-### 2026-08-10 (pm, one-hundred-twenty-second fire): three checks on one file, none asking whether it is current
-
-**The `consistency` lens filed one ticket, LOOP-498.** The lessons library — the loop's only
-cross-fire learning mechanism, loaded into every fire's boot corpus — has not been written since
-2026-08-01T02:19Z, and `dev-loop doctor` reports `DOCTOR_OK`. `reflect` is its sole writer and has
-fired **6 times all-time, last 218.7 h ago**. It is not down with the `openrouter` lanes: it runs
-`claude`/`claude-opus-5`, the lane pm and senior-dev are firing on now, and is simply absent from
-`core` (`agent-roster.ts:21`) — the set this workspace launches — while
-`team.agents.reflect.cadence: "1d"` stays live config naming a schedule nothing runs. The three
-guards on that file each test a real property and none tests currency, distilled as **STANDING
-RULE 40** above. It degrades rather than stalls: §14 expires a rule whose pattern has not recurred
-in ~2 weeks, every rule in the library is dated 2026-07-31 or 08-01, so past ~2026-08-14 the file
-serves every fire rules its own governing rule says should be gone, with no agent able to prune them.
-
-**One candidate killed on inspection — do not re-derive.** W03 also emitting for `team.bootCorpus`
-(`lessons.ts:85`) looked like a second instance of LOOP-440's two-unrelated-checks-one-code defect.
-It is not: same module, same budget namespace, and a documented invariant — *"an ABSENT W03 must not
-read as 'the push budget is honoured'"* (`lessons.ts:81`). A code shared deliberately inside one
-module is not a code collided across two.
-
-**Board and protocol, unchanged.** §9c: eight parked tickets, all eight holding live edges to open
-blockers, zero unpark candidates, zero zero-edge rows. `needs-pm` empty on both scans. Job A empty —
-the four In Review rows remain `qa`-owned behind a verifier dark 35.4 h. Promotion stayed closed:
-unblocked Todo 27 (senior 14, junior 13) against the default cap of 10 per tier; Backlog 49.
+**Board and protocol.** §9c: eight parked tickets, all holding live edges to open blockers, zero
+unpark candidates. `needs-pm` empty on both scans; Job A empty. **The board moved mid-fire and the
+late re-read caught it** — LOOP-499 was ruled at 03:30:34Z, four minutes after a boot scan that read
+it parked (see the Decisions entry below). Promotion stayed closed: unblocked Todo 27 → 28 (senior
+15 after the unpark, junior 13) against the default cap of 10 per tier; Backlog 50.
 
 ## Personas
 
@@ -735,6 +717,25 @@ unblocked Todo 27 (senior 14, junior 13) against the default cap of 10 per tier;
     (LOOP-385), the `local` backend's retirement verified across the taught surface (LOOP-465), and
     the north star shedding facts it cannot keep (LOOP-494) → `2026-08.md`, incl. block **AX**.
     Doctrine: RULES 35–38.
+- **2026-08-10 — operator ruling on LOOP-499: build the seam, and close the silent-enable window
+  in the same arc.** `approvals.enforce: ["push"]` reaches no reader on `landing:"pr"` — the mode
+  this workspace runs — because the pr-mode ship path pushes the ticket branch with a bare
+  `git push`. Two remedies were on the table: a SKILL edit adding the guard call, or a code seam
+  owning guard-and-push as one verb. **The operator chose the seam** and explicitly declined the
+  SKILL-edit interim: this workspace sets no `approvals.enforce` and LOOP-394 AC6(c) holds the
+  global default empty, so the gap is latent here, and a prescribed guard-then-push two-step is the
+  exact shape LOOP-448 just retired. Three conditions ride the design (it extends
+  `hubDoc:design/approvals`): one call owning readiness + guard + push, pr-merge-shaped, with
+  nothing pushed on a non-zero exit; a doctor W-code or config-write refusal naming
+  *"enforce:push configured but the pr-mode ship path reaches no reader"*, so opting in is loud
+  before it is safe; and the §17 SKILL/§12b adoption pre-approved **in principle**, needing the
+  operator's apply rather than a fresh decision round. **The generalisable call is the one STANDING
+  RULE 29 already names, applied one level up:** a guard every future ship path must remember to
+  call is the same defect as a switch with no reader. Recorded because it decides the shape of every
+  future gate, not just this one. PM encoded the ruling as AC1–AC4 on the ticket, retired the stale
+  `external-prereq` park labels the unpark left behind, and stripped the `Bail-shape:` markers that
+  made a pickable row read as parked.
+
   - **⚠️ LIVE HOLDS carried out of these rolls** — the residuals that are *instructions*, not ticket
     IDs a board query already returns. **(1)** At LOOP-394's verify, hold its **AC6(c) default of an
     EMPTY `approvals.enforce`** — that default is what bounds LOOP-489's window, and it is the kind
