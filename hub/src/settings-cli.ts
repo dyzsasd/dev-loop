@@ -57,7 +57,11 @@ type SettingSpec = { re: RegExp; kind: SettingKind; note: string; validate?: (v:
 //     Both HALVES are checked against the real `STATES` list, not just the delimiter: `Todo->Review` has a
 //     perfectly good `->` and still never fires, because the consumer does an exact `${from}->${to}` lookup
 //     and `Review` is not a state. A delimiter-only check would refuse the typo an operator notices and
-//     accept the one they do not.
+//     accept the one they do not. The same argument reaches one more key shape that survives BOTH checks:
+//     `Todo->Todo` names two real states and is still permanently inert, because the consumer reaches the
+//     lookup only on an actual state CHANGE (`agentops.ts:366` guards it with `next.state !== cur.state`).
+//     Validating the shape of a key is not validating its effect — a self-transition is refused here for
+//     exactly the reason the nonexistent state is.
 const TRANSITION_KEY_RE = /^([^>]+)->(.+)$/;
 function validateTransitions(v: unknown, path: string): void {
   for (const [k, dir] of Object.entries(v as Record<string, unknown>)) {
@@ -66,6 +70,7 @@ function validateTransitions(v: unknown, path: string): void {
     for (const [half, state] of [["From", m[1]], ["To", m[2]]] as const) {
       if (!(STATES as readonly string[]).includes(state)) die(`${path}: '${k}' names '${state}' as its ${half} state, which is not a board state — the consumer looks the key up exactly, so this directive would never fire. Legal states: ${STATES.join(", ")}`);
     }
+    if (m[1] === m[2]) die(`${path}: '${k}' is a self-transition — the assignTo directive is consulted only when the state actually changes (agentops.ts guards it with next.state !== cur.state), so this rule could never fire. Name two different states.`);
     if (dir === null || typeof dir !== "object" || Array.isArray(dir)) die(`${path}: '${k}' must map to an object like {"assignTo":"owner"}, got ${dir === null ? "null" : Array.isArray(dir) ? "an array" : typeof dir}`);
     const assignTo = (dir as Record<string, unknown>).assignTo;
     if (assignTo !== undefined && assignTo !== null && typeof assignTo !== "string") die(`${path}: '${k}'.assignTo must be a string ("owner", "self", or an actor handle), got ${typeof assignTo}`);
@@ -97,6 +102,23 @@ const OWNED_ELSEWHERE: ReadonlyArray<{ re: RegExp; owner: string }> = [
 
 const PLAIN_DECIMAL_RE = /^[+-]?\d+(\.\d+)?$/; // LOOP-245: Number("0x64") === 100 — reject hex/octal/exponent
 
+// The ceiling on an `hours` value. Every consumer of one turns it into milliseconds the same way
+// (`hours * 3_600_000`) and then does time arithmetic with the product — `noProgressWindowHours` reaches
+// `new Date(nowMs - windowMs).toISOString()` (daemon-notifiers.ts:174), which THROWS a RangeError once the
+// operand leaves the ±8.64e15 ms Date range. A throw there is not a loud failure: the tick's `.catch` logs
+// and retries, so `settings set noProgressWindowHours 3000000000` is accepted, survives a restart, and then
+// silently disables the very detector it was meant to configure — one log line per hour, forever.
+//
+// 10 years is the ceiling rather than the representability limit (~2.4e9 h) because the representability
+// limit only stops the crash. A window measured against a loop whose fires are minutes apart cannot
+// distinguish any two states of that loop once it spans years: the no-progress detector counts Done
+// transitions inside the window, so a decade-wide window is satisfied by one ticket closed years ago and
+// never alerts again. Past this bound the setting stops configuring the detector and starts disabling it,
+// which is the same defect in a quieter form. It also sits six orders of magnitude inside the Date range,
+// so every downstream ms/date computation is valid by construction, and four above the largest cadence any
+// consumer documents (the 24h Human-Blocked reminder). The real "off" switch is 0, and the refusal says so.
+const MAX_SETTING_HOURS = 87_600;
+
 // argv string → the JSON value to store. Every failure is a hard refusal, never a coercion.
 export function parseSettingValue(kind: SettingKind, raw: string, path: string, validate?: (v: unknown, path: string) => void): unknown {
   switch (kind) {
@@ -111,6 +133,7 @@ export function parseSettingValue(kind: SettingKind, raw: string, path: string, 
       if (n < 0) return die(`${path} cannot be negative, got ${n}`);
       if (kind === "count" && (n <= 0 || !Number.isInteger(n))) return die(`${path} takes a positive integer, got '${raw}'`);
       if (kind === "ratio" && n > 1) return die(`${path} is a ratio in 0–1, got ${n}`);
+      if (kind === "hours" && n > MAX_SETTING_HOURS) return die(`${path} cannot exceed ${MAX_SETTING_HOURS} hours (10 years), got ${n} — the daemon turns it into ${n} × 3,600,000 ms and does date arithmetic with the product, so a larger window silently disables the detector it configures instead of widening it. To switch it off, use: dev-loop settings set ${path} 0`);
       // A ratio of 0 is refused rather than stored, because the reader will not honour it: daemon bootstrap
       // applies the setting only when `Number(fh.threshold) > 0` (daemon.ts:983), so a stored 0 is silently
       // replaced by the 0.5 default on the next restart — the operator would read `settings get` and see a
@@ -250,6 +273,9 @@ WHEN A CHANGE TAKES EFFECT differs by key, so this verb reports it rather than p
 
 Settable paths:
 ${SETTABLE_SETTINGS.map((s) => `  ${s.re.source.replace(/^\^|\$$/g, "").replace(/\\/g, "")}\n      ${s.note}`).join("\n")}
+  An '…Hours' value is 0–${MAX_SETTING_HOURS} (10 years). The daemon turns it into hours × 3,600,000 ms and
+  does date arithmetic with the product, so past that ceiling the setting silently disables the detector
+  it configures rather than widening its window. 0 is the opt-out that every reader honours.
 
 Examples:
   dev-loop settings set humanWrite.enabled true      # open the board's comment/move/assign forms

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 import { humanWriteEnabled } from "../src/daemon.ts";
-import { resolveBlockedReminderHours } from "../src/daemon-notifiers.ts";
+import { resolveBlockedReminderHours, noProgressNotifyTick } from "../src/daemon-notifiers.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 import { restartHint } from "../src/settings-cli.ts"; // the SHIPPED hint builder, never a local copy (LOOP-429)
 import { TEAM_INTAKE_PROJECT } from "../src/team-config.ts";
@@ -207,10 +207,54 @@ const SELF = fileURLToPath(import.meta.url);
   ok(badFrom.status === 2 && /not a board state/.test(badFrom.stderr),
     "transitions: …and a miscased From state too — the check is both halves, against db.ts's STATES");
   ok(/Legal states:/.test(badTo.stderr), "transitions: …and the refusal prints the legal state list, so the operator can correct it without reading the source");
+  // The last key shape that survives BOTH checks above: two real states, correct delimiter, and still
+  // permanently inert. agentops.ts:366 reaches the directive lookup only inside `next.state !== cur.state`,
+  // so a self-transition can never fire — as inert as `Todo->Review`, and harder for the operator to spot.
+  const selfTransition = run("set", "workflow.transitions", '{"Todo->Todo":{"assignTo":"owner"}}');
+  ok(selfTransition.status === 2 && /self-transition/.test(selfTransition.stderr),
+    `transitions: a self-transition is refused — both halves name real states and the rule still could never fire (got ${selfTransition.status})`);
   const goodDirective = run("set", "workflow.transitions", '{"In Review->Done":{"assignTo":"owner"}}');
   ok(goodDirective.status === 0, `transitions: the valid directive is still accepted (got ${goodDirective.status}: ${goodDirective.stderr.trim()})`);
   ok(((settingsRow().workflow as { transitions?: Record<string, unknown> })?.transitions ?? {})["In Review->Done"] !== undefined,
     "transitions: …and it is stored under the workflow block");
+
+  // ── The hours ceiling: a stored window the consumer's date arithmetic cannot represent ────────
+  // Same class as everything above, one layer further out. `noProgressWindowHours` is multiplied by
+  // 3,600,000 and reaches `new Date(nowMs - windowMs).toISOString()`, which THROWS past the ±8.64e15 ms
+  // Date range. The throw is caught by the tick's `.catch` and retried, so the accepted setting does not
+  // fail loudly — it disables the detector it was meant to configure, one log line per hour.
+  const hugeHours = 3_000_000_000;
+  const tooBig = run("set", "noProgressWindowHours", String(hugeHours));
+  ok(tooBig.status === 2 && /cannot exceed 87600 hours/.test(tooBig.stderr),
+    `hours: a window past the ceiling is refused at the writer (got ${tooBig.status}: ${tooBig.stderr.trim().slice(0, 90)})`);
+  ok(/settings set noProgressWindowHours 0/.test(tooBig.stderr),
+    "hours: …and the refusal names the opt-out that every reader DOES honour, so 'switch it off' has a real spelling");
+  ok(run("set", "noProgressWindowHours", "87600").status === 0, "hours: the ceiling itself is accepted — the bound is inclusive, not off by one");
+  ok(run("set", "noProgressWindowHours", "87601").status === 2, "hours: …and one hour past it is not");
+  ok(run("set", "noProgressWindowHours", "0").status === 0, "hours: 0 (the documented opt-out) is still accepted");
+  ok(run("set", "humanBlockedReminderHours", String(hugeHours)).status === 2 && run("set", "fireHealth.windowHours", String(hugeHours)).status === 2,
+    "hours: the ceiling is a property of the KIND, not of one key — every hours setting feeds the same ms arithmetic");
+  // The decisive half: the refused value is one the SHIPPED consumer cannot process. Run the real tick
+  // (never a local copy of its arithmetic — LOOP-429) with the window the writer just rejected, and with
+  // one it accepts. A `notify` target is required only because resolveTarget() short-circuits before the
+  // date math; the throw lands on the sinceIso line, so no request is ever made.
+  {
+    const consumerDb = openDb(dbPath);
+    const notify = { type: "slack", webhook: "http://127.0.0.1:1/never-reached" };
+    const tick = (hours: number) => noProgressNotifyTick({
+      writeDb: consumerDb, projectId, projectKey: "p", baseUrl: "http://127.0.0.1:8787",
+      windowMs: hours * 3_600_000, nowMs: Date.now(), notify,
+      fetchImpl: (async () => ({ ok: true, status: 200, text: async () => "ok" })) as unknown as Parameters<typeof noProgressNotifyTick>[0]["fetchImpl"],
+    });
+    let threw = "";
+    await tick(hugeHours).catch((e: unknown) => { threw = String((e as Error)?.name ?? e); });
+    ok(threw === "RangeError",
+      `hours: the shipped no-progress tick THROWS a ${threw || "(nothing)"} on the window the writer refuses — the ceiling tracks a real consumer limit, not a taste call`);
+    let acceptedThrew = "";
+    await tick(87_600).catch((e: unknown) => { acceptedThrew = String((e as Error)?.name ?? e); });
+    ok(acceptedThrew === "", `hours: …and the largest window the writer ACCEPTS runs clean through the same tick (got ${acceptedThrew})`);
+    consumerDb.close();
+  }
 
   // A ratio of 0 is refused because daemon.ts:983 applies the setting only when > 0 — storing it would show
   // the operator a value the running daemon silently replaces with the 0.5 default.
