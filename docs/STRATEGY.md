@@ -384,6 +384,45 @@ needs the warning's own evidence re-derived — which is why the correction is d
 supersedes rather than being edited in place. `Goals` was left untouched: it is a direction section, and
 its first-program tally (2 of 5) is still accurate.
 
+### 2026-08-10 (pm, one-hundred-fifteenth fire): the release resume is tag-anchored, and its one in-body guard is pinned by an assertion that cannot read it
+
+**LOOP-385 verified Done** (`6a4977d`) — the third `sensitive` increment closed in three fires, and the
+one with the widest blast radius: it decides which tree becomes the published artifact of a public npm
+package. A `bump: explicit` resume now checks out `refs/tags/v<version>` and publishes that tree. The
+branch tip is not consulted, so a commit landing after the tag no longer breaks every future resume
+dispatch — the failure that cost release 1.15.1 and produced the hand-pushed `release/v1.15.1-resume`
+workaround branch. `hub/src/release-mode.ts` makes the decision once for the whole job from four facts,
+and carries no input for a branch tip, so the defect is now excluded by the type rather than by a rule
+someone has to remember. All four ACs verified against the merged tree; state established is **merged,
+not yet published** (the resume path is exercised by the next dispatch, and no fire may cut a release).
+
+**Two design choices in it are worth carrying.** The two `HEAD == tag` assertions were kept rather than
+deleted: after the tag checkout they hold by construction, which is a stronger guarantee than the branch
+still matching. And AC2 needed no code change — the existing single `git push --atomic` of branch+tag
+already bounds the fresh-release race, because a rejected branch update takes the tag with it and leaves
+no half-tagged state. That claim is now falsifiable: de-atomising the push into two commands turns a
+named assertion red. `docs/RELEASING.md` records both, and states explicitly that the workaround branch
+should not be re-invented.
+
+**A workflow-shape test that reads step-level gates is blind to a guard inside a step body
+(LOOP-490).** Four steps carry the fix on their `if: env.RELEASE_MODE` and are pinned. One step —
+`Verify remote release refs before publish` — must run on both paths, so its fix is an
+`if [ "$RELEASE_MODE" = "fresh" ]` around the remote-branch comparison *inside* the body. Its only
+assertion checks that `REMOTE_TAG` appears and that no step-level gate does; neither term can observe
+the conditional. Unwrapping it on a scratch copy restores this ticket's exact defect in the last gate
+before an irrevocable publish, and the suite stays green at exit 0. Two controls establish that the
+harness works and this one arm does not: flipping `resume` to `fresh` in the decision module fails, and
+de-atomising the push fails with its own message. The shipped workflow is correct, so this is a
+regression guard rather than an AC failure — the standing rule that acceptance criteria pin additions
+and not removals, measured once more.
+
+**LOOP-486 is now observed in both directions.** Pass 86's own docs-only push to `main` was cancelled
+by the code push that followed it eight minutes later, and this fire found `6a4977d`'s verification of
+the release path still in flight. A docs-only commit and a code commit cancel each other's runs
+symmetrically under `cancel-in-progress`, and the docs side is the one that can silently leave a
+supply-chain change unverified on `main`. Reading `gh run list --branch main` before a doc-land is the
+working rule until that ticket lands.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
