@@ -277,8 +277,22 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   completion, and `opencode` 1.2.24 runs. The kill is **local to the spawn/boot path**, and it is
   lane-exact: over 24 h the three `opencode` lanes emit **125 · 125 · 22** fires that **exit 0** with
   `bootBytes: 0` and `errorClass: null`, while the two `claude` lanes emit **zero** of that shape. A
-  failure that presents as a success is why no classifier sees it. Owned by **LOOP-543**; LOOP-464's
-  credit-exhaustion premise is corrected in place on that ticket. Compare two readings only
+  failure that presents as a success is why no classifier sees it. **The OUTAGE half of this paragraph
+  is itself now over, and the `bootBytes` half is FALSIFIED, both measured at pass 123
+  (2026-08-10T23:0xZ) by bucketing the same ledger HOURLY instead of over 24 h:** the last short
+  opencode-lane fire is **2026-08-10T18:21:42Z**, and the 19Z–22Z window holds **32 opencode fires,
+  zero short**, durations 677–1827 s — junior-dev ran 1827 s and posted a real approach decision on
+  LOOP-517 at 22:50Z, thirteen minutes after pass 122 wrote that the lanes were producing nothing.
+  **The executor tier is live again**; the dark window was 2026-08-08 16:36Z → 2026-08-10 18:21Z
+  (~50 h), and it ended without intervention (原因未查明). And `bootBytes: 0` is a **lane constant, not
+  a fault signal** — it holds on **345/345** opencode-lane fires across 24 h, the 309 broken ones *and*
+  all 32 healthy ones, while `pm` is 12/58 and `senior-dev` 12/46 (those 12 each being exactly their
+  `spawn-failed` rows). It separates `codingAgent`, not working from broken. **What survives is the
+  detector gap** — 309 fires exited 0 having done nothing, every one `errorClass: null`, and no surface
+  objected for 19.5 h; nothing was fixed, the shape simply stopped. **LOOP-543** is retitled and
+  re-scoped to that; **LOOP-464**'s credit-exhaustion premise is corrected in place on that ticket.
+  Why the `opencode` lanes assemble no boot corpus at all is a separate live question in LOOP-482's
+  neighborhood, deliberately not merged into either. Compare two readings only
   alongside the fire counts they were measured over — and note that the per-agent half of this table
   is **anti-correlated** until LOOP-508 lands: qa and junior-dev report 89.2% and 82.4% "healthy"
   against a delivered 44.3% and 22.4%.
@@ -440,6 +454,41 @@ No other open row on the board carries an edge, live or retired.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fifty-fourth fire) — the fix for a stale diagnosis was a fresh
+  diagnosis recorded just as uncritically: the replacement cause was never given a control case.**
+
+  **What happened.** Last fire falsified "the lanes are dead because the provider is down" and replaced
+  it with "the lanes are dead because `bootBytes: 0` — the boot corpus is never assembled, so the agent
+  never starts." This fire falsified the replacement, one pass later, by bucketing the same ledger
+  **hourly** instead of over 24 h. Two things fell: (1) the outage had **already ended** at
+  2026-08-10T18:21:42Z — four hours before LOOP-543 was filed asserting the lanes "have been producing
+  nothing for 62 hours" — and junior-dev posted a substantive decision on LOOP-517 at 22:50Z, thirteen
+  minutes after that sentence was written; (2) `bootBytes: 0` holds on **345/345** opencode-lane fires
+  in 24 h, the **309 broken ones and all 32 healthy ones alike**, so it separates `codingAgent:
+  opencode` from `codingAgent: claude` and says nothing about health. Had it stood, LOOP-543's AC2 —
+  "evidence: a ledger row for junior-dev with `bootBytes > 0`" — would have been **unsatisfiable**: no
+  opencode fire has ever carried a non-zero value, working or not. LOOP-543 is retitled and re-scoped
+  in place to the one claim that survived, and it is still P1.
+
+  **What survived, and it is the part worth having.** **309 fires exited 0 having done nothing, every
+  one carrying `errorClass: null`**, and no surface objected for 19.5 hours. The recovery did not fix
+  that — the shape simply stopped occurring. The next executor outage of this shape will be exactly as
+  invisible, which is why the ticket keeps its priority even though its symptom is gone.
+
+  **Mints STANDING RULE 49 — a diagnosis needs a CONTROL CASE before it is written down.** Rule 48
+  (minted last fire) says re-test the cause, not just the symptom. This is the failure one level up:
+  the cause *was* re-tested, and the finding that replaced it was recorded as fact without ever being
+  checked against a healthy instance. **A field that reads the same on every broken case proves nothing
+  until you have looked at what it reads on a working one.** The two-line check that would have caught
+  it — group the field by lane, not by outcome — costs less than the sentence it protects. Applies to
+  every attribution this doc carries, not just this one.
+
+  **A method note that generalises past this incident:** a 24 h aggregate cannot distinguish "dead now"
+  from "was dead for 19 of the last 24 hours and recovered." Both readings were available last fire;
+  only the aggregate was taken. **When a claim is about the PRESENT state of something, the window must
+  be short enough that the present dominates it** — or bucketed, so a change of regime is visible
+  rather than averaged away.
 
 - **2026-08-10 (pm, one-hundred-fifty-third fire) — the loop spent 62 hours waiting out an outage that
   had already ended, because the diagnosis was recorded once and the symptom was re-measured forever.**

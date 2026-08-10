@@ -149,6 +149,53 @@ export function parseDirtyPaths(porcelain: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * LOOP-443 — "nothing to land" is a claim about the CHECKOUT, not about one branch.
+ *
+ * Step 1 reads `origin/<db>...<db>` and nothing else, so an empty result means "<db> has nothing
+ * ahead of origin" — which is a different statement from "there is nothing to land" the moment
+ * PM's doc commit is somewhere other than <db>. That state is reachable by the mechanism LOOP-369
+ * measured, with the ORDER reversed: when another fire checks the shared checkout onto its ticket
+ * branch BEFORE PM commits, `git commit` puts the doc commit on THAT branch, `origin/<db>...<db>`
+ * is empty, and the verb exits 0 claiming success. The doc then goes stale for every consumer while
+ * PM reports a land from the exit code.
+ *
+ * Scope — the checkout's own HEAD, and only HEAD. This is narrower than "any local ref", and the
+ * narrowing is load-bearing rather than economical. Measured on this workspace 2026-08-10: 168
+ * doc-touching commits on 35 of 151 local branches are unreachable from `origin/main`, because
+ * doc-land REBASES before it pushes — the pre-rebase copy stays on whatever branch referenced it,
+ * and the replayed commit lands under a different sha AND a different patch-id (the rebase changes
+ * the diff's context lines, so `--cherry-pick` does not pair them either). A scan across local refs
+ * therefore refuses every future land in this workspace. HEAD is both free of that population (the
+ * shared checkout sits on <db> in the normal state) and the exact place `git commit` would have put
+ * PM's commit — the state the verb was asked to land FROM.
+ *
+ * Read-only git plumbing only (AC4): symbolic-ref, rev-list, log. Nothing here writes HEAD, a ref,
+ * the index, or the working tree — LOOP-325's property is preserved.
+ */
+export function findUnlandedDocCommit(
+  git: (args: string[]) => string,
+  defaultBranch: string,
+  docPaths: string[],
+): { branch: string | null; commit: string; subject: string } | null {
+  // A detached HEAD exits 1 here — an expected state, not a failure, so it is the one caught call.
+  let branch: string | null = null;
+  try { branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"]) || null; } catch { branch = null; }
+  if (branch === defaultBranch) return null;
+
+  // The most recent doc commit reachable from HEAD but not from origin/<db>. `--no-merges` because a
+  // merge that only carries origin's already-landed content is not an unlanded edit (measured: a
+  // `Merge origin/main into dev-loop/LOOP-469` commit whose doc blob is byte-identical to one on
+  // origin/main). The pathspec is the SAME allowlist Step 1 enforces, so a code-only feature branch
+  // — the normal state of every dev worktree — cannot trip this (AC3).
+  const sha = git(["rev-list", "--no-merges", "-1", "HEAD", `^origin/${defaultBranch}`, "--", ...docPaths]);
+  if (!sha) return null;
+
+  let subject = "";
+  try { subject = git(["log", "-1", "--format=%s", sha]); } catch { /* the subject is a nicety */ }
+  return { branch, commit: sha, subject };
+}
+
 export async function docLand(argv: string[]): Promise<number> {
   let repoRef: string | undefined;
   let dryRun = false;
@@ -230,6 +277,22 @@ Design: landing-discipline §4.6 (LOOP-57).`);
   const changedFiles = diffOutput ? diffOutput.split("\n").filter(Boolean) : [];
 
   if (changedFiles.length === 0) {
+    // LOOP-443 — before claiming "nothing to land", establish that there is genuinely nothing to
+    // land. The verb already refuses one step further in when the doc is dirty ("that is an
+    // unlanded doc edit, and landing around it would silently drop it"); a doc edit COMMITTED to
+    // the wrong branch is the same unlanded edit, and this is the path that used to exit 0 on it.
+    const stranded = findUnlandedDocCommit(git, defaultBranch, [docRel, archivePrefix]);
+    if (stranded) {
+      const where = stranded.branch ? `branch '${stranded.branch}'` : "a detached HEAD";
+      process.stderr.write(`doc-land: REFUSED — the shared checkout is on ${where}, not '${defaultBranch}', and carries a doc commit that is not on '${defaultBranch}':\n`);
+      process.stderr.write(`  commit: ${stranded.commit.slice(0, 12)} ${stranded.subject}\n`);
+      process.stderr.write(`  path:   '${docRel}' (allowlist also covers '${archivePrefix}*')\n`);
+      process.stderr.write(`doc-land: '${defaultBranch}' has nothing ahead of origin/${defaultBranch} — but that is NOT "nothing to land":\n`);
+      process.stderr.write(`  the edit exists and is unlanded. It cannot be landed from here, because this verb only ever\n`);
+      process.stderr.write(`  pushes '${defaultBranch}' and never rewrites the shared checkout's HEAD or refs (LOOP-325).\n`);
+      process.stderr.write(`  Put the commit on '${defaultBranch}' (it is still reachable at ${stranded.commit.slice(0, 12)}) and re-run.\n`);
+      return 1;
+    }
     console.log(`doc-land: origin/${defaultBranch} is already up to date — nothing to land`);
     return 0;
   }

