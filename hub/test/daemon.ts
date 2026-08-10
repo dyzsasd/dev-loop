@@ -86,11 +86,16 @@ ok(board.text.includes(feat.id) && board.text.includes("Daemon foundation"), "bo
 ok(board.text.includes(bug.id) && board.text.includes("A defect to fix"), "board renders the seeded Bug card (id + title)");
 ok(board.text.includes(">Todo<") && board.text.includes(">In Review<"), "board shows state columns (Todo + In Review)");
 ok(board.text.includes(`/ticket/${feat.id}`), "board cards link to the ticket detail route");
-// LOOP-386: the stale-daemon banner is rendered in the page shell (hidden by default, activated by JS)
+// LOOP-386: the stale-daemon banner is rendered in the page shell (hidden by default, activated by JS).
+// These two assert MARKUP the server renders, which is what a substring check is actually good for.
 ok(board.text.includes('id="stale-banner"') && board.text.includes('class="stale-banner"'), "LOOP-386 AC1: board HTML contains the stale-banner element (hidden by default)");
-ok(board.text.includes('fetch(\'/api/health\')') && board.text.includes('ok===false'), "LOOP-386 AC1: board HTML embeds health-polling JS that watches for ok:false");
-ok(board.text.includes('es.onerror') && board.text.includes('Connection to daemon lost'), "LOOP-386 AC3: SSE error handler renders lost-connection banner (cleared on reconnect)");
 ok(!board.text.includes('class="stale-banner show"'), "LOOP-386 AC1: banner is NOT visible in server-rendered HTML (JS-activated only)");
+// LOOP-532: the two assertions that stood here — includes('ok===false') and includes('es.onerror') —
+// mirrored the client source rather than exercising it, and were blind to the defect that shipped
+// with them (the health poll cleared a banner raised by a lost stream). Their guarantees are not
+// dropped: hub/test/stale-banner.ts extracts this same <script> from a real served page and DRIVES
+// it — the health poll watching ok:false and the onerror lost-connection banner are both asserted
+// there as behaviour, alongside the transitions a substring check cannot reach.
 
 // ─── DL-20: web-UI board server-side filter/search (mirrors /api/tickets) ───
 // the seed: feat = Feature/Todo/pm "Daemon foundation"; bug = Bug/Done/qa "A defect to fix"

@@ -358,33 +358,49 @@ export function page(title: string, project: string, inner: string, opts: PageOp
 // the page auto-reloads — but NEVER while a form field is focused (so it can't interrupt an operator
 // typing a roadmap edit / new ticket). JSON.stringify embeds the server-built path safely (the project
 // key inside it is percent-encoded by href(), so no quote or </script> can reach the script body).
+//
+// LOOP-532 — the banner has TWO independent fault sources (a lost stream, an unhealthy daemon) and
+// exactly ONE element. LOOP-386 shipped them as two direct writers, so the 15s poll's `else` arm
+// cleared a banner it did not own: stream dies + daemon healthy ⇒ banner raised, then silently
+// removed within 15s while the page keeps rendering its last HTML — LOOP-386's own failure mode. It
+// is not a flicker: EventSource retries a transport failure, but a 401 closes the stream for good
+// (and /api/health is the one path enforceBearer exempts, so it keeps answering ok:true). So the two
+// sources are now STATE, and renderBanner() is the single writer that derives the element from them.
+// A health fault outranks a lost stream (it is the more specific, more actionable message); the
+// banner clears only when BOTH are clear. The remedy is appended only when the server's error does
+// not already end with it — the dbFileReplaced and projectRowGone arms both do.
 const liveScript = (streamPath: string) => `<script>
 (function(){
   try{
-    var dot=document.getElementById('live'), base=null, pending=false, banner=document.getElementById('stale-banner'), streamLost=false;
+    var dot=document.getElementById('live'), base=null, pending=false, banner=document.getElementById('stale-banner'), streamLost=false, healthErr=null;
+    var REMEDY='Restart it: dev-loop daemon up';
     var es=new EventSource(${JSON.stringify(streamPath)});
     function typing(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT');}
     function showBanner(msg,remedy){if(banner){banner.innerHTML=esc(msg)+(remedy?'<span class=\"sb-remedy\">'+esc(remedy)+'</span>':'');banner.classList.add('show');}}
     function hideBanner(){if(banner){banner.classList.remove('show');banner.innerHTML='';}}
     function esc(s){return String(s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
+    function renderBanner(){
+      if(healthErr!==null){showBanner(healthErr, healthErr.slice(-REMEDY.length)===REMEDY?'':REMEDY);}
+      else if(streamLost){showBanner('Connection to daemon lost — this view may be stale','The page will reload automatically when the connection returns.');}
+      else{hideBanner();}
+    }
     es.onmessage=function(e){
       var id=e.data; if(base===null){base=id;return;}
       if(id!==base){ if(dot)dot.classList.add('on'); pending=true; if(!typing())location.reload(); }
-      if(streamLost){streamLost=false;if(!pending)hideBanner();}
+      if(streamLost){streamLost=false;if(!pending)renderBanner();}
     };
     es.onerror=function(){
-      streamLost=true; showBanner('Connection to daemon lost — this view may be stale','The page will reload automatically when the connection returns.');
+      streamLost=true; renderBanner();
     };
     document.addEventListener('focusout',function(){ if(pending&&!typing())location.reload(); });
-    var healthTimer=setInterval(function(){
+    setInterval(function(){
       try{
         fetch('/api/health').then(function(r){return r.json();}).then(function(h){
-          if(h&&h.ok===false){showBanner(h.error||'Daemon unhealthy','Restart it: dev-loop daemon up');}
-          else{hideBanner();}
+          healthErr=(h&&h.ok===false)?(h.error||'Daemon unhealthy'):null;
+          renderBanner();
         }).catch(function(){});
       }catch(_){}
     },15000);
-    healthTimer.unref?.();
   }catch(_){/* no EventSource ⇒ static page, fine */}
 })();
 </script>`;
