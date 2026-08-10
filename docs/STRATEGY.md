@@ -251,104 +251,32 @@ system cannot enforce, report, or recover.
   2026-08-07).** Rolled whole to
   [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) by §20 R2 passes 41–70. The
   per-period index with its block letters is the **📚 ARCHIVE INDEX** in `Decisions (running log)`
-  below — this section no longer keeps a second copy of it (pass 48). **One fact from that span is
-  still load-bearing and is kept here rather than archived, CORRECTED 2026-08-08 (pass 76):** the
-  boot corpus PUSH path (`--assemble-boot`, 98–147 KB per fire) ran from 2026-07-31T23:00:15Z and
-  stopped. Measured over the whole ledger: **16 of 1,082 fires ever carried `bootBytes` > 0** — 12 on
-  07-31, 4 on 08-01, none since. That is configuration, not breakage (`team.bootCorpus` is
-  default-OFF, `team-config.ts:87`, and is unset here), so the live delivery path is and has been
-  PULL: each agent reads the lessons library itself at §0a. A lessons rule scored outside that
-  two-day window was scored under the pull regime.
+  below — this section no longer keeps a second copy of it (pass 48).
 
+- **§0a boot-corpus delivery is SPLIT BY LANE, and it is a PUSH for every expensive agent.
+  RE-MEASURED 2026-08-10 (pass 86); the previous reading here was wrong for two days.** Pass 76
+  recorded "16 of 1,082 fires ever carried `bootBytes` > 0 — 12 on 07-31, 4 on 08-01, none since …
+  the live delivery path is and has been PULL". Every clause after the premise is false on the
+  current ledger. `.dev-loop/team/fires.jsonl` (1,306 rows) now holds **52 rows carrying 7,048,829 B
+  of pushed corpus** — 12 on 07-31, 4 on 08-01, **31 on 08-09 and 5 on 08-10** — the most recent two
+  hours before the fire that re-measured it, whose own prompt carried the assembled block.
+  **The split is clean and it is by CLI lane:** of the rows since 2026-08-09, claude-lane fires are
+  **36/36 pushed** and opencode-lane fires **0/166**, because `run-agents.ts:971` gates the push on
+  `profile.codingAgent === "claude"` (a stable cache prefix; Linux `MAX_ARG_STRLEN` caps one `execve`
+  arg at 128 KiB). So pm/senior-dev/reflect/architect receive ~140 KB and ~131 KB per fire
+  pre-assembled, and qa/junior-dev/sweep/ops/communication pull at §0a. Delivery is deterministic per
+  agent (pm = 140,097 B across eight consecutive fires), which is the design intent — **nothing about
+  the push path is broken.**
+  **What was wrong was reading a config key as a report of what happened.** The premise still holds
+  (`team.bootCorpus` is absent from team and project config here); the live switch is
+  `DEVLOOP_ASSEMBLE_BOOT=1` in the SCHEDULER's env (`run-agents.ts:427`, OR-ed at `:970`), which is
+  empty inside the fire it delivers to and invisible to `doctor` by deliberate design
+  (`lessons.ts:69`). Doctor's **W03** therefore still prints "fires run in PULL mode"; this section
+  repeated that conclusion as fact. **The durable rule: config says what is configured, the ledger
+  says what was delivered — and a doc that quotes a warning inherits its errors.** Filed as
+  **LOOP-482** (P1: re-measured onto the ticket at pass 86). Consequence to carry: any per-fire
+  context or cost figure that does not split by lane is averaging two delivery regimes.
 
-### 2026-08-09 (pm, ninety-second fire): the machine-global layer became sponsored work, and the intake path that filed it filed it malformed
-
-**Operator direction, recorded: retire `~/.dev-loop` entirely (LOOP-458 — groomed, promoted to Todo,
-senior, `Mode: design`, `sensitive`).** Measured on the operator's machine: a global npm install writes
-a macOS LaunchAgent, and at the next login `up-all` read the legacy registry, started three hub daemons
-belonging to a workspace no longer being run, and took port 8787 — the port this workspace's hub uses.
-Five invariants are in scope (an install never creates autostart; a migration verb for legacy-registry
-projects; removal of every home-dir read and write; CLI error copy; a docs sweep) plus one open question
-the design frames rather than waits on: where the `devplatform` project lands. `sensitive` was added at
-grooming rather than inherited — the work moves live state, lessons and reports, then deletes their home.
-
-**The loop was down ~24.5 h** (ledger gap 2026-08-08T17:47Z → 08-09T18:17Z) from that same layer; the
-preceding pm fire was killed and ledgered `budget-per-fire` — a claim LOOP-445 has since corrected (below).
-Detection of the outage is already LOOP-447, not re-filed.
-
-**Both operator-filed tickets of the day arrived with an incomplete label set** — LOOP-458 with no
-`dev-loop` marker and no owner, LOOP-459 with none at all. Both repaired; the board now has zero
-non-terminal rows missing either. Filed **LOOP-460** for the create path that accepted them.
-
-### 2026-08-09 (pm, ninety-fourth fire): a fire can no longer destroy an operator credential — in source
-
-**LOOP-417 verified Done** (`e38f084`): `secret set`/`unset` now consult `destructive-guard`'s shared
-fire gate and refuse inside a fire (exit 4, marker named, file byte-identical), and `set` over an
-existing name announces the replacement it used to make silently. Verified on the MERGED tree in a
-disposable fixture — never this workspace, whose installed `1.15.1` still carries the un-gated verb.
-So the class is closed **in source, not yet in the running CLI** (doctor W18, not a wait-state).
-
-### 2026-08-09 (pm, ninety-ninth fire): a budget kill now states what the fire measured — and the kill itself is unchanged
-
-**LOOP-445 verified Done** (`0135457`, PR #276, six review rounds). Only a **measured** breach wears
-`budget-per-fire`; a kill the model justified and the meter did not is `budget-deadline`; a zero-token
-kill goes to the liveness arm unless the tail carries a provider rejection (which keeps its
-provider-scoped class, so siblings on an exhausted key are capped); watchdog-killed rows leave the
-$/ms median, breaking the loop where a kill manufactured the evidence for the next kill.
-
-**What did NOT change, and it is the operationally important half:** AC1 permitted either fixing the
-estimate or naming it honestly, and the increment ships the naming. Fires doing real work are still
-killed at the modeled deadline — the $4.34-against-$20 fire would die today, ledgered `budget-deadline`.
-That residual is **LOOP-461** (the deadline extrapolates one median linearly while burn rate decays),
-with LOOP-462/466/476 on the discriminator, the liveness arm, and the ceiling's meter.
-
-The 46 historical `exit 126` rows keep their old class — classification is written at fire time and is
-correctly not retroactive — and the installed tree has no `budget-deadline` at all, so the `errors:`
-line moves on the first kill under the new code, not now.
-
-**Method, because the stated evidence could not be re-run:** the regression suite cannot even LOAD
-against the parent commit (it imports a symbol that did not exist), so a fail-before is unobservable
-there. Mutation-testing the merged tree answers the same question better — four load-bearing predicates
-reverted one at a time gave 36 / 21 / 3 / 1 **disjoint** failures against 0 at baseline.
-
-**The `Goals (north star)` error-class figures above remain stale and were deliberately left alone** —
-that is a DIRECTION section, and its correction is LOOP-446, 29 h in the operator's approval queue.
-
-### 2026-08-09 (pm, one-hundred-fifth fire): the third question a destructive verb asks now has a store
-
-**LOOP-391 verified Done** (`ff97742`, PR #253) — C1 of the six-child `approvals` design, and the
-first of them to land. The destructive-verb family already asked *did you mean THIS target?*
-(`isolationVerdict`) and *may a FIRE do this at all?* (`activeFireMarker`, un-bypassable by design).
-This adds the third — *did the human approve THIS action?* — which is what makes a governed YES
-possible without reopening the hole the second question deliberately closed.
-
-Two properties carry it, and both are code rather than convention. **The key names an end state:**
-`push:main` is refused at grant time because it names a capability — a standing grant that never
-discharges — while `push:main:<sha>` is accepted. That single rule is why "covers a retry" and "does
-not cover a second action" are the same property instead of a trade-off, and it is what makes the
-release case work: `npm-publish:<pkg>:<version>` is ONE end state, so the four dispatches that made
-the operator re-derive coverage are covered by one grant, with the expiry doing none of the work.
-**And `state` is derived at consult time, never stored** — expiry is evaluated against the caller's
-clock with no sweeper, so a stale row cannot authorise even if no cleanup job ever ran.
-
-Verified by mutation, not by reading a green suite: accepting a missing instance component turns 6
-assertions red across AC2/AC3/AC4, and dropping expiry from `deriveState` turns exactly the 2 AC5
-assertions red. The table's retro-add was probed directly (`user_version` 5→5, `state` absent from
-`PRAGMA table_info`). No regression — the two non-green suites on the merged tree reproduce
-identically on the pre-merge control.
-
-**What is NOT closed, and it is the half that matters.** The design's load-bearing invariant is that
-`approve`/`revoke` are themselves fire-refused; C1 imports nothing from `destructive-guard.ts` and
-its module header says so. That is correct here — with no CLI, nothing an agent can call reaches
-`grantApproval`, so exposure today is zero — and it becomes real the moment **LOOP-392** ships a
-verb. LOOP-392 unparked this fire (its only blocker retired); the remaining four children open one
-link at a time behind it.
-
-Separately, `doctor`'s operator-facing dead end is now half-closed: LOOP-479 shipped the missing
-writer (`dev-loop settings set`), but its AC5 — the W20/NEXT line that still hands the operator a URL
-which cannot perform the action it prescribes — was descoped to **LOOP-481**, because reaching the
-predicate from `doctor.ts` needs an extraction rather than a wording change. Approved as owner and
-recorded on both tickets, so the descope is not read later as a missing AC.
 
 ### 2026-08-09 (pm, one-hundred-sixth fire): a check that reports its own config as if it were the ledger
 
@@ -418,6 +346,43 @@ read-timing artifact whose printed remedy (push again) cancels the run the previ
 `cancel-in-progress: true`; filed as LOOP-485. Verification ran against the MERGED tree in a
 `git archive`, after the first pass measured the shared checkout one commit behind and read the
 pre-merge text as if it were shipped.
+
+### 2026-08-10 (pm, one-hundred-fourteenth fire): the approvals verb landed, and the north star was quoting a warning
+
+**Two `sensitive` increments verified Done in the one-hundred-thirteenth fire** (recorded here a fire
+late: that fire found main's CI in flight on a code commit and deferred the §20 pass rather than cancel
+it — see LOOP-486). **LOOP-392** (`fa1a1da`, approvals C2) ships the verb surface, so *did the human
+approve THIS action?* is now askable from the CLI; its load-bearing property is that granting is the
+human's act — a fire-marked process is refused (exit 4, nothing written), which is what makes C1's
+store safe to expose. All six ACs exercised on the real CLI against the merged tree. **LOOP-408**
+(`5c02868`) collapses mode/autonomy onto one token set and gives all three projections a writer, all
+seven ACs exercised in a throwaway fixture workspace — never this one, since `team set` is a config
+mutator. **LOOP-394** (approvals C4, the first enforcing consumer) is now pickable; hold its AC6(c)
+default of an EMPTY `approvals.enforce` at verify, because that default is what bounds LOOP-489.
+
+**A multi-round PR's early measurements describe a tree that no longer exists.** LOOP-392's PR body
+reported "fire gate removed ⇒ 12 fail"; on the landed tree it is **2**, both message-text assertions.
+A later review round added a human-grantor guard that refuses the same input, and the suite's `run()`
+helper defaults `DEVLOOP_ACTOR` to `senior-dev` whenever a fire marker is set — so the two guards are
+redundant on every AC2 input and **no test drives marker + operator**. Driving that input by hand gives
+exit 4 with nothing written, so the behaviour is right and only the coverage is missing (**LOOP-488**).
+Re-run a handoff's numbers; never quote them.
+
+**A finding assigned to a sibling child by name is owned by nothing until that child's ACs say so.**
+LOOP-391 and LOOP-392 both closed noting that `team-import.ts` carries no approvals table and that "C5
+owns it". LOOP-396 *is* C5, and its ACs are entirely the consumer inventory — they say nothing about the
+bundle carry. So a bundle export/import silently dropping every approval grant was unowned for the whole
+chain, and this doc's own working notes repeated the misattribution for days. Verified in code and filed
+as **LOOP-489**. Check the named ticket's ACs before believing a hand-off.
+
+**The lens finding is one layer up from the product: this section was repeating a doctor warning as
+fact.** The corrected boot-corpus paragraph above replaces a two-day-old claim that §0a delivery "is
+and has been PULL" — the claude lane has been 36/36 PUSH since 2026-08-09. The doc did not measure
+wrongly; it inherited W03's conclusion without reading the ledger W03 declines to read. **A north star
+that quotes an instrument inherits that instrument's errors**, so a fact recorded here from a warning
+needs the warning's own evidence re-derived — which is why the correction is dated and names what it
+supersedes rather than being edited in place. `Goals` was left untouched: it is a direction section, and
+its first-program tally (2 of 5) is still accurate.
 
 ## Personas
 
@@ -733,6 +698,16 @@ pre-merge text as if it were shipped.
     → block **AT**; still open from it: **LOOP-447**. Extended by **pass 74** with the
     eighty-SIXTH fire's journal and its verify-the-render ruling → block **AU**; still open
     from it: **LOOP-449**.
+  - **2026-08-09 (pm, ninety-second · ninety-fourth · ninety-ninth · one-hundred-fifth fires)** — four
+    fire journals, each recording a verified-Done increment: the `~/.dev-loop` retirement direction and
+    the malformed-intake finding (**LOOP-458**/**LOOP-460**); the fire-refused `secret set`
+    (**LOOP-417**, closed in source before the running CLI); the honest budget-kill classification
+    (**LOOP-445**); and approvals C1's store, with the end-state-naming key rule (**LOOP-391**). Rolled
+    by **§20 R2 pass 86** → [`2026-08.md`](strategy-archive/2026-08.md). Live residuals at roll time,
+    all carried on tickets: **LOOP-473** (the `paths.ts` seam), **LOOP-461** with
+    **LOOP-462**/**LOOP-466**/**LOOP-476** (the deadline that still kills working fires), and
+    **LOOP-489** (the bundle carry that C1's un-gated `approve`/`revoke` made real once LOOP-392
+    shipped the verb).
 
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
@@ -758,10 +733,12 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
   alert cadences. **REVERSAL CONDITION: the operator asks for it** — widening the allowlist is real
   surface area and each field arguably wants its own validation rather than a blanket path setter.
   `strategyDoc` is the filed instance (**LOOP-120**), `agentReviewers` another (**LOOP-123**).
-  **PARTIALLY DISCHARGED 2026-08-06 (fire 62):** `team.autonomy`,
-  `projects.<key>.autonomy` and `projects.<key>.mode` left this list by being filed — **LOOP-408**
-  adds all three to `SETTABLE`, because a projection with no writer would faithfully project a
-  value the operator can never set. The remaining 23 rows still want the operator's call.
+  **PARTIALLY DISCHARGED — and now SHIPPED for three rows (2026-08-10, verified Done):** **LOOP-408**
+  added `team.autonomy`, `projects.<key>.autonomy` and `projects.<key>.mode` to `SETTABLE`, because a
+  projection with no writer would faithfully project a value the operator can never set. Those three
+  are off this list for good; **the remaining 23 rows still want the operator's call**, and the
+  precedent LOOP-408 set is the argument for them: the gap it closed was not "a missing convenience"
+  but a value the config could display and no supported command could write.
 
 - **`worktree reap --dry-run` previews the worktrees but not the branch decisions** (recorded at the
   LOOP-106 verify). The dry-run path returns before the branch logic, so it prints `would remove
