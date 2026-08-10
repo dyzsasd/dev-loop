@@ -75,7 +75,7 @@ restatements, inlined opt-in specs, verbatim templates, and over-broad citations
 
 | span | moves | new home | stays behind (the tripwire) |
 |---|---|---|---|
-| §18 local-backend implementation (`Local board layout` → `Firewall in local mode`) | ~8 kB | `references/backend-local.md` | §18 keeps: intro, work/surface-plane parity contract, `park-for-operator`, switching rules, and the boot tripwire: *"after resolving `backend` (boot step 2), read `references/backend-<backend>.md` before your first board operation"* |
+| §18 local-backend implementation (`Local board layout` → `Firewall in local mode`) | ~8 kB | `references/backend-local.md` *(since deleted — LOOP-465 retired the backend)* | §18 keeps: intro, work/surface-plane parity contract, `park-for-operator`, switching rules, and the boot tripwire: *"after resolving `backend` (boot step 2), read `references/backend-<backend>.md` before your first board operation"* |
 | §18 `The service backend` subsection | ~12 kB | `references/backend-service.md` | same tripwire |
 | §9 notify payload/HMAC/transport matrix | ~4 kB | `references/notify.md` | 3-line rule: parking for a human with `notify` configured ⇒ read the reference and send |
 | §9a 7-step investigation procedure | ~2 kB | `references/investigation-protocol.md` | the W3 intake rules stay; stub: an `investigation`-labelled ticket ⇒ read the reference |
