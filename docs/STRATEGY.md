@@ -421,6 +421,28 @@ plus a 10-assertion no-op mutant to confirm the suite discriminates. This board 
 (→ LOOP-401, `Todo`) which had been unparked in error 16 minutes earlier and were restored this fire.
 No other open row on the board carries an edge, live or retired.
 
+
+**Fire 155 (2026-08-10T23:2xZ) — the deferred land completed, and main is green.** §20 pass 123
+(commit `4779725`) was held last fire because main's own CI run at `f40d237` was still in flight and
+a docs-only push cancels the run beneath it (LOOP-486). That run completed **success**, so the pass
+landed this fire and was verified by content hash against `origin/main` — `55019bbf260c371c` — never
+by `--contains <local sha>`, since `doc-land` rebases. LOOP-443's fix (`f40d237`) is now both merged
+and verified by main's own run; its new `findUnlandedDocCommit()` refuses a doc commit stranded on a
+branch the shared checkout has left, which is the failure that used to exit 0 claiming success.
+
+**Board at this fire's close: Todo 24 (senior 14/10, junior 10/10) — both tiers over cap, so nothing
+was promoted; Backlog 71 (+1).** Job A was empty at boot and at close. The one operator park is
+LOOP-542 (release tracker, `Human-Blocked`, 42 min old at boot, still uncommented) and LOOP-396 is
+correctly blocked behind it — the edge is valid because LOOP-542's AC1 names `67d04e1` explicitly,
+so its close condition implies LOOP-396's prerequisite. The §9c edge audit ran clean for the second
+consecutive fire: 5 correct parks, 0 mis-unparks, 0 unpark candidates, 0 zero-edge parks.
+
+**Doctor gained W38 and lost W42.** W42 no longer fires — LOOP-410's reconciler shipped and no hub
+row now disagrees with config. W38 is new in the output but **not unowned**: it is the shipped
+detector for the LOOP-407/LOOP-444 class (`main` has no branch protection, so `mergeChecks` is
+enforced only by `merge-guard` at Step 0.5 and a never-dispatched check reads CLEAN). Its remedy is
+an operator GitHub setting or the standing rule never to merge on CLEAN alone; no ticket is needed.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -454,6 +476,41 @@ No other open row on the board carries an edge, live or retired.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fifty-fifth fire) — a correctly-ranked queue can still hold six
+  tickets it will never serve, and the loop had no way to see it.**
+
+  **What was measured.** Six `Todo` tickets — LOOP-359/376/377/380/387/389 — have been junior-dev's
+  ranks 2 through 7 since 2026-08-06 and carry **zero `In Progress` transitions in their entire event
+  history**, 105.9 h for the oldest. They are not stranded, mis-tiered, blocked or invisible:
+  `DEVLOOP_ACTOR=junior-dev dev-loop queue` serves them at the top of a 10-row arm on every fire.
+
+  **Both controls were run this time, and both cleared the obvious suspects.** *Is the lane dead?* No
+  — junior-dev claimed **29 distinct tickets** in the same window, including six P3s and a P4, so
+  neither a priority floor nor the executor outage explains it. *Is the ranking broken?* No — of the
+  seven claims junior made in the 5 h after the outage ended (18:21Z), **every one legitimately
+  outranks LOOP-359**: `Bug` is rank 3 and P1 `Improvement` is rank 4.5, and all six starved tickets
+  are ordinary `Improvement`s at rank 5. `PICK_RANK` is behaving exactly as written.
+
+  **The finding is therefore structural, not a defect: rank 5 is a starvation class at the current
+  filing rate.** An ordinary `Improvement` is reached only in a window where the tier has no
+  outstanding `Bug` and no outstanding P1 `Improvement` — a window that has not occurred in 105
+  hours. The generating rate behind that imbalance: **原因未查明**; this pass measured the effect only.
+
+  **Why it is worth a ticket rather than a shrug.** Nothing measures it. W16 covers the neighbouring
+  arm (a stale `In Progress` claim, LOOP-450); a `Todo` ticket never claimed at all has no age, no
+  W-code and no digest line. So PM reads junior 10/10 as a healthy full queue when 6 of those 10 are
+  provably unreachable, and promotes against a cap whose composition it cannot see. **LOOP-545**
+  (P2, junior) asks for the measurement — a Todo-age W-code plus a per-tier unreachable count on the
+  `queue` pm arm — and explicitly does **not** reopen `PICK_RANK` or `intake.todoDepthCap`, which
+  remain the operator's standing §5/§5a ruling (LOOP-254). Observability first, so the ruling can be
+  made from data instead of from a fourth PM fire re-deriving this table by hand.
+
+  **What did not happen, deliberately.** The six were checked against reality before anything else:
+  LOOP-359's prerequisite is satisfied and its edges retired, LOOP-376's defect was explicitly left
+  behind by LOOP-385, LOOP-389 is distinct from LOOP-451. All six are live work. None was canceled,
+  and **no priority was bumped** — re-ranking to beat the queue is the one remedy this board has
+  already ruled out.
 
 - **2026-08-10 (pm, one-hundred-fifty-fourth fire) — the fix for a stale diagnosis was a fresh
   diagnosis recorded just as uncritically: the replacement cause was never given a control case.**
