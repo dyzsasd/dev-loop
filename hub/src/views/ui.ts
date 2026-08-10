@@ -6,6 +6,7 @@
 // markdown renderer, and the small shared shape/format helpers (toTicket / ownerOf / prioOf /
 // noticeHtml / countPill / stateDot). Pure string-returning functions only — no res handling, no
 // writes, no network (daemon.ts owns HTTP). daemonviews.ts re-exports this module's public surface.
+import { liveClient } from "./live-client.ts";
 
 // ticket row → API shape (mirrors the MCP server's toTicket; labels/related_to are JSON columns).
 // Shared by the HTML views and the daemon.ts JSON API routes (a row-shape helper, not view-only).
@@ -358,33 +359,16 @@ export function page(title: string, project: string, inner: string, opts: PageOp
 // the page auto-reloads — but NEVER while a form field is focused (so it can't interrupt an operator
 // typing a roadmap edit / new ticket). JSON.stringify embeds the server-built path safely (the project
 // key inside it is percent-encoded by href(), so no quote or </script> can reach the script body).
+//
+// The client itself lives in ./live-client.ts and is inlined here by `liveClient.toString()` — the
+// served bytes are that function's own source, so the test suite drives the shipped client by
+// importing it rather than by re-evaluating a served string (LOOP-532; the module header explains
+// why the banner has one writer and what the two constraints on that function are).
 const liveScript = (streamPath: string) => `<script>
 (function(){
   try{
-    var dot=document.getElementById('live'), base=null, pending=false, banner=document.getElementById('stale-banner'), streamLost=false;
-    var es=new EventSource(${JSON.stringify(streamPath)});
-    function typing(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT');}
-    function showBanner(msg,remedy){if(banner){banner.innerHTML=esc(msg)+(remedy?'<span class=\"sb-remedy\">'+esc(remedy)+'</span>':'');banner.classList.add('show');}}
-    function hideBanner(){if(banner){banner.classList.remove('show');banner.innerHTML='';}}
-    function esc(s){return String(s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
-    es.onmessage=function(e){
-      var id=e.data; if(base===null){base=id;return;}
-      if(id!==base){ if(dot)dot.classList.add('on'); pending=true; if(!typing())location.reload(); }
-      if(streamLost){streamLost=false;if(!pending)hideBanner();}
-    };
-    es.onerror=function(){
-      streamLost=true; showBanner('Connection to daemon lost — this view may be stale','The page will reload automatically when the connection returns.');
-    };
-    document.addEventListener('focusout',function(){ if(pending&&!typing())location.reload(); });
-    var healthTimer=setInterval(function(){
-      try{
-        fetch('/api/health').then(function(r){return r.json();}).then(function(h){
-          if(h&&h.ok===false){showBanner(h.error||'Daemon unhealthy','Restart it: dev-loop daemon up');}
-          else{hideBanner();}
-        }).catch(function(){});
-      }catch(_){}
-    },15000);
-    healthTimer.unref?.();
+${liveClient.toString()}
+    liveClient(document, EventSource, fetch, setInterval, location, ${JSON.stringify(streamPath)});
   }catch(_){/* no EventSource ⇒ static page, fine */}
 })();
 </script>`;
