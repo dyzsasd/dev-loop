@@ -23,7 +23,8 @@ spawnSync("git", ["add", "-A"], { cwd: repoDir });
 spawnSync("git", ["commit", "-qm", "init"], { cwd: repoDir });
 
 const scrubEnv = () => {
-  const e = { ...process.env };
+  // env-scrub-exempt: explicitly scrubs fire env vars before running test subprocesses
+  const e = { ...process.env }; // env-scrub-exempt: explicitly scrubs fire env vars before running test subprocesses
   for (const k of ["DEVLOOP_WORKSPACE","DEVLOOP_PROJECT","DEVLOOP_ACTOR","DEVLOOP_HUB_DB","DEVLOOP_DEV_SPLIT","DEVLOOP_DATA_DIR","DEVLOOP_RUN_DIR","DEVLOOP_PROJECTS_JSON","DEVLOOP_TEAM","DEVLOOP_HOME","DEVLOOP_PLUGIN_ROOT","DEVLOOP_PREFER_REMOTE_PLUGIN"]) delete e[k];
   return e;
 };
