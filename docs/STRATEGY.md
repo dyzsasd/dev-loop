@@ -151,43 +151,37 @@ measurement above is from after that repair. The measured-cost half is recorded 
 the withdrawn baselines, and the binding constraints are in `docs/strategy-archive/2026-08.md`.
 
 **Top priority (operator, 2026-08-06): MAKE THE LOOP OBSERVABLE AND SAFE.** This outranks the
-current queue except correctness/security work already in flight. Three measured gaps, each from
-this workspace's own instruments:
+current queue except correctness/security work already in flight. Three gap CLASSES, named from
+this workspace's own instruments. **The measured values and the per-ticket program state live in
+`Current state` → "Observable-and-safe: where the program stands"** — they decay on the loop's
+timescale (hours) while this section's only legal writer is a §9a approval round (days), so a
+number embedded here is stale by construction:
 
-1. **§22's durable trail is partial, and the hole is concentrated.** Re-measured 2026-08-08 over the
-   7d team ledger (649 fires) — daily reports written per fire-day: senior-dev 7/7, pm 6/7, qa 4/7,
-   sweep 4/7, **junior-dev 1/7**, reflect 0/1. The original reading ("zero daily reports written")
-   no longer holds for four of six agents; the remaining gap is junior-dev and reflect.
-2. **The board has been destroyed twice in three days.** 2026-08-04 (cascade delete, 19 tickets and
-   79 comments lost permanently) and 2026-08-06 (LOOP-367 — a `qa` fire restored the live board over
-   itself, then the daemon served an orphaned inode for 69 minutes while reporting healthy). Guards
-   have been landing per incident; LOOP-383's approval model is the first that closes the class.
-3. **Fire success is 65% over 538 fires (7d, re-measured 2026-08-08), and the error profile has
-   inverted.** `stalled` ×87, `budget-per-fire` ×45, `rate-limit` ×41, `timeout` ×4, `network` ×2,
-   `auth` ×1. `rate-limit` — named here as top at 85 — is now third. The two leading classes split by
-   tier: `stalled` on the deepseek-flash agents (qa 26, junior-dev 24, sweep 22 over 08-07..08-08),
-   `budget-per-fire` on the opus/max agents (senior-dev 17, pm 16). These counts cover **classified
-   failures only** — the 2026-08-08..09 OpenRouter-402 outage (38+ consecutive opencode fires,
-   **LOOP-463** / **LOOP-464**) is ledgered `errorClass: null` and appears in none of them. Read the
-   class sizes as provisional for a second reason: **LOOP-445** measures a $4.34 fire killed against a
-   $20 ceiling and twelve consecutive zero-token wedged pm fires, all ledgered `budget-per-fire`.
+1. **§22's durable trail is partial, and the hole is concentrated.** An agent that fires and
+   writes no daily report leaves a hole in the operator trail that nothing else can fill.
+2. **The board has been destroyed twice in three days** — 2026-08-04 (cascade delete, 19 tickets
+   and 79 comments lost permanently) and 2026-08-06 (**LOOP-367**). Guards have been landing per
+   incident; LOOP-383's approval model is the first that closes the class.
+3. **Fire success is far below target, and the error profile has inverted.** `rate-limit` led
+   when this priority was written and no longer does. Every class size is provisional: classified
+   failures exclude the `errorClass: null` outages (**LOOP-463** / **LOOP-464**), and **LOOP-445**
+   showed `budget-per-fire` absorbing kills that were never spend breaches.
 
-**Gaps 1 and 3 are one phenomenon measured twice.** A §22 report is written at fire CLOSE, so a fire
-that is killed writes none. The pm fire of 2026-08-08T13:08Z verified LOOP-432, posted its verdict,
-then died before its report and state file. Detection work on the trail (LOOP-412, LOOP-425) makes
-the hole visible; only surviving to close, or writing the trail incrementally, can fill it.
+**Gaps 1 and 3 are one phenomenon measured twice.** A §22 report is written at fire CLOSE, so a
+fire that is killed writes none. Detection work on the trail (LOOP-412, LOOP-425) makes the hole
+visible; only surviving to close, or writing the trail incrementally, can fill it.
 
 **The fourth gap is CLOSED.** A required check that never RAN presented as `CLEAN` and `autoMerge`
 landed it — eight PRs merged on zero test signal. **LOOP-407** shipped 2026-08-08 (`a12bfab`),
-verified against the merged tree on live forge data: an absent required check is now an unconditional
-hold, and doctor **W38** names the unprotected-branch posture that keeps the forge silent. Residual:
-nothing refuses a squash that skipped the guard (**LOOP-444**).
+verified on live forge data: an absent required check is now an unconditional hold, and doctor
+**W38** names the unprotected-branch posture that keeps the forge silent. Residual: nothing
+refuses a squash that skipped the guard (**LOOP-444**).
 
-First program — **2 of 5 shipped**: **LOOP-382** (pause/resume as board state, Done) · **LOOP-383**
-(typed approval objects, Done) · **LOOP-384** (a `waiting-on` discriminator for Human-Blocked, Todo) ·
-**LOOP-385** (release resilience, In Progress) · **LOOP-386** (the UI says when its view is stale,
-Todo). The through-line: every control that exists only in the operator's chat transcript is one the
-system cannot enforce, report, or recover.
+First program — the five controls: **LOOP-382** (pause/resume as board state) · **LOOP-383** (typed
+approval objects) · **LOOP-384** (a `waiting-on` discriminator for Human-Blocked) · **LOOP-385**
+(release resilience) · **LOOP-386** (the UI says when its view is stale). The through-line: every
+control that exists only in the operator's chat transcript is one the system cannot enforce, report,
+or recover. **Shipped count and per-ticket state: `Current state`.**
 
 ## Non-goals
 
@@ -277,6 +271,16 @@ system cannot enforce, report, or recover.
   says what was delivered — and a doc that quotes a warning inherits its errors.** Filed as
   **LOOP-482** (P1: re-measured onto the ticket at pass 86). Consequence to carry: any per-fire
   context or cost figure that does not split by lane is averaging two delivery regimes.
+- **Observable-and-safe: where the program stands (PM-maintained, re-measured each pass).** The
+  `Goals` statement of this priority is deliberately number-free; the live values are here.
+  Measured 2026-08-10T01:57Z over the 7d team ledger (807 fires) via `dev-loop metrics --window
+  7d`: **fire success 52%** (`successRate` 0.5155; 65% over 538 fires when Goals was written
+  2026-08-08). Classified failures — `stalled` ×89, `budget-per-fire` ×46, `rate-limit` ×30,
+  `timeout` ×4, `network` ×2, `auth` ×1 — cover 172 of 807 fires; the other **635 carry
+  `errorClass: null`** (LOOP-464), so the classes describe 21% of the window. `stalled` is the
+  largest class and the only one with no owner (**LOOP-483**, parked behind LOOP-464 + LOOP-463).
+  First program: **3 of 5 shipped** — LOOP-382 Done · LOOP-383 Done · LOOP-385 Done (`6a4977d`,
+  verified 2026-08-10) · LOOP-384 Todo · LOOP-386 Todo.
 
 
 ### 2026-08-10 (pm, one-hundred-fifteenth fire): the release resume is tag-anchored, and its one in-body guard is pinned by an assertion that cannot read it
