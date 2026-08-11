@@ -35,6 +35,7 @@ import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrit
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
 import { scrubErr } from "./channel.ts"; // the notifier's channel deps moved to daemon-notifiers.ts (A3); scrubErr stays for /api/health + the unhandledRejection guard
 import { NOT_SCRATCH_SQL } from "./sql-predicates.ts";
+import { humanWriteEnabled } from "./project-settings.ts"; // LOOP-481: the human-write gate, shared with doctor via a lean leaf
 // DL-74/F1: the HTML view layer lives in src/views/* (ui/board/ticket/roadmap/activity/reports) with
 // daemonviews.ts as the compat façade; the HTML GET routes are dispatched off the typed registry
 // (views/registry.ts). The per-project process-lifecycle subsystem lives in daemon-lifecycle.ts. This
@@ -319,15 +320,9 @@ async function handleDocWrite(action: "save" | "publish", slug: string, req: Inc
 // request so the operator can flip the flag without a daemon restart. Absent/false ⇒ these POSTs are NOT
 // matched and fall through to the read-only 405 (byte-identical to today). The same localhost CSRF /
 // DNS-rebinding guard as /roadmap/* (writeOriginOk) runs BEFORE any write.
-// Exported for LOOP-479's regression test: the AC requires the test to flip the switch through the
-// supported command and then assert with the SHIPPED predicate. A test that re-implemented this
-// expression would pass with the gate deleted (the LOOP-429 shape), so the gate is imported, not copied.
-export function humanWriteEnabled(db: DatabaseSync, projectId: string): boolean {
-  try {
-    const row = db.prepare("SELECT settings_json FROM projects WHERE id=?").get(projectId) as { settings_json?: string } | undefined;
-    return JSON.parse(row?.settings_json ?? "{}")?.humanWrite?.enabled === true;
-  } catch { return false; }
-}
+// The predicate itself now lives in `project-settings.ts` (LOOP-481): `doctor` needs the same gate to
+// know whether W20 may prescribe the board page, and it must not import this file to get it — this
+// module's graph reaches zod, and doctor runs on every boot. Imported by both, defined once.
 function isTicketWriteRoute(seg: string[]): boolean {
   return (seg.length === 1 && seg[0] === "ticket")
     || (seg.length === 3 && seg[0] === "ticket" && (seg[2] === "comment" || seg[2] === "move" || seg[2] === "assign"));
