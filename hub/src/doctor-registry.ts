@@ -548,4 +548,16 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       checkLegacyHome(joinPath(homedir(), ".dev-loop"), ctx.out.fail);
     },
   },
+  // Row 33 — W44 (consecutive failures, LOOP-447). Reads the fire ledger to detect dead lanes.
+  // Registered for the same CRAP-ratchet reason as row 30 (LOOP-348).
+  {
+    codes: ["W44"],
+    id: "w44-consecutive-failures",
+    scope: "workspace",
+    bestEffort: true,
+    run: async (ctx) => {
+      const { checkConsecutiveFailures } = await import("./doctor.ts");
+      await checkConsecutiveFailures(ctx.ws, ctx.out.warn);
+    },
+  },
 ];
