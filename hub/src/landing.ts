@@ -251,21 +251,20 @@ export function readCiFreshness(
             //    the tool is broken rather than like a placeholder was left for you.
             // 2. The VALUE is the operator's judgement (which paths cannot affect a check), so it
             //    stays an example — but a quoted one, for the same reason.
-            // 3. Even a RESOLVED ref is not always addressable, and shell quoting does not reach this
-            //    one (PR #273 review): `team set` matches its target with
-            //    `^repos\.[^.]+\.ciIrrelevantPaths$` and splits the path on dots, while
-            //    `team-config.ts` validates a repo ref through KEY_RE — which PERMITS dots. So
-            //    `repos.web.app.ciIrrelevantPaths` names a knob the validator accepts and the mutator
-            //    refuses, and printing it as the command to run fails INSIDE the tool, past where any
-            //    quoting could help. A ref the mutator cannot address therefore gets the description
-            //    rather than a command — the same rule as an unresolved ref for a different reason,
-            //    so both keep the one property the arm asserts: if a command is printed, it runs.
+            //
+            // LOOP-574: a third case used to sit here — a RESOLVED but DOTTED ref (`web.app`), which
+            // `team set` could not address because its patterns matched the ref with `[^.]+` while
+            // `team-config.ts` validates a repo ref through KEY_RE, which PERMITS dots. That made
+            // `repos.web.app.ciIrrelevantPaths` a knob the validator accepted and the mutator
+            // refused, so the arm printed a description rather than a command. The mutator now
+            // rejoins a dotted ref against the repo registry (team-edit.ts resolveRepoSegments), so
+            // the premise is gone and a dotted ref takes the ordinary command form below. The
+            // property that arm existed to protect is unchanged and still holds: if a command is
+            // printed, it runs — shellArg quotes the ref, and the path now resolves inside the tool.
             if (!truncated && !exempt && (!ciIrrelevantPaths || ciIrrelevantPaths.length === 0)) {
               hint = repoRef === undefined
                 ? `no ciIrrelevantPaths is configured for this repo \u2014 set repos.<ref>.ciIrrelevantPaths through \`dev-loop team set\`, where <ref> is this repo's key in dev-loop.json; it did not resolve here, so this is a description and not a command to copy`
-                : repoRef.includes(".")
-                  ? `no ciIrrelevantPaths is configured for repos.${repoRef} \u2014 \`dev-loop team set\` cannot address a repo ref containing a dot (it splits the path on dots), so this is a description and not a command to copy; the mutator reaches this knob only for a dot-free ref`
-                  : `no ciIrrelevantPaths is configured for this repo \u2014 if none of these files can affect a check result, set it with: dev-loop team set ${shellArg(`repos.${repoRef}.ciIrrelevantPaths`)} 'path/one.md,dir/two/'`;
+                : `no ciIrrelevantPaths is configured for this repo \u2014 if none of these files can affect a check result, set it with: dev-loop team set ${shellArg(`repos.${repoRef}.ciIrrelevantPaths`)} 'path/one.md,dir/two/'`;
             }
           } else {
             composition = "delta touches 0 files (empty commits)";
