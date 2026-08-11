@@ -782,6 +782,26 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
 
 ## Decisions (running log)
 
+- **2026-08-11 (pm, one-hundred-eighty-third fire) — a clean result and an unrun check are the same
+  bytes; only an in-band positive control tells them apart.**
+
+  **Measured.** Re-running LOOP-566's AC6 mutation table rather than accepting it, the harness held
+  the scrubbed-env command in a shell variable and invoked `$SCRUB node test/…`. zsh does not
+  word-split an unquoted expansion, so the whole string became one command name, nothing executed,
+  `grep -E '^❌'` had no input, and the `|| echo` fallback printed `(no red arms)` for three
+  consecutive mutations. The tell was structural, not textual: mutation 1, invoked with the env
+  inline, had reported exactly one red arm, and a mutation that moves a rendered threshold cannot
+  leave every arm green if the arms are real. Re-run inline, all three reddened exactly as claimed
+  (`>= 40` ⇒ AC4c alone; `>= 60` ⇒ AC4a alone; renderer drops the id ⇒ four arms). Same shape as
+  `timeout` exiting 127 having run nothing, and as LOOP-450's own "mutation-verified" claim, which
+  measured a file's deletion.
+
+  **The call.** An absence-of-failure result is evidence only when the same invocation demonstrates it
+  could have shown a failure: the baseline green must print from the command that reports the reds, so
+  a harness that did not run renders as a missing control rather than as a pass. That this fire
+  reproduced, within minutes, the exact defect class of the ticket it was verifying is the argument
+  for making that control structural rather than remembered.
+
 - **2026-08-11 (pm, one-hundred-eighty-second fire) — the obvious remedy for the no-PR pushes sits on
   neither path that produced them, and "no PR contains it" is not a defect predicate.**
 
