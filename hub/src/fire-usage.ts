@@ -1,5 +1,49 @@
 import type { UsageAdapter, FireUsage } from "./metrics.ts";
 
+// The runner buffers a structured lane's stdout so an adapter can parse it at exit. The buffer is capped so a
+// runaway fire cannot OOM the scheduler — which means the buffer is sometimes a PREFIX of the stream rather
+// than the stream, and the two must never be confused (LOOP-476 finding 2). Past the cap the tail is dropped
+// silently: complete events before it still parse, so `parse()` returns an EARLY-turn value that reads exactly
+// like a whole-fire measurement — and now that opencode's numbers are summed, a prefix understates by however
+// much was dropped. So truncation is tracked here, beside the parse it invalidates, rather than left implicit.
+export const MAX_FULL_STDOUT = 4 * 1024 * 1024; // 4 MiB
+
+export type StdoutCapture = {
+  append(chunk: string): void;
+  text(): string;
+  /** true once bytes were actually DROPPED — the buffer is a prefix, so nothing derived from it is a total. */
+  truncated(): boolean;
+};
+
+export function makeStdoutCapture(max: number = MAX_FULL_STDOUT): StdoutCapture {
+  let buf = "";
+  let truncated = false;
+  return {
+    append(chunk: string) {
+      if (truncated) return;
+      const room = max - buf.length;
+      // Strictly greater: a stream that ends exactly at the cap lost nothing and is a complete measurement.
+      // Marking that case truncated would report "unknown" for a buffer that holds the whole fire.
+      if (chunk.length > room) { buf += chunk.slice(0, room); truncated = true; return; }
+      buf += chunk;
+    },
+    text: () => buf,
+    truncated: () => truncated,
+  };
+}
+
+/**
+ * The usage evidence a capture supports — null when there is none, and null when the capture is TRUNCATED.
+ * LOOP-476 AC3: a partial buffer is not a small measurement, it is an absent one. Downstream precedence
+ * (LOOP-445) already handles unknown correctly — `budget-deadline`, never a breach — so admitting the gap
+ * costs nothing, while passing the prefix on lets an early-turn number stand as the fire's total.
+ */
+export function usageFromCapture(adapter: UsageAdapter | null | undefined, capture: StdoutCapture): FireUsage | null {
+  if (!adapter) return null;
+  if (capture.truncated()) return null;
+  try { return adapter.parse(capture.text()); } catch { return null; } // parse is best-effort, never throws into the runner
+}
+
 function fromUsageObj(raw: unknown): FireUsage | null {
   if (!raw || typeof raw !== "object") return null;
   const u = raw as Record<string, unknown>;
@@ -165,13 +209,26 @@ export const opencodeAdapter: UsageAdapter = {
   extraArgs: ["--format", "json"],
 
   parse(stdout: string): FireUsage | null {
-    // Take the LAST usage-bearing event, not the first: opencode emits one `step_finish` PER model turn, each
-    // carrying that step's tokens/cost, so first-match records only the opening turn as the fire total — a
-    // plausible-but-partial wrong row (PM constraint from the LOOP-15 verify). Last-match is exact for a
-    // single-step fire and records the final turn's real measurement for a multi-step one; `usage:null` is an
-    // honest miss. (Whether a multi-step fire's last step_finish is cumulative is unverified — single-step
-    // sample only; summing is a follow-up if a real multi-step sample shows it's needed — see the hand-off.)
-    let last: FireUsage | null = null;
+    // SUM every `step_finish`, because opencode's per-event numbers are PER-TURN — measured, not assumed
+    // (LOOP-476 AC1, which existed because the note here used to read "unverified — single-step sample only").
+    //
+    // Measurement, 2026-08-11, over the real `--format json` streams this workspace's own opencode fires left
+    // in `.dev-loop/*/runner-logs/*.log` (junior-dev + qa, opencode 1.2.24, deepseek-v4-flash). Two independent
+    // facts, either of which alone settles it:
+    //   · cost DECREASES between consecutive steps within one fire — 8 of 17 consecutive pairs on an 18-step
+    //     fire, 92 of 197 on a 198-step one. A cumulative counter cannot decrease.
+    //   · `tokens.input` falls from 36822 on step 0 to 1439 on step 1 as the prefix moves into `cache.read`
+    //     (0 → 36608). Each event reports THAT turn's input, not a running total.
+    // So last-match reported one turn as the fire: on the 19-step fixture beside this file it records
+    // $0.003178756 of a real $0.140456736 (2.3%), and on the 198-step fire $0.0076 of $1.1466 (0.67%).
+    //
+    // Summing is therefore the exact total, not an estimate. Absent fields stay ABSENT rather than becoming
+    // zero: a fire whose events carry no `cost` at all reports costUsd null (an honest miss), never $0.00 —
+    // the distinction between "measured nothing" and "did not measure" that LOOP-445 rests on. Every other
+    // line (step_start, text, tool parts) is scanned past, and a shape mismatch still degrades to null.
+    let steps = 0;
+    let input = 0, output = 0, cacheRead = 0, cacheWrite = 0, costTotal = 0;
+    let costSeen = false, cacheReadSeen = false, cacheWriteSeen = false;
     try {
       for (const line of stdout.split("\n")) {
         const t = line.trim();
@@ -182,10 +239,26 @@ export const opencodeAdapter: UsageAdapter = {
         const tokens = part?.["tokens"] ?? ev["tokens"];
         const cost = part?.["cost"] ?? ev["cost"];
         const u = fromOpencodeTokens(tokens, cost);
-        if (u) last = u;
+        if (!u) continue;
+        steps++;
+        input += u.inputTokens ?? 0;
+        output += u.outputTokens ?? 0;
+        if (u.cacheReadTokens !== null) { cacheRead += u.cacheReadTokens; cacheReadSeen = true; }
+        if (u.cacheWriteTokens !== null) { cacheWrite += u.cacheWriteTokens; cacheWriteSeen = true; }
+        if (u.costUsd !== null) { costTotal += u.costUsd; costSeen = true; }
       }
     } catch { /* outer guard — parse is best-effort, never throws into the runner */ }
-    return last;
+    if (steps === 0) return null; // no usage-bearing event — an honest miss, not a zero-filled row
+    // A bucket no event ever reported stays null (unknown); one that reported is the sum across the fire.
+    return {
+      source: "provider",
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheReadSeen ? cacheRead : null,
+      cacheWriteTokens: cacheWriteSeen ? cacheWrite : null,
+      costUsd: costSeen ? costTotal : null,
+      currency: costSeen ? "USD" : null,
+    };
   },
 
   isError(stdout: string): boolean {
