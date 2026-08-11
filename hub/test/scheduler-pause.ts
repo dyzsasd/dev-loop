@@ -1,12 +1,15 @@
 // Regression test for LOOP-401 Child 1: scheduler-pause.ts module
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { openDb, logEvent } from "../src/db.ts";
+import { openDb } from "../src/db.ts";
 import { readPause, writePause, clearPause, formatPause } from "../src/scheduler-pause.ts";
 import { TEAM_INTAKE_PROJECT } from "../src/team-config.ts";
+import { ensureProject } from "../src/seed.ts";
+import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 function createTestDb(): ReturnType<typeof openDb> {
   const dbPath = join(mkdtempSync(join(tmpdir(), "pause-test-")), "test.db");
@@ -157,43 +160,69 @@ test("scheduler-pause: AC6 — table retro-adds to existing DBs without user_ver
   db.close();
 });
 
-test("scheduler-pause: events are logged on pause/resume", async () => {
-  const db = createTestDb();
+// AC6 (LOOP-593, re-landed as LOOP-594): the pause/resume verbs leave an audit line that
+// `dev-loop events` can actually return.
+//
+// The predecessor of this test asserted `SELECT ... FROM events WHERE kind='scheduler.pause'`
+// after calling `logEvent` ITSELF — so it exercised db.ts rather than the verb, and its read
+// carried no `project_id` predicate. Both halves of the real defect were therefore invisible to
+// it: the verb stamped the project KEY "_team" where `events.project_id` holds a project UUID,
+// so every reader (`list_events` filters `WHERE project_id=?` with a resolved id) matched zero
+// rows, and the test passed anyway. This version spawns the real verb and reads through the
+// reader's own predicate, which is what makes it able to fail.
+test("scheduler-pause: AC6 — the CLI's pause/resume events are readable through the project-scoped reader", async () => {
+  // A real workspace fixture: the verb discovers its own hub.db from dev-loop.json, so the DB
+  // this test seeds and the DB the verb writes are the same file only if the fixture is real.
+  const root = mkdtempSync(join(tmpdir(), "pause-cli-"));
+  mkdirSync(join(root, ".dev-loop"), { recursive: true });
+  writeFileSync(
+    join(root, "dev-loop.json"),
+    JSON.stringify({ schemaVersion: 2, team: { key: "pausetest", backend: "service" }, repos: {}, projects: {} }),
+  );
 
-  // Pause and verify event is logged (CLI handler calls logEvent after writePause)
-  writePause(db, "alice", "release window", null);
-  logEvent(db, {
-    project_id: TEAM_INTAKE_PROJECT,
-    actor: "alice",
-    kind: "scheduler.pause",
-    data: { reason: "release window", until: null }
-  });
+  const dbPath = join(root, ".dev-loop", "hub.db");
+  const seed = openDb(dbPath);
+  const teamProjectId = ensureProject(seed, TEAM_INTAKE_PROJECT, "Team Intake", "TM");
+  seed.close();
+  assert.notEqual(teamProjectId, TEAM_INTAKE_PROJECT, "fixture sanity: the row id must not BE the key");
 
+  // LOOP-193: this fire's own DEVLOOP_* markers (DEVLOOP_WORKSPACE above all) would make the
+  // spawned verb resolve the LIVE workspace instead of this fixture.
+  const cliPath = join(import.meta.dirname, "..", "src", "scheduler-pause-cli.ts");
+  const run = (...args: string[]) =>
+    spawnSync("node", [cliPath, ...args], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 60000,
+      env: { ...scrubFireEnv(), DEVLOOP_ACTOR: "operator" } as NodeJS.ProcessEnv,
+    });
+
+  const paused = run("pause", "--reason", "release window");
+  assert.equal(paused.status, 0, `pause should exit 0 — stderr: ${paused.stderr}`);
+
+  const db = openDb(dbPath);
+
+  // The discriminating read: exactly the predicate list_events applies (a resolved project id).
+  // Against the key-stamped implementation this returns undefined.
   const pauseEvent = db.prepare(
-    "SELECT kind, data FROM events WHERE kind = 'scheduler.pause' ORDER BY created_at DESC LIMIT 1"
-  ).get() as { kind: string; data: string } | undefined;
+    "SELECT actor, kind, data FROM events WHERE project_id = ? AND kind = 'scheduler.pause' ORDER BY id DESC LIMIT 1",
+  ).get(teamProjectId) as { actor: string; kind: string; data: string } | undefined;
+  assert(pauseEvent, "scheduler.pause must be readable under _team's RESOLVED id — a key-stamped row matches no reader");
+  assert.equal(pauseEvent.actor, "operator");
+  assert.equal(JSON.parse(pauseEvent.data).reason, "release window");
 
-  assert(pauseEvent, "scheduler.pause event should be logged");
-  assert.equal(pauseEvent.kind, "scheduler.pause");
-  const pauseData = JSON.parse(pauseEvent.data);
-  assert.equal(pauseData.reason, "release window");
+  // And pin the defect directly: no row may carry the raw key in the id column.
+  const keyStamped = db.prepare("SELECT COUNT(*) n FROM events WHERE project_id = ?").get(TEAM_INTAKE_PROJECT) as { n: number };
+  assert.equal(keyStamped.n, 0, `events.project_id must hold a project id, not the key '${TEAM_INTAKE_PROJECT}'`);
 
-  // Resume and verify event is logged (CLI handler calls logEvent after clearPause)
-  const cleared = clearPause(db);
-  assert(cleared);
-
-  logEvent(db, {
-    project_id: TEAM_INTAKE_PROJECT,
-    actor: "alice",
-    kind: "scheduler.resume"
-  });
+  const resumed = run("resume");
+  assert.equal(resumed.status, 0, `resume should exit 0 — stderr: ${resumed.stderr}`);
 
   const resumeEvent = db.prepare(
-    "SELECT kind FROM events WHERE kind = 'scheduler.resume' ORDER BY created_at DESC LIMIT 1"
-  ).get() as { kind: string } | undefined;
-
-  assert(resumeEvent, "scheduler.resume event should be logged");
-  assert.equal(resumeEvent.kind, "scheduler.resume");
+    "SELECT actor, kind FROM events WHERE project_id = ? AND kind = 'scheduler.resume' ORDER BY id DESC LIMIT 1",
+  ).get(teamProjectId) as { actor: string; kind: string } | undefined;
+  assert(resumeEvent, "scheduler.resume must be readable under _team's RESOLVED id");
+  assert.equal(resumeEvent.actor, "operator");
 
   db.close();
 });
