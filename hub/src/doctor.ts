@@ -957,7 +957,7 @@ export async function checkConsecutiveFailures(ws: Workspace, warn: (m: string) 
   try {
     const { readFireRows } = await import("./metrics.ts");
     const { findConsecutiveFailures } = await import("./metrics.ts");
-    const { wsFireLedger } = await import("./paths.ts");
+    const { wsFireLedger } = await import("./workspace.ts");
 
     const rows = readFireRows(wsFireLedger(ws));
     const failures = findConsecutiveFailures(rows, 5, 24 * 60 * 60 * 1000);
