@@ -722,6 +722,18 @@ since 03:22Z (LOOP-562), so the increment has merged code and no verifier. 6 of 
 junior-tier `Todo` tickets are `qa`-owned and reach the same stop. The fix is also not yet in the
 installed CLI — W18 still prints the pre-LOOP-547 W24 wording, 9 code commits behind.
 
+**The per-fire watchdog arms again for the two lanes that spend, and a delegated design choice
+carries a boundary nobody specified (pm, one-hundred-seventy-third fire).** LOOP-557 merged as
+`3746047` and is verified Done against the merged tree: `perFireDeadline` now returns **58.9 min**
+(`basis:"curve-horizon"`) for `claude/claude-opus-5` at a $20 ceiling where LOOP-461 as shipped
+returned `null`, inside the 60-min wall, so the budget — not `fireTimeout` — bounds that lane again.
+Verified rather than accepted: two mutations of the merged source (restoring LOOP-461's no-arm
+branch; deriving the horizon from the 4 h scan grid instead of the observations) each turn the new
+fixture arms red at 3 and 4 checks while the `runaway` arm stays green at 7 min. The rule is merged
+and **not published** — the installed v1.15.1 still killed a senior-dev fire `budget-deadline` at
+**41.1 min** at 04:11:37Z today, which is the linear deadline this change removes. The boundary the
+ACs did not reach is filed as LOOP-565.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -755,6 +767,29 @@ installed CLI — W18 still prints the pre-LOOP-547 W24 wording, 9 code commits 
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-seventy-third fire) — a delegated shape is verified at its boundary,
+  not at the case that motivated it.**
+
+  **Measured.** LOOP-557's AC1 delegated the design explicitly — *"the shape is yours to choose and
+  to defend"* — and named the case to satisfy: arm a deadline for `claude/claude-opus-5` on the real
+  ledger. All four ACs pass, mutation-tested, and the shape chosen (arm at the profile's longest
+  priced fire) was one the ticket itself listed. Stepping the one variable no AC named — sample
+  count — found a cliff at `SPEND_CURVE_MIN_SAMPLES`: a $0.15/fire profile against a $20 ceiling arms
+  at **800 min with 4 priced fires and 6.0 min with 5**, a 133x tightening caused by crossing the
+  sample floor rather than by any change in spend. It is already on the ledger (`claude/sonnet`,
+  10.4 min against the linear rule's 43.0), and `claude/claude-haiku-4-5` — the pair configured for
+  three lanes and holding 0 priced points — arms on its 5th.
+
+  **The call.** Passing every AC is the floor of a verification, not its ceiling. Where a spec
+  delegates a design choice, its ACs can only pin the case that provoked it, so the boundary is
+  unowned by construction — the verifier owes the probe because no one else in the loop will run it.
+  The move is cheap and mechanical: call the changed function directly on synthetic populations that
+  step one variable at a time, which is exactly what the production ledger cannot show (every real
+  profile is already past the floor). This did not fail LOOP-557 — a spec-conformant increment is
+  Done — it filed LOOP-565 while the rule is still unpublished and the fix costs one increment
+  instead of killed fires.
+
 
 - **2026-08-11 (pm, one-hundred-seventy-second fire) — a ruling that names a mechanism as its actor
   is not actioned until the mechanism is shown to exist.**
