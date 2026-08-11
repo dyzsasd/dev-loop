@@ -382,6 +382,15 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
   unset here, so the board is still read-only and the CLI is still the only way to rule.
+- **A code push to the default branch of a `landing:"pr"` repo is refused (LOOP-567, `a5751e3`,
+  PR #330, verified Done 2026-08-11T10:32Z)** — a `pushGuard` class over the PATH SET of the pushed
+  range, so `dev-loop doc-land` (§20 D4, docs-only) still lands and a `direct`-mode merge-back is
+  untouched. Verified against the merged tree, and against a **live** offender: `ea98079`, a code
+  commit that reached the shared checkout's `main` at 10:20:47Z, six minutes after the fix merged —
+  the guard refused it by name. **Half a remedy by construction:** it fires only when a caller runs
+  the guard, and the fires that produced all five instances did not (§7 mandates
+  `push-guard --strict` on the agent, not in git). The other half is a SKILL edit the loop may not
+  self-apply — **LOOP-580**, `Human-Blocked`, awaiting the operator. Merged, not published.
 
 ### 2026-08-10 (pm, one-hundred-thirty-sixth fire): the block that bounds the doc has started carrying facts that decay, and the sawtooth measured end to end
 
@@ -781,6 +790,38 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-eighty-seventh fire) — a park's CARRIER decides whether the operator
+  ever sees it, and §17's canonical park shape is written for the wrong backend.**
+
+  **Measured.** [[LOOP-576]], a `[senior-dev-proposal]` needing an operator ruling, sat in §17's
+  canonical shape: `Todo` + `blocked` + `needs-pm` + `external-prereq` + `external-access`. Every
+  label was correct. `dev-loop metrics --json` `.decisionQueue` was **empty** at the same instant,
+  and `team.comms` resolves to nothing (doctor W12, still open) — so the ticket was in neither
+  operator carrier. It was parked for a human no surface would show it to. Moving it to
+  `Human-Blocked` put it in `.decisionQueue` on the next read; nothing else changed.
+
+  **Why the labels were not the error.** §17's shape is the `linear` realization of §18's
+  `park-for-operator` abstraction — real-state-if-present-else-label. On `service` the real state
+  exists, so the label park is the FALLBACK arm being taken where the primary arm is available. The
+  decision queue is defined as `Human-Blocked ∪ In Review@operator`; a label park is outside that
+  set by construction, and no amount of correct labelling enters it.
+
+  **The call.** On `service`, a human-only park is the **`Human-Blocked` state**, and the §17 labels
+  are the *kind* annotation riding on it, not the carrier. Two proposals were re-carried this fire
+  (LOOP-576 and the newly filed [[LOOP-580]]); both now appear in `.decisionQueue`, which was empty
+  before. The generalization, worth applying beyond parks: **a routing label is only a carrier if
+  some surface queries it.** Verify the surface, not the label — the label was right and the ticket
+  was still invisible.
+
+  **Second finding, same fire, recorded because it recurred within it.** An unpushed commit on the
+  shared checkout's `main` is not a private mistake — it becomes a **fork** the moment `origin/main`
+  advances under it, and from then on every lane's `git pull --ff-only` refuses, including
+  `doc-land`. `ea98079` (10:20:47Z) forked against `491390c` within ~20 minutes. The commit itself
+  was recoverable in one cherry-pick; the cost was board-wide and fell on lanes that did nothing.
+  Repaired under `with-repo-lock` with `reset --keep` after verifying the salvage ref. LOOP-567's
+  guard would have refused the *push*; nothing refuses the *commit*, which is why LOOP-580's SKILL
+  half is the load-bearing one.
 
 - **2026-08-11 (pm, one-hundred-eighty-fourth fire) — the verifier's isolation step is itself an
   unguarded precondition, and when it fails open the verdict describes a different tree than the one
