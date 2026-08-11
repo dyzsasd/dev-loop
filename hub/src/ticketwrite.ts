@@ -14,7 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
 import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug, designChildrenOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 import { handoffGateRejection } from "./handoff-gate.ts";
-import { acCompletenessRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
+import { acCompletenessRejection, unlandedWorkRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance; LOOP-575: the UNLANDED axis // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
 import { effectiveRepo, reposOfProject } from "./team-config.ts";
 
@@ -210,7 +210,7 @@ function designParentHandoffExemption(
  * bare dbPath with no workspace at all (the LOOP-284 lesson), and refusing every handoff for them
  * would break the write layer for everyone who is not running a loop.
  */
-function landingContextFor(db: DatabaseSync, projectId: string): { repoRoot?: string; landing?: "pr" | "direct" } {
+function landingContextFor(db: DatabaseSync, projectId: string): { repoRoot?: string; landing?: "pr" | "direct"; baseRef?: string } {
   try {
     const ws = tryResolveWorkspace();
     if (!ws) return {};
@@ -223,7 +223,11 @@ function landingContextFor(db: DatabaseSync, projectId: string): { repoRoot?: st
     const primary = repos.find((r) => r.role === "primary") ?? repos[0];
     if (!primary) return {};
     const r = effectiveRepo(ws, primary.ref);
-    return { repoRoot: r.absPath, landing: r.landing };
+    // LOOP-575 — the base the UNLANDED axis measures against. `origin/<defaultBranch>`, never the
+    // local branch of the same name: under split-dev the local ref does not advance (every worktree
+    // is based on the remote-tracking ref), so measuring against it would report the whole of main's
+    // recent history as unlanded work belonging to whichever ticket happened to be closing.
+    return { repoRoot: r.absPath, landing: r.landing, baseRef: `origin/${r.defaultBranch}` };
   } catch { return {}; }
 }
 
@@ -245,6 +249,21 @@ function acGateEnabled(): boolean {
   try {
     const ws = tryResolveWorkspace();
     return (ws?.file.team.intake as { acCompletenessGate?: unknown } | undefined)?.acCompletenessGate === true;
+  } catch { return false; }
+}
+
+/**
+ * Is the LOOP-575 unlanded-work axis enabled for this workspace?
+ *
+ * Same posture and same default as acGateEnabled above — off unless
+ * `team.intake.unlandedWorkGate` is true, per the AC4 measurement recorded on LOOP-575. Extracted
+ * rather than inlined for the reason the rest of this file gives: updateTicketRow is the choke point
+ * every write path runs through, and a branch added there lands on the module's hottest function.
+ */
+function unlandedGateEnabled(): boolean {
+  try {
+    const ws = tryResolveWorkspace();
+    return (ws?.file.team.intake as { unlandedWorkGate?: unknown } | undefined)?.unlandedWorkGate === true;
   } catch { return false; }
 }
 
@@ -456,15 +475,24 @@ export function updateTicketRow(
   // the qa/pm owner label in `resolved` cannot unlock a dev-tier self-close. rowFor reads within the caller's txn.
   const storedRow = rowFor(db, projectId, id);
   const storedLabels = storedRow ? (JSON.parse(storedRow.labels) as string[]) : [];
+  // LOOP-575: resolved ONCE — the LOOP-309 handoff axis and the unlanded axis measure against the
+  // same checkout, and re-resolving it per axis would re-read the workspace file on every write.
+  const landingCtx = landingContextFor(db, projectId);
   const gate = terminalExitRejection(actor, fromState, resolved)
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
     ?? designParentGate(db, projectId, id, actor, fromState, resolved, storedRow)   // LOOP-345 (R1+R2)
-    ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingContextFor(db, projectId),   // LOOP-309
+    ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingCtx,        // LOOP-309
       isDesignParent: designParentHandoffExemption(db, projectId, id, fromState, resolved, storedRow) })            // LOOP-360
     ?? acCompletenessRejection({                                                                    // LOOP-198
       id, description: resolved.description ?? "", toState: resolved.state, fromState, actor,
       commentBodies: commentBodiesFor(db, id),
       enabled: acGateEnabled(),
+    })
+    ?? unlandedWorkRejection({                                                                      // LOOP-575
+      id, toState: resolved.state, fromState, actor,
+      commentBodies: commentBodiesFor(db, id),
+      repoRoot: landingCtx.repoRoot, baseRef: landingCtx.baseRef,
+      enabled: unlandedGateEnabled(),
     })
     ?? verifyGateRejection(actor, fromState, resolved, storedLabels);
   // LOOP-345 R1: on a design parent the §21a rule is the WHOLE decision — a pass here means the
