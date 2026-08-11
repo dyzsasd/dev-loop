@@ -67,7 +67,11 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.backup\.keep$/, kind: "int" },
   { re: /^team\.backup\.dir$/, kind: "string" },
   // LOOP-335 — repos.<ref>.ciIrrelevantPaths, through the validated mutator like every other tunable.
-  { re: /^repos\.[^.]+\.ciIrrelevantPaths$/, kind: "string-list" },
+  // LOOP-568/574 — the <ref> position is `.+?`, not `[^.]+`: `team-config.ts` validates a repo ref
+  // through KEY_RE, which PERMITS dots, so `web.app` is a legal ref that `[^.]+` silently refused
+  // here — the path died as "not an operator-settable path" and the knob was unreachable. The `$`
+  // anchor keeps the suffix exact, and resolveRepoSegments below rejoins the ref for the walk.
+  { re: /^repos\..+?\.ciIrrelevantPaths$/, kind: "string-list" },
   // LOOP-394 (design approvals §8) — the per-action-class enforcement enable list, default EMPTY.
   // Members are checked against the ACTION_CLASSES registry at the set gate below, not just at load:
   // an operator turning enforcement ON must learn about a typo now, not from a fire that was never
@@ -104,12 +108,15 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   // strategyDoc: the repo-relative file path pointer consumed by doc-land / roadmap-banner / file-watcher.
   // Stored as a plain string; absolute paths and Linear doc URLs are rejected at the set gate (not schema-level).
   { re: /^projects\.[^.]+\.strategyDoc$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.style$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.healthCheck$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.auto$/, kind: "boolean" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.deployPrPrefix$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.command$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
+  // The <ref> position spans dots (see ciIrrelevantPaths above); the <env> position deliberately does
+  // NOT. A ref is rejoinable because the repo registry says which refs exist — there is no equivalent
+  // registry for environment names, so a dotted <env> would be an ambiguity nothing could resolve.
+  { re: /^repos\..+?\.deploy\.style$/, kind: "string" },
+  { re: /^repos\..+?\.deploy\.healthCheck$/, kind: "string" },
+  { re: /^repos\..+?\.deploy\.environments\.[^.]+\.auto$/, kind: "boolean" },
+  { re: /^repos\..+?\.deploy\.environments\.[^.]+\.deployPrPrefix$/, kind: "string" },
+  { re: /^repos\..+?\.deploy\.environments\.[^.]+\.command$/, kind: "string" },
+  { re: /^repos\..+?\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
   "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,agents.<a>.{codingAgent,model,effort}}, " +
@@ -150,7 +157,9 @@ function coerce(kind: SetKind, raw: string, path: string): unknown {
 // field is create-time-only; and when nothing can write it yet, say THAT rather than implying a route
 // exists. `doctor` may still be named as the way to VALIDATE config — never as a blessing for editing it.
 const OTHER_MUTATOR: ReadonlyArray<{ re: RegExp; how: string }> = [
-  { re: /^repos\.[^.]+\.(path|remote|defaultBranch|landing|mergeChecks|autoMerge|build|ci)/, how: "`dev-loop team add-repo <ref> --project <key> --path <rel> --detect` re-registers a repo and re-detects its build/CI facts" },
+  // <ref> spans dots here too, or a dotted ref's add-repo-owned field would fall through to the
+  // generic "no writer exists" line and send the operator looking for a route that does exist.
+  { re: /^repos\..+?\.(path|remote|defaultBranch|landing|mergeChecks|autoMerge|build|ci)/, how: "`dev-loop team add-repo <ref> --project <key> --path <rel> --detect` re-registers a repo and re-detects its build/CI facts" },
   { re: /^projects\.[^.]+\.repos/, how: "`dev-loop team add-repo <ref> --project <key> …` adds a repo reference to a project" },
   { re: /^team\.providers\./, how: "`dev-loop team add-provider <id> --base-url <url> --auth-env <NAME> --models …` (the key VALUE goes through `dev-loop secret set`, never config)" },
   { re: /^team\.agents\.[^.]+\.(codingAgent|model|effort)$/, how: "`dev-loop team set-model <agent> <model> [--effort e] [--team-default]`" },
@@ -162,6 +171,29 @@ function unsettableGuidance(path: string): string {
   if (hit) return `  a different mutator owns this path: ${hit.how}`;
   if (CREATE_TIME_ONLY.test(path)) return `  this field is create-time only — it is fixed by \`dev-loop team init\` / \`team add-project\` and there is no supported way to change it in place.`;
   return `  no operator-settable writer exists for this path yet — there is no supported route to change it from the CLI.\n  Field reference: references/config-schema.md. \`dev-loop doctor\` validates the config; it does not authorize hand-editing it.`;
+}
+
+// LOOP-568/574 — rejoin a dotted repo ref against the registry.
+//
+// A repo ref may itself contain dots (`web.app`, `a.b.c`) — KEY_RE permits them — so the settable
+// patterns above let the <ref> position span dots. The naive `path.split(".")` that follows would
+// then address `repos.web.app.deploy.style` as repos → web → app → deploy → style (four levels of
+// containers that do not exist) instead of the ONE registry key `repos['web.app']`. That is the
+// defect: the walk auto-creates missing intermediate objects, so without this the mutator would
+// either die on an unknown ref or write a nested shape the loader cannot read back.
+//
+// Longest-match is the specified tie-break (AC1): with both `a.b` and `a.b.c` registered,
+// `repos.a.b.c.deploy.style` means the ref `a.b.c`, never `a.b` with a stray `c` container. The
+// registry is the only authority here — an unmatched path is returned UNCHANGED so the caller's
+// existing "unknown repo ref" gate reports it, rather than this function inventing a ref.
+function resolveRepoSegments(segs: string[], repos: Record<string, unknown>): string[] {
+  // Need at least `repos` + a ref + one field to set; a candidate ref must leave that field behind.
+  if (segs[0] !== "repos" || segs.length < 3) return segs;
+  for (let len = segs.length - 2; len >= 1; len--) {
+    const ref = segs.slice(1, 1 + len).join(".");
+    if (Object.hasOwn(repos, ref)) return ["repos", ref, ...segs.slice(1 + len)];
+  }
+  return segs;
 }
 
 export async function teamSet(argv: string[]): Promise<number> {
@@ -176,17 +208,26 @@ export async function teamSet(argv: string[]): Promise<number> {
   // reported before → after line honest about the value actually written.
   const raw = coerce(entry.kind, value, path);
   const coerced = /^(team|projects\.[^.]+)\.autonomy$/.test(path) ? normalizeAutonomy(raw as AutonomyInput) : raw;
-  const segs = path.split(".");
+  const rawSegs = path.split(".");
   // Own-property discipline: a wildcard segment like `__proto__`/`constructor` resolves on the PROTOTYPE
   // chain (truthy, object-typed) and the walk below would silently mutate Object.prototype instead of the
-  // file — reject the reserved names outright and use Object.hasOwn everywhere else.
-  for (const seg of segs) if (seg === "__proto__" || seg === "constructor" || seg === "prototype") die(`cannot set ${path}: '${seg}' is not a valid config key`);
+  // file — reject the reserved names outright and use Object.hasOwn everywhere else. Checked on the RAW
+  // split, which is the finer partition: rejoining a ref can only ever merge segments, never create one.
+  for (const seg of rawSegs) if (seg === "__proto__" || seg === "constructor" || seg === "prototype") die(`cannot set ${path}: '${seg}' is not a valid config key`);
   let msg = "";
   const ws = mutate((file) => {
+    // The dotted ref is rejoined against the registry in the file this write is about to touch — one
+    // read, so the resolution can never disagree with the state being written.
+    const segs = resolveRepoSegments(rawSegs, file.repos);
     // Container existence: a projects.<key> / repos.<ref> path must name a REGISTERED entry — `set`
     // tunes fields, it never creates projects/repos (that is add-project/add-repo's job).
     if (segs[0] === "projects" && !Object.hasOwn(file.projects, segs[1])) die(`unknown project '${segs[1]}' — add it first: dev-loop team add-project ${segs[1]}`);
-    if (segs[0] === "repos" && !Object.hasOwn(file.repos, segs[1])) die(`unknown repo ref '${segs[1]}' — register it first: dev-loop team add-repo ${segs[1]} --project <key> --path <rel>`);
+    // A path whose ref matched nothing arrives here unrejoined, so segs[1] is only its FIRST dotted
+    // segment — list the registry rather than name a ref the operator never typed.
+    if (segs[0] === "repos" && !Object.hasOwn(file.repos, segs[1])) {
+      const known = Object.keys(file.repos);
+      die(`unknown repo ref '${segs[1]}' — register it first: dev-loop team add-repo ${segs[1]} --project <key> --path <rel>${known.length ? `\n  registered refs: ${known.join(", ")}` : ""}`);
+    }
     // budget.perFireUsd must be strictly positive (the "number" kind accepts any finite number).
     if (path === "team.budget.perFireUsd" && (coerced as number) <= 0)
       die(`team.budget.perFireUsd must be a positive number (got '${value}')`);

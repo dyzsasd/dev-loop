@@ -777,17 +777,27 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(cmdOf(a5.reason ?? "") === null,
     `LOOP-365 AC5: no command form is offered when the ref did not resolve (${a5.reason?.slice(0, 200)})`);
 
-  // AC4, the case quoting cannot reach (PR #273 review): a ref the MUTATOR cannot address.
-  // `team set` matches `^repos\.[^.]+\.ciIrrelevantPaths$` and splits its path on dots, while
-  // `validateRepoRegistry` → `validateName` → `KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/` accepts a
-  // dot in a repo ref. `repos.web.app.ciIrrelevantPaths` is therefore a legal knob with no runnable
-  // command, and the failure is inside the tool, not in the shell — so the AC4 property ("if a
-  // command is printed, it runs") needs this arm, which the angle-bracket check above passes.
+  // LOOP-574 — this arm is INVERTED from what LOOP-365 asserted, because the constraint behind it
+  // was removed rather than worked around. `validateRepoRegistry` → `validateName` →
+  // `KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/` has always accepted a dot in a repo ref, but `team set`
+  // matched its target with `^repos\.[^.]+\.ciIrrelevantPaths$` and split the path on dots, so
+  // `repos.web.app.ciIrrelevantPaths` was a legal knob the mutator refused — and this hint therefore
+  // had to withhold the command. `team-edit.ts` now rejoins a dotted ref against the repo registry
+  // (resolveRepoSegments), so a dotted ref is addressable and gets the ordinary command form.
+  //
+  // The AC4 property is UNCHANGED and is what these assertions still pin: if a command is printed,
+  // it runs. The check that it carries no angle-bracket placeholder is repeated here rather than
+  // assumed from the dot-free case above — this is the arm that used to be exempt from it.
   const aDot = read(["docs/STRATEGY.md"], undefined, {}, "web.app");
-  ok(cmdOf(aDot.reason ?? "") === null,
-    `LOOP-365 AC4: a dotted repo ref offers NO command — team set cannot address it (${aDot.reason?.slice(0, 220)})`);
-  ok((aDot.reason ?? "").includes("repos.web.app") && (aDot.reason ?? "").includes("ciIrrelevantPaths"),
-    `LOOP-365 AC4: …while still naming the knob and the real ref, so the operator knows what is unset (${aDot.reason?.slice(0, 220)})`);
+  const cDot = cmdOf(aDot.reason ?? "");
+  ok(cDot !== null,
+    `LOOP-574 AC4: a dotted repo ref now yields a command — team set can address it (${aDot.reason?.slice(0, 220)})`);
+  ok((cDot ?? "").includes("repos.web.app.ciIrrelevantPaths"),
+    `LOOP-574 AC4: the command names the real dotted registry ref, not a placeholder (${cDot})`);
+  ok(!/[<>]/.test(cDot ?? "<"),
+    `LOOP-574 AC4: the dotted-ref command carries no angle-bracket placeholder — it would redirect (${cDot})`);
+  ok((aDot.reason ?? "").includes("ciIrrelevantPaths") && !(aDot.reason ?? "").includes("cannot address"),
+    `LOOP-574 AC4: the retired "cannot address a repo ref containing a dot" description is gone (${aDot.reason?.slice(0, 220)})`);
 
   // AC6 — a ref needing shell quoting stays runnable. `team-config.ts` validates the
   // ciIrrelevantPaths ENTRIES, not the ref, so a ref carrying a space is a config it accepts.

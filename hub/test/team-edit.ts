@@ -210,6 +210,64 @@ try {
   const ceil = run("team", ["set", "repos.webr.deploy.environments.prod.auto", "true"], { cwd: lin });
   ok(ceil.code === 1 && /E06/.test(ceil.out), "team set cannot break the deployPolicy ceiling (E06 re-validation)");
 
+  // ═══ LOOP-568/574 — a repo ref CONTAINING DOTS is addressable through `team set` ═══
+  //
+  // `validateName` → `KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/` permits dots, so `web.app` and
+  // `a.b.c` are legal registry keys. `team set` matched its target with `^repos\.[^.]+\.…` and then
+  // split the path on dots, so such a ref was refused at the pattern gate — and had it got past
+  // that, the walk would have addressed `repos.a.b.c.ciIrrelevantPaths` as repos → a → b → c
+  // (auto-creating three containers that are not registry entries) instead of the ONE key
+  // `repos['a.b.c']`. The registry is what rejoins the ref, so the fix needs BOTH halves: the
+  // pattern must admit the path and resolveRepoSegments must rejoin it.
+  //
+  // AC3 — these assertions DISCRIMINATE, which is the property the mutation test needs. Reverting
+  // resolveRepoSegments to a naive `path.split(".")` leaves the single-segment and hyphenated rows
+  // GREEN and fails the two- and three-segment rows specifically; the no-stray-container assertion
+  // catches the nested-write variant even if some other route let the command exit 0. A test that
+  // only asserted "exit 0 for every ref" would not distinguish the two.
+  {
+    const dots = join(tmp, "dotted-refs");
+    run("team", ["init", "--dir", dots, "--key", "dot-team", "--backend", "linear", "--linear-team", "L"]);
+    run("team", ["add-project", "web", "--linear-project", "Web"], { cwd: dots });
+    const refs = ["plain", "web.app", "a.b.c", "x-1"];
+    for (const ref of refs) {
+      mkdirSync(join(dots, `r-${ref}`), { recursive: true });
+      const add = run("team", ["add-repo", ref, "--project", "web", "--path", `r-${ref}`], { cwd: dots });
+      ok(add.code === 0, `LOOP-574 AC2: add-repo registers ref '${ref}' (${add.out.slice(0, 140)})`);
+    }
+    ok(Object.hasOwn(readJson(join(dots, "dev-loop.json")).repos, "a.b.c"),
+      "LOOP-574 AC2: a three-segment ref is ONE registry key, not a nested shape");
+
+    // The corpus AC2 names: single-segment, two-segment, three-segment, hyphenated.
+    for (const [ref, shape] of [["plain", "single-segment"], ["web.app", "two-segment"], ["a.b.c", "three-segment"], ["x-1", "hyphenated"]] as const) {
+      const set = run("team", ["set", `repos.${ref}.ciIrrelevantPaths`, "docs/A.md,docs/b/"], { cwd: dots });
+      const cfg = readJson(join(dots, "dev-loop.json"));
+      const got = cfg.repos[ref]?.ciIrrelevantPaths;
+      ok(set.code === 0 && Array.isArray(got) && got.join(",") === "docs/A.md,docs/b/",
+        `LOOP-574 AC2: team set reaches a ${shape} repo ref '${ref}' — exit ${set.code}, value ${JSON.stringify(got)} (${set.out.slice(0, 140)})`);
+    }
+
+    // The discriminator: the dotted refs wrote to their own registry keys and created NO stray
+    // intermediate container. Under a naive dot-split the walk would have made `repos.a` an object.
+    const cfg = readJson(join(dots, "dev-loop.json"));
+    ok(!Object.hasOwn(cfg.repos, "a") && !Object.hasOwn(cfg.repos, "web"),
+      `LOOP-574 AC3: no stray container was auto-created by the walk — refs are ${Object.keys(cfg.repos).join(", ")}`);
+    ok(Object.keys(cfg.repos).sort().join(",") === "a.b.c,plain,web.app,x-1",
+      `LOOP-574 AC3: the registry holds exactly the four registered refs (${Object.keys(cfg.repos).sort().join(",")})`);
+
+    // A dotted ref that matches NO registered repo is still refused — resolveRepoSegments never
+    // invents a ref — and the refusal lists the registry, because with the path unrejoined the
+    // reported segment is only the first of what the operator typed.
+    const unknown = run("team", ["set", "repos.no.such.ref.ciIrrelevantPaths", "docs/A.md"], { cwd: dots });
+    ok(unknown.code !== 0 && /unknown repo ref/.test(unknown.out) && /registered refs:.*a\.b\.c/.test(unknown.out),
+      `LOOP-574: an unregistered dotted ref is refused and the refusal names the registry (${unknown.out.slice(0, 200)})`);
+
+    // The <env> position is deliberately NOT dot-spanning (no registry could disambiguate it).
+    const dottedEnv = run("team", ["set", "repos.web.app.deploy.environments.a.b.auto", "true"], { cwd: dots });
+    ok(dottedEnv.code === 2 && /not an operator-settable path/.test(dottedEnv.out),
+      `LOOP-574: a dotted <env> is still refused — only <ref> spans dots (${dottedEnv.out.slice(0, 160)})`);
+  }
+
   // ═══ add-repo existing-ref guard (LOOP-134) ═══
   // Re-running add-repo on an already-registered ref with field flags must refuse loudly.
   // This test would PASS against today's (pre-fix) code because the flags are silently dropped
