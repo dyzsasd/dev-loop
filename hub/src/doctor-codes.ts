@@ -19,6 +19,17 @@
 // Adding a check: add its row here FIRST. The test fails on an unregistered code, so a collision is
 // caught at merge time instead of by the next reader.
 
+// E-codes are a SECOND namespace, and it is the one with no home (LOOP-473). `W##` warns; `E##` is
+// an error that blocks an unattended run. E00-E19 are all claimed by team-config.ts's validator,
+// keyed by config PATH rather than by check — so there is no per-code name to tabulate, and a
+// hand-copied inventory here would be stale the next time that validator grows a rule. Picking "the
+// next free code in doctor.ts" therefore reads as E12, which collides with the intake validator at
+// team-config.ts:260.
+//
+// So the E namespace is guarded by DERIVATION, not by a list: `hub/test/legacy-home.ts` scans every
+// `E##` literal in hub/src and fails if a code registered below is also claimed by another file.
+// Only E-codes emitted from a registered check appear in the table; team-config's stay its own.
+
 export interface DoctorCode {
   code: string;
   /** Short name — what the check is about, not its full remediation text. */
@@ -70,6 +81,7 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W40", name: "approval rows exist but approvals.enforce is empty — the record gates nothing", source: "doctor.ts" },
   { code: "W41", name: "never-expiring approval grant — an end-state authorization with no horizon", source: "doctor.ts" },
   { code: "W42", name: "hub projects row diverged from the resolved config mode/autonomy", source: "doctor.ts" },
+  { code: "E20", name: "home-anchored ~/.dev-loop tree still holds state the seam removal would orphan", source: "legacy-home.ts" },
 ] as const;
 
 export const DOCTOR_CODE_SET: ReadonlySet<string> = new Set(DOCTOR_CODES.map((c) => c.code));

@@ -512,4 +512,28 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       checkApprovalsHealth(ctx);
     },
   },
+  // Row 32 — E20 (legacy home-anchored state, LOOP-473). The ONLY row that resolves a path outside
+  // the workspace, deliberately: it reports on state the workspace cannot see, which is the whole
+  // reason that state is invisible until the seam removal orphans it.
+  //
+  // `homedir()` is resolved HERE, not in the check: legacy-home.ts takes the root as a parameter so
+  // both arms are fixture-testable (AC3). It reads `join(homedir(), ".dev-loop")` literally rather
+  // than devloopHome(), because DEVLOOP_HOME retires with the default it feeds — the thing being
+  // detected is the home anchor itself, not whatever a caller redirected it to.
+  //
+  // bestEffort stays true (an unreadable home directory must not crash doctor), but the check emits
+  // through `fail`: once the default is gone every byte it names becomes unreachable, which is a
+  // data-loss precondition rather than a hygiene nag.
+  {
+    codes: ["E20"],
+    id: "e20-legacy-home",
+    scope: "workspace",
+    bestEffort: true,
+    run: async (ctx) => {
+      const { homedir } = await import("node:os");
+      const { join: joinPath } = await import("node:path");
+      const { checkLegacyHome } = await import("./legacy-home.ts");
+      checkLegacyHome(joinPath(homedir(), ".dev-loop"), ctx.out.fail);
+    },
+  },
 ];
