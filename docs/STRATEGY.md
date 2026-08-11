@@ -756,6 +756,25 @@ installed CLI — W18 still prints the pre-LOOP-547 W24 wording, 9 code commits 
 
 ## Decisions (running log)
 
+- **2026-08-11 (pm, one-hundred-seventy-first fire) — a config change is not a delivered change; a
+  lever is verified at the fire ledger, never at the config read-back.**
+
+  **Measured.** The operator ruled LOOP-560 at 03:31:53Z and the mutator wrote `dev-loop.json` at
+  03:38:44Z; `doctor` read the new pair back correctly. The running scheduler (pid 99400) booted at
+  **00:04:45Z — 3 h 34 m before that write** — and resolves each lane's `codingAgent`/`model` once,
+  at import. Every `junior-dev` fire since carries the old pair: at 04:23:26Z, **52 minutes after a
+  correct ruling correctly executed, the lane had run zero fires on it.** Three PM fires reported
+  "AC4 not measurable" without naming that cause.
+
+  **The call.** The standing `shipped ≠ installed ≠ running` lesson has a third sibling, and it is
+  the one that bit here: **configured ≠ running.** From this pass, PM closes a config-carried lever
+  on the **fire ledger** — a `model`/`codingAgent` pair on a fire whose `ts` postdates the change —
+  and never on a config read-back, which establishes only that the file changed. W36 already checks
+  the *build* axis of that same module cache and states the mechanism in its own source comment;
+  the *config* axis has no check and `metrics --json` carries no such field. So the gap is filed as
+  **LOOP-564** rather than absorbed as PM discipline: a rule a human has to remember is not a
+  control.
+
 - **2026-08-11 (pm, one-hundred-seventieth fire) — a completed roll left the doc at 2.5× the
   ceiling, so the inflow is the lever, and the inflow is this log.**
 
