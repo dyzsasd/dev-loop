@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { validateTeamFile, type ProviderEntry } from "../src/team-config.ts";
 import { renderProviderEntry, syncOpencodeConfig, opencodeSyncDrift, opencodeConfigPath } from "../src/opencode-sync.ts";
+import { EXIT_NO_WORK } from "../src/breaker.ts";      // LOOP-543: the outcome code a fire that produced nothing is ledgered under
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -153,7 +154,11 @@ try {
   ok(scope[1] === "UNSET", "Q9: an UNRELATED secrets.env key is STRIPPED from the fire env (build/test children can't read it)");
   ok(scope[2] === "UNSET", "Q9: DEVLOOP_UI_TOKEN never reaches a fire");
   const fireRow = ledgerRows().at(-1);
-  ok(fireRow?.provider === "synth" && fireRow?.codingAgent === "opencode" && fireRow?.exitCode === 0, "fire: ledger row carries the provider dimension");
+  // The fake bin routes everything it emits to files and writes nothing to stdout, so under LOOP-543 this is a
+  // no-work fire and its LEDGERED outcome is EXIT_NO_WORK, not the 0 the child returned. The provider dimension
+  // — this assertion's subject — is unaffected; the outcome code is pinned by symbol alongside it so that a
+  // future change to either one has to come here and say so.
+  ok(fireRow?.provider === "synth" && fireRow?.codingAgent === "opencode" && fireRow?.exitCode === EXIT_NO_WORK, "fire: ledger row carries the provider dimension");
 
   // team.opencodePermission override replaces the default wholesale
   cfg.team.opencodePermission = { "*": "deny", bash: { "dev-loop *": "allow", "*": "deny" } };
