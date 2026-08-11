@@ -27,7 +27,7 @@ import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the 
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./breaker.ts";
-import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
+import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter, makeStdoutCapture, usageFromCapture } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
 import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, watchdogKindOf, DEFAULT_PER_FIRE_USD, type FireUsage, type WatchdogKind } from "./metrics.ts";
@@ -1172,8 +1172,10 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   // buffer silently, then print the parsed text in finalize(). Echoing the raw blob live would bury the
   // agent's output in escaped JSON and leave a truncated fire unreadable. codex's JSONL streams — echo live.
   const deferEcho = !!usageAdapter?.resultText;
-  const MAX_FULL_STDOUT = 4 * 1024 * 1024; // 4 MiB cap — overflow degrades to usage:null, never OOM
-  let fullStdout = "";
+  // 4 MiB cap — overflow degrades to usage:null, never OOM. The capture tracks whether it actually dropped
+  // bytes, so "degrades to null" is now enforced by usageFromCapture rather than asserted here: before
+  // LOOP-476 an overflowing fire kept parsing its PREFIX and reported an early turn as the fire total.
+  const capture = makeStdoutCapture();
   // Bounded, ROLLING window of recently-seen lines (seen-lines.ts). It evicts the oldest line on
   // overflow instead of freezing on the first N — the LOOP-23 fix for a detector that went inert
   // after ~200 distinct lines (a saturated Set treated every later line, including a genuine retry
@@ -1196,10 +1198,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   child.stdout.on("data", (d) => {
     keepTail(d);
     if (!deferEcho) { process.stdout.write(`[${agent}] ${d}`); if (logOpen) log.write(d); } // deferred lanes echo in finalize()
-    if (isStructuredLane && fullStdout.length < MAX_FULL_STDOUT) {
-      const s = d.toString();
-      fullStdout += s.slice(0, MAX_FULL_STDOUT - fullStdout.length);
-    }
+    if (isStructuredLane) capture.append(d.toString());
   });
   child.stderr.on("data", (d) => { keepTail(d); process.stderr.write(`[${agent}] ${d}`); if (logOpen) log.write(d); });
 
@@ -1280,7 +1279,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         // the contradiction. Whether it is observable depends on the lane — opencode streams its usage
         // events, claude's `--output-format json` buffers until exit — so this reports "not yet observable"
         // rather than implying $0, which is the very conflation the ticket is about.
-        const spentNow = ((): number | null => { try { return usageAdapter?.parse(fullStdout)?.costUsd ?? null; } catch { return null; } })();
+        const spentNow = usageFromCapture(usageAdapter, capture)?.costUsd ?? null;
         // A measured spend goes through the SAME precision-preserving label as the ceiling: two cents-only
         // renderings of the same quantity would let a sub-cent measured spend print as "$0.00" — which reads
         // as "this fire spent nothing", the exact conflation between a measured zero and an unmeasured one
@@ -1324,7 +1323,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // killed fire still leaves SOMETHING readable in the console + run.log, never nothing. §16: result text
       // (the agent's own prose) only — the numeric usage rides the ledger row, never this echo.
       if (deferEcho) {
-        const shown = usageAdapter?.resultText?.(fullStdout) ?? fullStdout;
+        const shown = usageAdapter?.resultText?.(capture.text()) ?? capture.text();
         if (shown.trim() !== "") { process.stdout.write(`[${agent}] ${shown}\n`); if (logOpen) log.write(shown + "\n"); }
       }
       const stalledLabel = stalled ? (retryLoop ? " (retry-loop)" : " (stalled)") : "";
@@ -1358,7 +1357,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // catches an exit-0 fire whose terminal object reports is_error / subtype!=="success". Replacing the
       // text arm (LOOP-83) let a fake-success on the one lane the loop runs, and a silent fire, record healthy.
       if (!suspectError && !interrupted && isStructuredLane && exitCode === 0 && !timedOut) {
-        try { if (usageAdapter?.isError?.(fullStdout)) suspectError = true; } catch { /* isError is best-effort */ }
+        try { if (usageAdapter?.isError?.(capture.text())) suspectError = true; } catch { /* isError is best-effort */ }
       }
       if (suspectError) {
         const why = outTail.trim() === "" ? `no visible output (${outBytes} bytes)` : `last line: ${JSON.stringify(lastLine.slice(0, 120))}`;
@@ -1368,8 +1367,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       let usage: FireUsage | undefined;
       let turns: number | null = null; // LOOP-318: null ⇒ not recoverable from this payload, NEVER 0
       if (usageAdapter) {
-        try { const parsed = usageAdapter.parse(fullStdout); if (parsed) usage = parsed; } catch { /* usage is best-effort */ }
-        try { turns = usageAdapter.turns?.(fullStdout) ?? null; } catch { turns = null; }
+        // LOOP-476 AC3 — a TRUNCATED capture yields no usage at all: its prefix would otherwise be recorded as
+        // the fire's total, which is the same "partial observation reported as complete" defect one layer up
+        // from the one LOOP-445 fixed. `turns` keeps parsing the prefix deliberately — an undercount of turns
+        // is not evidence any budget decision rests on, and null there would erase the lane's only turn signal.
+        const parsed = usageFromCapture(usageAdapter, capture);
+        if (parsed) usage = parsed;
+        try { turns = usageAdapter.turns?.(capture.text()) ?? null; } catch { turns = null; }
       }
       // LOOP-445 — the budget arm is classified from what the fire MEASURABLY did, not from which timer
       // fired. `usage` above is the same parse the ledger row carries, so the class and the numbers a
