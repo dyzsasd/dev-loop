@@ -23,7 +23,6 @@
 // this must not route through it. The `dev-loop queue` landing annotation stays exactly as it is:
 // advisory, and accurate for the forge-outage case LOOP-274 owns.
 import { execFileSync } from "node:child_process";
-import { dirtyTrackedFiles } from "./tree-snapshot.ts"; // LOOP-544: ONE porcelain parse, never a second copy
 
 /**
  * Does any LOCAL ref carry work for this ticket?
@@ -74,8 +73,8 @@ export function hasLocalWorkFor(repoRoot: string, ticketId: string): boolean {
 /**
  * Attribution: WHICH uncommitted tracked files in the shared checkout are THIS ticket's?
  *
- * By CONTENT, not by timing: a file is attributed when its uncommitted diff ADDS a line naming the
- * ticket id. That is the discriminator the live diagnosis used —
+ * By CONTENT, not by timing: a file is attributed when its uncommitted diff carries a line naming
+ * the ticket id. That is the discriminator the live diagnosis used —
  * `grep -c LOOP-517 <shared>/hub/test/team-edit.ts → 4` against `<worktree>/… → 0`.
  *
  * Timing attribution was the alternative and is deliberately NOT used. The pre-fire dirty record
@@ -83,9 +82,9 @@ export function hasLocalWorkFor(repoRoot: string, ticketId: string): boolean {
  * running concurrently it would refuse ticket B's honest handoff because ticket A left the tree
  * dirty. Content attribution cannot make that mistake — a hunk that names LOOP-544 is LOOP-544's.
  *
- * ADDED lines only. The failure being detected is a fire WRITING its work into the wrong tree, and
- * writing is an addition; scanning removals would let "this fire deleted a stale comment mentioning
- * another ticket" refuse that other ticket's handoff.
+ * Either side of the patch counts. An uncommitted hunk that REMOVES a line naming the ticket is
+ * still uncommitted work about that ticket sitting in the wrong tree, and the refusal is cheap to
+ * clear (commit it, or restore the file) — where missing it strands the increment silently.
  *
  * KNOWN LIMIT, stated rather than papered over: an uncommitted edit that never names its ticket is
  * not attributable by this axis and does not trip the gate. It is the price of zero cross-ticket
@@ -93,24 +92,26 @@ export function hasLocalWorkFor(repoRoot: string, ticketId: string): boolean {
  * ship commit cannot sweep it up).
  */
 export function splitTreeFiles(repoRoot: string, ticketId: string): string[] {
-  const dirty = dirtyTrackedFiles(repoRoot);
-  if (!dirty.length) return [];
-  const out: string[] = [];
-  for (const file of dirty) {
-    let patch = "";
-    // `--` and the explicit path keep a filename that looks like a rev from being resolved as one.
-    try {
-      patch = execFileSync("git", ["-C", repoRoot, "diff", "HEAD", "--", file],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    } catch { continue; } // unreadable diff ⇒ no attribution, never a hard failure
-    for (const line of patch.split("\n")) {
-      // `+++ b/path` is a header, not content — a ticket id in the PATH must not attribute the file.
-      if (!line.startsWith("+") || line.startsWith("+++")) continue;
-      if (line.includes(ticketId)) { out.push(file); break; }
-    }
-  }
-  return out.sort();
+  let out = "";
+  try {
+    // `-G` is git's own "patch text adds or removes a line matching this" search, and `--name-only`
+    // means the OUTPUT is a file list rather than the diff. That matters for more than tidiness:
+    // reading whole patches through execFileSync caps at maxBuffer, so the biggest stranded diffs —
+    // exactly the ones worth catching — would have thrown ENOBUFS and been silently skipped (the
+    // LOOP-502 failure shape). A file list cannot overflow in any realistic tree.
+    //
+    // `-G` matches ADDED and REMOVED lines but never the `+++ b/<path>` header, so a ticket id that
+    // appears only in a FILE NAME does not attribute the file. `git diff HEAD` is tracked-only, which
+    // is the same population LOOP-312/320 protect: untracked files survive `git checkout` and are
+    // not at risk.
+    out = execFileSync("git", ["-C", repoRoot, "diff", "HEAD", "--name-only", `-G${reEscape(ticketId)}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return []; } // no git, not a repo, unreadable ⇒ no attribution, never a hard failure
+  return out.split("\n").map((l) => l.trim()).filter(Boolean).sort();
 }
+
+/** Ticket ids are `PREFIX-123`; a regex-special prefix must match itself, not act as a pattern. */
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * The absolute path of the ticket's own worktree, so a refusal can name BOTH trees (AC2).
