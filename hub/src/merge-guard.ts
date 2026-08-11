@@ -280,10 +280,12 @@ function applyTrip(
       return { action: dup ? "already_present" : "wrote", commentBody };
     }
     // AC3 (LOOP-216): forge-review trip — route to Todo with existing assignee, without "blocked".
+    // LOOP-518 AC1: but NOT if the ticket is already In Progress — it stays In Progress (comment-only).
     // Routing re-enforces on every call, regardless of comment dedup (LOOP-130).
     const cur = db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
       .get(ticketId, projectId) as TicketUpdateFields | undefined;
-    if (cur) {
+    if (cur && cur.state !== "In Progress") {
+      // Only demote from In Review (or other states); stay in In Progress (LOOP-518 AC1)
       updateTicketRow(db, projectId, actor, ticketId, cur.state, {
         ...cur, state: "Todo", assignee: cur.assignee, labels: cur.labels,
       });

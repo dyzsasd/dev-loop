@@ -35,7 +35,7 @@ try {
   tk("MG-4", "Canceled");
   tk("MG-5", "Duplicate");
   // LOOP-65 --apply fixtures: fresh tickets to avoid state pollution from other tests
-  tk("MG-6", "In Progress", "senior-dev"); // forge review trip + --apply
+  tk("MG-6", "In Progress", "senior-dev"); // forge review trip + --apply (In Progress stays In Progress, LOOP-518)
   tk("MG-7", "In Review", "senior-dev");   // board-state trip + --apply
   tk("MG-8", "In Progress"); // no-trip path + --apply (should NOT write)
   tk("MG-9", "In Review");   // idempotency: second --apply must not dup comment
@@ -43,6 +43,10 @@ try {
   tk("MG-11", "In Review");  // LOOP-216: merged-PR check → skipped_merged (AC1)
   tk("MG-12", "In Review"); // LOOP-218 actor attribution — DEVLOOP_ACTOR set case
   tk("MG-13", "In Review"); // LOOP-218 actor attribution — DEVLOOP_ACTOR unset case
+  // LOOP-518 fixtures
+  tk("MG-14", "In Progress", "junior-dev"); // LOOP-518 AC1/AC3: forge trip on In Progress (comment-only, stays In Progress)
+  tk("MG-15", "In Progress", "junior-dev"); // LOOP-518 AC3: second forge trip on same In Progress (idempotency)
+  tk("MG-16", "In Review", "senior-dev");   // Cross-check: In Review still demotes to Todo (baseline from LOOP-216)
 
   conn.close();
 
@@ -362,7 +366,7 @@ try {
   const rowAfterNoApply = readTicket("MG-6");
   ok(rowAfterNoApply?.state === "In Progress", "apply: no --apply → ticket state unchanged");
 
-  // AC: forge review trip + --apply → comment posted, ticket routed to Todo with assignee preserved
+  // AC: forge review trip on In Progress ticket + --apply → comment posted, state unchanged (LOOP-518 AC1)
   const rApplyForge = mergeGuard(repoDir, {
     ticketId: "MG-6", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
     exec: makePrExec(prChangesRequested, gqlNoThreads),
@@ -377,7 +381,7 @@ try {
   const mg6Comments = readComments("MG-6");
   ok(mg6Comments.length === 1, `apply: exactly one comment written (got ${mg6Comments.length})`);
   const mg6Row = readTicket("MG-6");
-  ok(mg6Row?.state === "Todo", `apply: forge trip ticket moved to Todo (got: ${mg6Row?.state})`);
+  ok(mg6Row?.state === "In Progress", `apply: forge trip on In Progress — state unchanged (got: ${mg6Row?.state}) (LOOP-518 AC1)`);
   ok(!mg6Row?.labels.includes("blocked"), "apply: forge trip — 'blocked' NOT added (AC3)");
   ok(mg6Row?.assignee === "senior-dev", "apply: forge trip — assignee preserved (senior-dev from setup) (AC3)");
 
@@ -573,6 +577,57 @@ try {
   ok(rMergedGhFail.trip, "LOOP-216 AC4: In Review still trips when gh unavailable");
   ok(rMergedGhFail.applied?.action === "skipped_merged", `LOOP-216 AC4: gh unavailable → skipped_merged (got: ${rMergedGhFail.applied?.action})`);
   ok(readComments("MG-11").length === 0, "LOOP-216 AC4: gh unavailable — still no comment written");
+
+  // ── LOOP-518: forge trip on In Progress ticket stays In Progress (not demoted to Todo) ────────────
+  // Scenario: under §12c autoMerge, a dev keeps a ticket In Progress through review rounds while they own
+  // landing. A forge objection must comment but NOT demote it (AC1), preserving the dev's claim.
+  // The corresponding In Review case (LOOP-216 AC3 path) still demotes to Todo as before.
+
+  // AC1: forge trip on In Progress — comment posted, state unchanged
+  const rL518Ac1 = mergeGuard(repoDir, {
+    ticketId: "MG-14", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(rL518Ac1.trip, "LOOP-518 AC1: forge trip on In Progress detected");
+  ok(rL518Ac1.applied?.action === "wrote", `LOOP-518 AC1: --apply → action=wrote (got: ${rL518Ac1.applied?.action})`);
+  ok(rL518Ac1.applied?.commentBody?.includes("⛔ merge-guard:") ?? false, "LOOP-518 AC1: comment includes marker");
+  ok(rL518Ac1.applied?.commentBody?.includes("@alice") ?? false, "LOOP-518 AC1: comment includes reviewer");
+  const mg14RowAc1 = readTicket("MG-14");
+  ok(mg14RowAc1?.state === "In Progress", `LOOP-518 AC1: In Progress ticket stays In Progress (got: ${mg14RowAc1?.state}) — NOT demoted to Todo`);
+  ok(mg14RowAc1?.assignee === "junior-dev", "LOOP-518 AC1: assignee preserved (junior-dev from setup)");
+  ok(!mg14RowAc1?.labels.includes("blocked"), "LOOP-518 AC1: 'blocked' NOT added");
+  ok(readComments("MG-14").length === 1, "LOOP-518 AC1: exactly one comment posted");
+
+  // AC3: idempotent — re-running forge trip on same In Progress ticket
+  const rL518Ac3First = mergeGuard(repoDir, {
+    ticketId: "MG-14", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(rL518Ac3First.applied?.action === "already_present", `LOOP-518 AC3: second run (dedup) → action=already_present (got: ${rL518Ac3First.applied?.action})`);
+  const mg14RowAc3 = readTicket("MG-14");
+  ok(mg14RowAc3?.state === "In Progress", `LOOP-518 AC3: second run — state still In Progress (got: ${mg14RowAc3?.state})`);
+  ok(readComments("MG-14").length === 1, "LOOP-518 AC3: comment not duplicated (still 1)");
+
+  // AC1 variant: a second In Progress ticket also stays In Progress
+  const rL518Ac1B = mergeGuard(repoDir, {
+    ticketId: "MG-15", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  const mg15Row = readTicket("MG-15");
+  ok(mg15Row?.state === "In Progress", `LOOP-518 AC1 (second ticket): In Progress stays In Progress (got: ${mg15Row?.state})`);
+
+  // AC1 cross-check: existing LOOP-216 AC3 path still demotes In Review → Todo
+  // MG-16 is In Review; forge trip should route it to Todo (unchanged from before this fix)
+  const rL216Ac3Baseline = mergeGuard(repoDir, {
+    ticketId: "MG-16", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  const mg16Row = readTicket("MG-16");
+  ok(mg16Row?.state === "Todo", `LOOP-518 AC1 cross-check: In Review still demoted to Todo (got: ${mg16Row?.state}) — LOOP-216 AC3 unchanged`);
 
   // ── LOOP-123 regression: agentReviewers read from workspace config (not just injected opts) ─────
   // Verify the full path: `team set team.agentReviewers` writes config → merge-guard reads it without
