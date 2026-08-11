@@ -3,12 +3,13 @@
 // downgrade push-guard reference findings (Canceled/Duplicate refs in prose) to WARN
 // while hard-stopping on actual non-doc content. Bare-origin + clone harness (§15).
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
-import { parseDirtyPaths } from "../src/doc-land.ts";
+import { parseDirtyPaths, parseNameStatusZ, parseProtectedPathsZ, planCheckoutSync } from "../src/doc-land.ts";
 import { pushApprovalKey } from "../src/push-guard.ts";
 import { requestApproval } from "../src/approvals.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
@@ -870,6 +871,137 @@ try {
     ok(pathOnRef(r4, "origin/main", STRATEGY_PATH)
       && /LOOP-443/.test(execFileSync("git", ["-C", r4, "show", `origin/main:${STRATEGY_PATH}`], { encoding: "utf8" })),
       "(443-e) AC6 control: …and origin/main actually carries the increment, not just a success line");
+  }
+
+  // ── (563) The ref move must carry the index and the working tree with it ─────────────────────
+  // LOOP-325 made the rebase happen in an isolated worktree and moved the shared branch with
+  // `update-ref`, which writes neither the index nor the working tree. That is right for the dirty
+  // paths it measured and wrong for every path the INCOMING commits touch: those are clean here, so
+  // index and worktree keep the pre-merge blob while HEAD carries the post-merge one — a byte-exact
+  // staged REVERSAL of a commit already on origin and already green. Reproduced live on this
+  // workspace 2026-08-11 (PM fires 170/171), scoped to exactly the incoming commit's paths.
+  //
+  // The assertion is by CONTENT HASH on all three of index / worktree / HEAD, not by `git status`
+  // text: status is what looked innocuous for three fires, and a hash cannot be read two ways.
+  {
+    const o5 = join(ROOT, "origin5.git");
+    const ws5 = join(ROOT, "ws5");
+    const r5 = join(ws5, "dev-loop");
+    const up5 = join(ROOT, "upstream5");   // a second clone standing in for the rest of the team
+    mkdirSync(o5, { recursive: true });
+    mkdirSync(ws5, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", o5]);
+    execFileSync("git", ["clone", "-q", o5, r5]);
+    writeFileSync(join(ws5, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "test-doc-land-563",
+      team: { key: "test", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { "dev-loop": { path: "dev-loop", remote: o5, landing: "pr" } },
+      projects: { test: { repos: [{ ref: "dev-loop" }], strategyDoc: { path: STRATEGY_PATH } } },
+    }, null, 2));
+    mkdirSync(join(ws5, ".dev-loop", "locks"), { recursive: true });
+    openDb(join(ws5, ".dev-loop", "hub.db")).close();
+
+    // Baseline: the doc, plus three tracked code paths the upstream commit will act on — one it
+    // MODIFIES, one it DELETES, and one nobody touches (the control that proves the sync is scoped).
+    mkdirSync(join(r5, "docs"), { recursive: true });
+    mkdirSync(join(r5, "hub", "src"), { recursive: true });
+    writeFileSync(join(r5, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n");
+    writeFileSync(join(r5, "hub", "src", "modified.ts"), "// v1 — the pre-merge content\n");
+    writeFileSync(join(r5, "hub", "src", "deleted.ts"), "// removed upstream\n");
+    writeFileSync(join(r5, "hub", "src", "untouched.ts"), "// nobody touches this\n");
+    writeFileSync(join(r5, "hub", "src", "busy.ts"), "// another fire is editing this\n");
+    git(r5, ["add", "-A"]);
+    git(r5, ["commit", "-qm", "chore: baseline (LOOP-563)"]);
+    git(r5, ["push", "-qu", "origin", "main"]);
+
+    // Upstream lands a commit touching modified.ts / deleted.ts / added.ts — none of them the doc,
+    // none of them dirty here. This is the population the old code left reverted.
+    execFileSync("git", ["clone", "-q", o5, up5]);
+    writeFileSync(join(up5, "hub", "src", "modified.ts"), "// v2 — the POST-merge content\n");
+    rmSync(join(up5, "hub", "src", "deleted.ts"));
+    writeFileSync(join(up5, "hub", "src", "added.ts"), "// added upstream\n");
+    git(up5, ["add", "-A"]);
+    git(up5, ["commit", "-qm", "fix: the landed green commit (LOOP-563 upstream)"]);
+    git(up5, ["push", "-q", "origin", "main"]);
+
+    // PM's local doc commit — this is what doc-land is invoked to land.
+    writeFileSync(join(r5, "docs", "STRATEGY.md"), "# Strategy\n\nbase\n\nPM pass (LOOP-563).\n");
+    git(r5, ["add", "docs/STRATEGY.md"]);
+    git(r5, ["commit", "-qm", "docs(strategy): PM pass (LOOP-563)"]);
+
+    // One unrelated dirty path — the condition that routes this through the isolated rebase at all,
+    // and the work AC2 says must survive byte-identical.
+    writeFileSync(join(r5, "hub", "src", "busy.ts"), "// another fire's IN-FLIGHT edit\n");
+    const busyBefore = readFileSync(join(r5, "hub", "src", "busy.ts"), "utf8");
+
+    git(r5, ["fetch", "-q", "origin", "main"]);
+    const res5 = run(["--repo", "dev-loop"], ws5);
+    ok(res5.status === 0,
+      `(563) the land still succeeds (status ${res5.status}: ${res5.stderr.replace(/\(node:.*/g, "").slice(0, 200)})`);
+
+    // sha256 of a path as the INDEX holds it / as the WORKTREE holds it / as HEAD holds it.
+    const hashOf = (s: string): string =>
+      createHash("sha256").update(s).digest("hex").slice(0, 12);
+    const idxOf = (p: string): string | null => {
+      try { return hashOf(execFileSync("git", ["-C", r5, "show", `:${p}`], { encoding: "utf8" })); } catch { return null; }
+    };
+    const headOf = (p: string): string | null => {
+      try { return hashOf(execFileSync("git", ["-C", r5, "show", `HEAD:${p}`], { encoding: "utf8" })); } catch { return null; }
+    };
+    const wtOf = (p: string): string | null =>
+      existsSync(join(r5, p)) ? hashOf(readFileSync(join(r5, p), "utf8")) : null;
+
+    // ── AC1 — for every path the land pulled in and did NOT find dirty: index == worktree == HEAD.
+    for (const p of ["hub/src/modified.ts", "hub/src/added.ts", "hub/src/deleted.ts"]) {
+      const i = idxOf(p), w = wtOf(p), h = headOf(p);
+      ok(i === h && w === h,
+        `(563) AC1: '${p}' — index/worktree/HEAD agree after the land (index=${i} worktree=${w} HEAD=${h})`);
+    }
+    ok(readFileSync(join(r5, "hub", "src", "modified.ts"), "utf8") === "// v2 — the POST-merge content\n",
+      "(563) AC1: …the modified path holds the POST-merge content, not the reversal");
+    ok(existsSync(join(r5, "hub", "src", "added.ts")),
+      "(563) AC1: …the added path exists on disk, not just in HEAD");
+    ok(!existsSync(join(r5, "hub", "src", "deleted.ts")),
+      "(563) AC1: …and the deleted path is gone from the worktree, not resurrected as a staged add");
+
+    // The decisive one: no path may be left staged as a reversal of what HEAD carries. This is the
+    // exact `git status` signature PM measured, asserted as an absence over the whole checkout.
+    const status5 = execFileSync("git", ["-C", r5, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" });
+    const stagedPaths = parseDirtyPaths(status5).filter((p) => p !== "hub/src/busy.ts");
+    ok(stagedPaths.length === 0,
+      `(563) AC1: the land leaves NO path dirty but the one that already was (found: ${stagedPaths.join(", ") || "none"})`);
+
+    // ── AC2 — the pre-existing dirty path is untouched, and nothing was discarded to get AC1.
+    ok(readFileSync(join(r5, "hub", "src", "busy.ts"), "utf8") === busyBefore,
+      "(563) AC2: the unrelated in-flight edit survives BYTE-IDENTICAL — no stash, no checkout over it");
+    ok(status5.includes("busy.ts"),
+      "(563) AC2: …and is still uncommitted, exactly as the other fire left it");
+    ok(wtOf("hub/src/untouched.ts") === headOf("hub/src/untouched.ts"),
+      "(563) AC2: …and a path outside the incoming commit is not written either — the sync is scoped");
+
+    // The land itself must still have done its job (a sync that ate the increment would pass above).
+    ok(git(r5, ["rev-parse", "refs/heads/main"]) === git(r5, ["rev-parse", "refs/remotes/origin/main"]),
+      "(563) the doc commit actually landed — local main and origin/main agree");
+    ok(/LOOP-563/.test(execFileSync("git", ["-C", r5, "show", `origin/main:${STRATEGY_PATH}`], { encoding: "utf8" })),
+      "(563) …and origin/main carries PM's increment, not just a success line");
+  }
+
+  // ── (563-unit) The planner's own rules, without a git fixture ────────────────────────────────
+  {
+    const changed = parseNameStatusZ("M\0a.ts\0A\0b.ts\0D\0c.ts\0M\0dirty.ts\0");
+    ok(changed.length === 4 && changed[2].status === "D" && changed[2].path === "c.ts",
+      "(563-unit) parseNameStatusZ reads -z status/path records in pairs");
+    const prot = parseProtectedPathsZ(" M dirty.ts\0?? untracked.ts\0R  new.ts\0old.ts\0");
+    ok(prot.has("dirty.ts") && prot.has("untracked.ts"),
+      "(563-unit) protected set covers tracked-dirty AND untracked — an incoming add may not overwrite an untracked file");
+    ok(prot.has("new.ts") && prot.has("old.ts"),
+      "(563-unit) …and a rename record protects BOTH of its paths");
+    const plan = planCheckoutSync(changed, prot);
+    ok(plan.restore.join(",") === "a.ts,b.ts" && plan.remove.join(",") === "c.ts" && plan.skipped.join(",") === "dirty.ts",
+      `(563-unit) plan splits restore/remove/skipped correctly (restore=${plan.restore} remove=${plan.remove} skipped=${plan.skipped})`);
+    ok(!plan.restore.includes("dirty.ts") && !plan.remove.includes("dirty.ts"),
+      "(563-unit) a protected path is SKIPPED, never written — AC2 holds by construction, not by care");
   }
 
 } finally {
