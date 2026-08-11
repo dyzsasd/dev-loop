@@ -611,12 +611,23 @@ export function spendCurvePoints(
 // is not binding and the wall owns the fire) from "there is not enough history to say" (not estimable —
 // the caller falls back to the linear model rather than silently arming nothing). Without that split the
 // two collapse into one silent no-arm, which is the failure mode this ticket's AC3 exists to forbid.
+//
+// LOOP-557 — `supportMs` is the third fact those two could not express: WHERE THE EVIDENCE STOPS. The scan
+// runs to 4h, but the running maximum is carried flat across every band under the sample floor, so a curve
+// that simply ran out of fires is indistinguishable from one that was measured flat. On the production
+// ledger that difference is the whole bug: claude/claude-opus-5's p90 is still CLIMBING ($17.09 → $17.21 →
+// $17.62 over t=44..48min) when its last priced fire (58.9 min) drops out of every band, and the flat tail
+// past that point — pure absence of data — is what "never reaches $20" was read off. `supportMs` is the
+// largest elapsed time this profile has ever been observed AND priced at; past it the curve has nothing to
+// say, and the caller must not read the carried-forward maximum as a measurement.
 export function spendCurveDeadline(
   ceilingUsd: number, points: Array<{ durationMs: number; costUsd: number }>,
-): { deadlineMs: number | null; estimable: boolean; peakUsd: number } {
+): { deadlineMs: number | null; estimable: boolean; peakUsd: number; supportMs: number } {
   let running = 0;
   let estimable = false;
   let deadlineMs: number | null = null;
+  let supportMs = 0;
+  for (const p of points) if (p.durationMs > supportMs) supportMs = p.durationMs;
   for (let t = SPEND_CURVE_STEP_MS; t <= SPEND_CURVE_HORIZON_MS; t += SPEND_CURVE_STEP_MS) {
     const band: number[] = [];
     for (const p of points)
@@ -628,7 +639,7 @@ export function spendCurveDeadline(
     }
     if (deadlineMs === null && running >= ceilingUsd) deadlineMs = t;
   }
-  return { deadlineMs, estimable, peakUsd: running };
+  return { deadlineMs, estimable, peakUsd: running, supportMs };
 }
 
 export function perFireDeadline(
@@ -637,7 +648,7 @@ export function perFireDeadline(
   codingAgent: string | null | undefined,
   model: string | null | undefined,
   nowMs: number,
-): { deadlineMs: number; ratePerMs: number; basis: "spend-curve" | "linear" } | null {
+): { deadlineMs: number; ratePerMs: number; basis: "spend-curve" | "curve-horizon" | "linear" } | null {
   if (ceilingUsd == null || !(ceilingUsd > 0)) return null;   // unset/invalid => no watchdog
   try {
     // `ratePerMs` stays the MEASURED $/ms either way: the kill message and `dev-loop cost` report the rate
@@ -646,8 +657,30 @@ export function perFireDeadline(
     const ratePerMs = ratePerMsFor(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs);
     const curve = spendCurveDeadline(ceilingUsd, spendCurvePoints(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs));
     if (curve.estimable) {
-      if (curve.deadlineMs === null) return null;              // ceiling not reached inside 4h ⇒ the wall owns it
-      return { deadlineMs: Math.max(1, curve.deadlineMs), ratePerMs, basis: "spend-curve" };
+      if (curve.deadlineMs !== null)
+        return { deadlineMs: Math.max(1, curve.deadlineMs), ratePerMs, basis: "spend-curve" };
+      // LOOP-557 — the ceiling was not reached ANYWHERE THE CURVE HAS DATA. That is not the same claim as
+      // "this profile's spend stays under the ceiling", and returning null asserted the second one. Past
+      // `supportMs` there are ZERO observations of this profile; the flat tail the scan walked to 4h is the
+      // running maximum being carried forward, not spend that was measured and found level. So the deadline
+      // is the support horizon: a fire that has outrun every priced fire of its own profile is past the last
+      // point any model here can speak for, and on a lane whose usage is only readable at exit (claude
+      // buffers `--output-format json`) that is exactly the state perFireUsd exists to bound.
+      //
+      // Why not the linear model as the fallback here, as it is for a thin sample: because it is measurably
+      // wrong in this regime, not merely unproven. Over the 7d ledger this rule was derived on, the linear
+      // deadline for claude/claude-opus-5 is 41.1 min, and the 46 budget kills it produced include fires
+      // terminated at $0.00-$5.97 of measured spend against a $20 ceiling — LOOP-461's finding, unchanged.
+      // The horizon arms at 58.9 min for the same profile, inside the 60-min wall, and reaches only fires
+      // no observation covers.
+      //
+      // The timer bound applies here and not to the crossing above because the two have different inputs:
+      // a crossing is capped by SPEND_CURVE_HORIZON_MS (4h), while a horizon is a duration read off a
+      // ledger row and is only as sane as that row. A single corrupt durationMs must disarm, exactly as
+      // the linear branch does below, not overflow setTimeout into an immediate kill.
+      if (curve.supportMs > 0 && curve.supportMs <= 2_147_483_647)
+        return { deadlineMs: Math.max(1, curve.supportMs), ratePerMs, basis: "curve-horizon" };
+      return null;                                             // no usable horizon ⇒ the wall owns the fire
     }
     // Too little history to shape a curve ⇒ the pre-LOOP-461 linear model, unchanged. It is the conservative
     // one (it over-predicts long-fire spend, so it arms EARLY), which is the right default while unknown.
@@ -670,7 +703,14 @@ export function perFireDeadline(
 // Together they answer the question a bare "never" cannot: a null deadline under basis "spend-curve" with a
 // peak below the ceiling means the ceiling is NOT BINDING for this profile (its p90 fire never reaches it),
 // which is a different fact from a rate too small to arm inside the timer limit.
-export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number; basis: "spend-curve" | "linear"; curvePeakUsd: number | null }
+// LOOP-557 SUPERSEDES the reading of that null: a curve under the ceiling across its own support is an
+// unobserved crossing, not an absent one, and it now arms at the horizon. `deadlineMinutes:null` under
+// basis "spend-curve" survives only where the horizon itself is unusable (a durationMs past the timer
+// limit), so it no longer means "not binding" — the ⚠ line renderCost prints is what says what is bound.
+// LOOP-557 — `basis:"curve-horizon"` names the third case: the curve is real, it never reached the ceiling
+// inside the range it has fires for, and the deadline is that range's edge. `curveSupportMinutes` carries
+// the edge itself, so the operator can see the deadline is the last observation rather than a model output.
+export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number; basis: "spend-curve" | "curve-horizon" | "linear"; curvePeakUsd: number | null; curveSupportMinutes: number | null }
 export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, windowMs: number, nowMs: number): ProfileDeadline[] {
   const cutoff = nowMs - windowMs;
   const seen = new Map<string, { codingAgent: string; model: string; fires: number }>();
@@ -705,6 +745,7 @@ export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, win
       fires: e.fires,
       basis: d?.basis ?? (curve?.estimable ? "spend-curve" : "linear"),
       curvePeakUsd: curve?.estimable ? curve.peakUsd : null,
+      curveSupportMinutes: curve?.estimable && curve.supportMs > 0 ? curve.supportMs / 60_000 : null,
     });
   }
   return out.sort((a, b) => b.fires - a.fires);
@@ -1590,20 +1631,41 @@ export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?:
   if (deadlines && deadlines.rows.length) {
     console.log(`  per-fire ceiling: $${deadlines.ceilingUsd.toFixed(2)} — the deadline it ARMS, by profile:`);
     for (const d of deadlines.rows) {
-      // LOOP-461 — "never" had ONE wording for two different facts. Under the spend curve a null deadline
-      // means the profile's p90 fire never reaches the ceiling (the ceiling is not binding; the wall owns
-      // the fire) — that must not print as the timer-limit case, which is what "beyond the timer limit"
-      // names. The peak is quoted so the operator can see how far under the ceiling the curve plateaus.
+      // LOOP-461 — "never" had ONE wording for two different facts, and the timer-limit case must not
+      // absorb the curve case. LOOP-557 — a plateaued curve now arms at its horizon, so this branch is
+      // reached only when that horizon is itself unusable; it says the peak it plateaued at WITHOUT
+      // claiming the ceiling is unreachable, which is the claim this ticket removed.
       const mins = d.deadlineMinutes !== null ? `${d.deadlineMinutes.toFixed(1)} min`
         : d.basis === "spend-curve" && d.curvePeakUsd !== null
-          ? `never — p90 spend plateaus at $${d.curvePeakUsd.toFixed(2)}, under the ceiling (not binding; the wall bounds this profile)`
+          ? `never — p90 spend plateaus at $${d.curvePeakUsd.toFixed(2)} and no usable support horizon was found`
           : "never (beyond the timer limit)";
-      const basis = `${d.basis === "spend-curve" ? "spend curve p90" : "linear rate"}, ${d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile"}`;
+      // LOOP-557 — the model name has to distinguish a CROSSING the curve measured from the EDGE of the
+      // data the curve has, because those two arm for opposite reasons and only one of them is a spend
+      // estimate. The horizon line quotes both numbers it rests on, so the deadline can be checked rather
+      // than trusted: the plateau it never crossed, and the last priced fire it stops at.
+      const basis = `${
+        d.basis === "spend-curve" ? "spend curve p90"
+        : d.basis === "curve-horizon"
+          ? `curve support horizon — p90 plateaus at $${(d.curvePeakUsd ?? 0).toFixed(2)} under the ceiling and the last priced fire is ${(d.curveSupportMinutes ?? 0).toFixed(1)} min, so the crossing is UNOBSERVED, not absent`
+          : "linear rate"
+      }, ${d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile"}`;
       // AC3: when the budget deadline lands inside the wall timeout, the ceiling — not fireTimeout —
       // is what actually bounds the fire. Legitimate, but it must be legible.
       const undercuts = d.deadlineMinutes !== null && deadlines.wallMinutes > 0 && d.deadlineMinutes < deadlines.wallMinutes
         ? `  ⚠ INSIDE the ${deadlines.wallMinutes} min wall — the budget, not fireTimeout, bounds this profile` : "";
       console.log(`    ${d.codingAgent}/${d.model}: $${d.usdPerHour.toFixed(2)}/hr → ${mins}  [${d.fires} fires, ${basis}]${undercuts}`);
+      // LOOP-557 AC4 — the state that was previously inferable only from `deadlineMinutes:null` plus
+      // knowing what it means, stated in one line for a profile that HAS history. Two arrangements produce
+      // it and the operator needs to act on neither differently: no deadline at all, or a deadline at or
+      // past the wall, where the wall always kills first and the dollar ceiling therefore bounds nothing.
+      // It is printed for profiles with fires only — a ceiling that arms nothing for a profile that has
+      // never run is not a finding.
+      const armsNothing = d.fires > 0 && (d.deadlineMinutes === null
+        || (deadlines.wallMinutes > 0 && d.deadlineMinutes >= deadlines.wallMinutes));
+      if (armsNothing)
+        console.log(`      ⚠ perFireUsd $${deadlines.ceilingUsd.toFixed(2)} arms NOTHING for this profile — ${
+          d.deadlineMinutes === null ? "no deadline is armed" : `its ${d.deadlineMinutes.toFixed(1)} min deadline is at or past the ${deadlines.wallMinutes} min wall, which kills first`
+        }; only the wall and the daily ceiling bound these fires.`);
     }
   }
 }

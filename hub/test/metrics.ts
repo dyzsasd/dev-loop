@@ -1162,16 +1162,35 @@ try {
     const rate = ratePerMsFor(rows461, "claude", "decay", 7 * DAY, NOW);
     ok(Math.abs(CEIL / rate / MIN - 30) < 1e-6,
       `LOOP-461 AC1 control: the pre-change linear model arms "decay" at 30 min (got ${(CEIL / rate / MIN).toFixed(2)})`);
+    // LOOP-557 AC2 — the plateau arm, pinned BY VALUE. LOOP-461 asserted `decay === null` here: a curve
+    // that never reaches the ceiling armed nothing at all. That is the assertion this ticket overturns,
+    // and the fixture is unchanged so the two behaviours are directly comparable. "decay" has fires at
+    // 12 min and 48 min and nothing longer, so its evidence ENDS at 48 min; the $12 plateau past that
+    // point is the running maximum being carried forward over a region with no fires in it, never a
+    // measurement that spend stayed level. The deadline is therefore that edge — 48 min — and it is the
+    // last observation, not a spend estimate, which is what `basis` has to say.
     const decay = perFireDeadline(CEIL, rows461, "claude", "decay", NOW);
-    ok(decay === null,
-      `LOOP-461 AC1: the spend curve does not arm a profile whose p90 spend never reaches the ceiling (got ${JSON.stringify(decay)})`);
+    ok(decay !== null && decay.basis === "curve-horizon" && decay.deadlineMs / MIN === 48,
+      `LOOP-557 AC1/AC2: a curve that plateaus under the ceiling arms at its support horizon — 48 min, the longest priced fire of the profile (got ${decay === null ? "null" : `${decay.basis} @ ${decay.deadlineMs / MIN}`})`);
     const decayCurve = spendCurveDeadline(CEIL, spendCurvePoints(rows461, "claude", "decay", 7 * DAY, NOW));
     ok(decayCurve.estimable && decayCurve.deadlineMs === null && Math.abs(decayCurve.peakUsd - 12) < 1e-9,
       `LOOP-461 AC4: the no-arm is REPORTED as an estimable curve plateauing at $12, never as a silent disarm (got ${JSON.stringify(decayCurve)})`);
+    ok(decayCurve.supportMs / MIN === 48,
+      `LOOP-557: the curve reports where its evidence stops — the longest priced fire, 48 min (got ${decayCurve.supportMs / MIN})`);
+    // The horizon is the DATA's edge, not the scan's: the scan walks to 4h and the flat tail it produces
+    // must not move the deadline. Same population, one extra fire an hour further out, and the deadline
+    // follows the fire — a scan-derived bound could not tell these two fixtures apart.
+    const decayLonger = perFireDeadline(CEIL, [
+      ...rows461,
+      ...rows461.filter((r) => r.model === "decay").slice(0, 1).map((r) => ({ ...r, durationMs: 108 * MIN })),
+    ], "claude", "decay", NOW);
+    ok(decayLonger !== null && decayLonger.basis === "curve-horizon" && decayLonger.deadlineMs / MIN === 108,
+      `LOOP-557: the support horizon tracks the observations, not the 4h scan grid (got ${decayLonger === null ? "null" : decayLonger.deadlineMs / MIN})`);
     const pd461 = profileDeadlines(rows461, CEIL, 7 * DAY, NOW);
     const pdDecay = pd461.find((d) => d.model === "decay");
-    ok(pdDecay?.basis === "spend-curve" && pdDecay.deadlineMinutes === null && Math.abs((pdDecay.curvePeakUsd ?? -1) - 12) < 1e-9,
-      "LOOP-461 AC4: the reporting surface carries the model that set the deadline and the curve's plateau");
+    ok(pdDecay?.basis === "curve-horizon" && pdDecay.deadlineMinutes === 48 && Math.abs((pdDecay.curvePeakUsd ?? -1) - 12) < 1e-9
+      && pdDecay.curveSupportMinutes === 48,
+      `LOOP-557 AC4: the reporting surface carries the model, the plateau it never crossed, and the horizon it stopped at (got ${JSON.stringify(pdDecay)})`);
 
     // AC3 — the negative control, and the assertion that makes AC1 mean something: a population that
     // GENUINELY runs away is still killed, and killed early. Without this arm, "no more false kills" and
