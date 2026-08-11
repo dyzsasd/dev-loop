@@ -82,6 +82,23 @@ type SettingSpec = { re: RegExp; kind: SettingKind; note: string; validate?: (v:
 // actor), so neither is required to name an actor at write time.
 const TRANSITION_KEY_RE = /^([^>]+)->(.+)$/;
 const ASSIGN_TO_KEYWORDS = ["owner", "self"];
+// The properties `resolveAssignTo` actually reads off a directive (agentops.ts:106-119). Every earlier
+// round of this check closed ONE spelling of the same defect — a value the writer accepts that the
+// consumer cannot honour — and each left the next spelling open. The two checks below close the class
+// instead of the instance, from opposite sides:
+//
+//   · an UNKNOWN property is refused, so `{"assginTo":"owner"}` no longer walks past a ladder that is
+//     guarded entirely on `assignTo !== undefined`. Refusing the one misspelling by name would leave
+//     `assignto`, `assign_to` and every future field open; refusing everything not on this list leaves
+//     none of them open, and adding a supported property is a one-line edit HERE, next to the consumer
+//     it must match.
+//   · a directive with no OWN `assignTo` is refused, which is the same defect arriving as an omission
+//     rather than a typo: `{}` is a well-formed object under a well-formed key that can never fire.
+//
+// The unknown-property check runs FIRST because it names the offender, which is the actionable half for
+// the misspelling case (a bare "no assignTo" message leaves the operator staring at a line that looks
+// like it has one).
+const TRANSITION_DIRECTIVE_PROPS = ["assignTo"];
 function validateTransitions(v: unknown, path: string, ctx: ValidateCtx): void {
   for (const [k, dir] of Object.entries(v as Record<string, unknown>)) {
     const m = TRANSITION_KEY_RE.exec(k);
@@ -91,6 +108,10 @@ function validateTransitions(v: unknown, path: string, ctx: ValidateCtx): void {
     }
     if (m[1] === m[2]) die(`${path}: '${k}' is a self-transition — the assignTo directive is consulted only when the state actually changes (agentops.ts guards it with next.state !== cur.state), so this rule could never fire. Name two different states.`);
     if (dir === null || typeof dir !== "object" || Array.isArray(dir)) die(`${path}: '${k}' must map to an object like {"assignTo":"owner"}, got ${dir === null ? "null" : Array.isArray(dir) ? "an array" : typeof dir}`);
+    for (const prop of Object.keys(dir as Record<string, unknown>)) {
+      if (!TRANSITION_DIRECTIVE_PROPS.includes(prop)) die(`${path}: '${k}' carries '${prop}', which no consumer reads — resolveAssignTo() (agentops.ts) looks at ${TRANSITION_DIRECTIVE_PROPS.join(", ")} and nothing else, so this directive would be stored, reported as set by 'settings get', and never fire. Supported properties: ${TRANSITION_DIRECTIVE_PROPS.join(", ")}`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(dir, "assignTo")) die(`${path}: '${k}' has no assignTo — a directive object with nothing the consumer reads is inert. Give it {"assignTo":"owner"}, "self", or an actor handle, or drop the key.`);
     const assignTo = (dir as Record<string, unknown>).assignTo;
     if (assignTo !== undefined && assignTo !== null && typeof assignTo !== "string") die(`${path}: '${k}'.assignTo must be a string ("owner", "self", or an actor handle), got ${typeof assignTo}`);
     if (typeof assignTo === "string" && assignTo === "") die(`${path}: '${k}'.assignTo is empty — use "owner", "self", or an actor handle, or omit the key`);
@@ -283,10 +304,24 @@ export function writeSettings(db: DatabaseSync, key: string, settings: Record<st
 // `_team`. So `DEVLOOP_PROJECT=loop dev-loop settings set … --project _team` would print a bare
 // `dev-loop hub stop`, which then dies in the very shell that was told to run it. The prefix makes each
 // hint self-contained rather than true-only-when-the-environment-agrees.
+// …and the key is interpolated into a command line, so it is SHELL-QUOTED on the way in. A project key
+// is never charset-validated: `ensureProject` (seed.ts:100-116) checks only the ticket PREFIX and
+// inserts the key verbatim, so `dev-loop seed 'my project' …` is a supported seed whose raw hint reads
+// `DEVLOOP_PROJECT=my project dev-loop daemon down` — which the shell parses as `DEVLOOP_PROJECT=my`
+// followed by the command `project`. That is this comment's own defect one more time: an instruction
+// nobody can execute. Quoting is correct whether or not the key charset is ever narrowed at seed time
+// (deliberately out of scope — three live workspaces already carry seeded keys).
+//
+// Only keys that NEED quoting get it. A blanket `'…'` would change the hint every operator already
+// knows for the common case, so the check earns its charset list rather than paying for it.
+const SHELL_SAFE_RE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+function shq(s: string): string {
+  return SHELL_SAFE_RE.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`; // `+` in the class ⇒ "" fails the test and is quoted, which is what a shell needs to see it at all
+}
 export function restartHint(key: string): string {
   return key === TEAM_INTAKE_PROJECT
-    ? `DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub stop && DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub start   (there is no 'hub restart' subcommand)`
-    : `DEVLOOP_PROJECT=${key} dev-loop daemon down && DEVLOOP_PROJECT=${key} dev-loop daemon up`;
+    ? `DEVLOOP_PROJECT=${shq(TEAM_INTAKE_PROJECT)} dev-loop hub stop && DEVLOOP_PROJECT=${shq(TEAM_INTAKE_PROJECT)} dev-loop hub start   (there is no 'hub restart' subcommand)`
+    : `DEVLOOP_PROJECT=${shq(key)} dev-loop daemon down && DEVLOOP_PROJECT=${shq(key)} dev-loop daemon up`;
 }
 
 // ── the verb ──────────────────────────────────────────────────────────────────
