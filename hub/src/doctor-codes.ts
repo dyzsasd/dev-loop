@@ -82,6 +82,7 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W41", name: "never-expiring approval grant — an end-state authorization with no horizon", source: "doctor.ts" },
   { code: "W42", name: "hub projects row diverged from the resolved config mode/autonomy", source: "doctor.ts" },
   { code: "W43", name: "stale claim — In Progress ticket has had no activity for over 24h while its owner still fires", source: "doctor.ts" },
+  { code: "W44", name: "agent firing consecutively but always failing — a dead lane", source: "doctor.ts" },
   { code: "E20", name: "home-anchored ~/.dev-loop tree still holds state the seam removal would orphan", source: "legacy-home.ts" },
 ] as const;
 

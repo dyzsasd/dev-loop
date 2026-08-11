@@ -952,6 +952,24 @@ export function checkSecretsPerms(ws: Workspace, warn: (m: string) => void): voi
   warn(`[W39] ${finding.path} is readable by group/others (mode ${finding.mode}) — it holds live provider keys and the git deploy token, so every local account can read them; tighten it: chmod 600 ${finding.path}`);
 }
 
+// ── W44 (LOOP-447) — agent firing consecutively but always failing — a dead lane ───────────────
+export async function checkConsecutiveFailures(ws: Workspace, warn: (m: string) => void): Promise<void> {
+  try {
+    const { readFireRows } = await import("./metrics.ts");
+    const { findConsecutiveFailures } = await import("./metrics.ts");
+    const { wsFireLedger } = await import("./paths.ts");
+
+    const rows = readFireRows(wsFireLedger(ws));
+    const failures = findConsecutiveFailures(rows, 5, 24 * 60 * 60 * 1000);
+
+    for (const f of failures) {
+      const durationH = (f.durationMs / (60 * 60 * 1000)).toFixed(1);
+      const oldestDate = new Date(f.oldestTs);
+      warn(`[W44] ${f.agent}: ${f.count} consecutive fires failed (${f.errorClass}) over ${durationH}h — last success ${oldestDate.toISOString()}`);
+    }
+  } catch { /* best-effort — never fails doctor */ }
+}
+
 // ── W30 (LOOP-91) — the lessons library has no liveness check ───────────────────────────────────
 // The lessons library is the loop's ONLY cross-fire learning mechanism and is loaded into every
 // single fire. Its one health check (W03) fires when the library is too BIG; a library that has
