@@ -37,7 +37,7 @@ function makeRepo(name: string): string {
   writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
   writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
   git(root, "add", "-A");
-  git(root, "commit", "-qm", "base");
+  git(root, "commit", "-q", "-m", "base");
   return root;
 }
 
@@ -433,9 +433,9 @@ try {
     // Mutation test: revert the fix and this should pass (the unaligned predicate is bypassed).
     // Create a control ticket on the CORRECT branch.
     git(root, "checkout", "-q", "-b", "dev-loop/LOOP-573");
-    writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
+    writeFileSync(join(root, "b.ts"), "export const b = 573; // LOOP-573 work on correct branch\n");
     git(root, "add", "-A");
-    git(root, "commit", "-qm", "fix(y): correct branch (LOOP-573)");
+    git(root, "commit", "-q", "-m", "fix(y): correct branch (LOOP-573)");
     ok(handoffGateRejection({ ...base, id: "LOOP-573" }) === null,
       "LOOP-573: a handoff for LOOP-573 on its own branch PASSES — the gate is selective, not blanket");
 
