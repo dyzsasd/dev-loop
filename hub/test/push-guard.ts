@@ -97,6 +97,46 @@ try {
   const bodyStrict = cli(["--repo", work, "--branch", "main", "--strict", "--default-branch", "main"]);
   ok(bodyStrict.status === 1, "LOOP-25 CLI --strict: body-only ref to Canceled ticket ⇒ exit 1");
 
+  // ── LOOP-548: attribution vs mention — a §3 follow-up citing the Canceled ticket it supersedes ──
+  // §3's close+follow-up rule and §21a's escalation both require a follow-up to supersede a Canceled
+  // predecessor, so a well-written follow-up commit names that predecessor in its rationale. The
+  // class used to read the citation as the work: measured on dev-loop/LOOP-452 at bb9d7c8 (subject
+  // `(LOOP-452)`, In Progress; one mention of the superseded LOOP-426 in the body) `dev-loop push`
+  // HELD, and there is no flag that waives the gate — so the loop's own hand-off shape was unpushable.
+  {
+    git(work, ["push", "-q", "origin", "main"]); // flush LOOP-25's commit — start from an empty range
+
+    // AC1: subject names a LIVE ticket, body cites a Canceled one ⇒ provenance, not work.
+    git(work, ["commit", "--allow-empty", "-qm",
+      "test(w37): the ws thread is measured against a fixture (CERT-2)\n\nCERT-1 fixed W37 and its AC3 guard never shipped; this replaces it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"]);
+    const follow = pushGuard(work, "main", db, "main");
+    ok(follow.findings.length === 0,
+      `AC1 a follow-up whose SUBJECT names live CERT-2 raises no finding for the Canceled CERT-1 it cites (got ${follow.findings.map((f) => `${f.sha}:${f.ticket}`).join(",") || "none"})`);
+    const followStrict = cli(["--repo", work, "--branch", "main", "--strict", "--default-branch", "main"]);
+    ok(followStrict.status === 0, "AC1 CLI --strict: the follow-up shape is pushable ⇒ exit 0");
+
+    // AC2: the discriminator — same two states, swapped positions. The Canceled id moves INTO the
+    // subject and the Duplicate id into the body; exactly one of them may now be a finding. Under the
+    // whole-message scan this commit raised both, so this pair fails in both directions if attribution
+    // is dropped or widened.
+    git(work, ["commit", "--allow-empty", "-qm",
+      "test(w37): canceled work is still caught by its subject (CERT-1)\n\nCites CERT-3 as the prior art it supersedes."]);
+    const inverted = pushGuard(work, "main", db, "main");
+    ok(inverted.findings.some((f) => f.ticket === "CERT-1" && f.state === "Canceled"),
+      "AC2 MP-275 preserved: a SUBJECT-attributed Canceled ticket is still a finding");
+    ok(!inverted.findings.some((f) => f.ticket === "CERT-3"),
+      "AC1 the Duplicate cited only in that same commit's BODY is provenance, not a second finding");
+
+    // AC4: a ghost ref stays unverifiable wherever it sits, and never becomes a finding.
+    git(work, ["commit", "--allow-empty", "-qm", "chore: cite a ghost (CERT-2)\n\nContext: CERT-9."]);
+    const ghost = pushGuard(work, "main", db, "main");
+    ok(ghost.unknownRefs.includes("CERT-9"),
+      "AC4 a body-only ref with no hub row is still reported unverifiable, wherever it appears");
+    ok(!ghost.findings.some((f) => f.ticket === "CERT-9"), "AC4 …and never becomes a finding");
+
+    git(work, ["reset", "-q", "--hard", "origin/main"]); // leave the range as the next block found it
+  }
+
   // ── LOOP-55: passenger detection ─────────────────────────────────────────────────
   // A dev-loop/<id> branch cut off local main that is AHEAD of origin carries passengers.
   // Set up: push local main's existing commits to origin (sync), then add one more LOCAL-ONLY commit.
