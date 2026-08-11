@@ -2,23 +2,26 @@
 // DL-10: read-only, FILESYSTEM source — the §22 reports tree is machine-local markdown, separate
 // from the hub DB. Strict segment validation defeats path traversal before any fs access.
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
-import { devloopHome, workspaceDataDir } from "../paths.ts";
+import { join, resolve, sep, dirname } from "node:path";
+import { devloopDataDir } from "../paths.ts";
 import { esc, href, renderMarkdown } from "./ui.ts";
 
 // Resolve the reports root: DEVLOOP_REPORTS_DIR if set, else the FIRST EXISTING of a few candidates
-// (the on-disk layout varies — both <data>/<project>/reports and a flat <data>/reports exist in the
-// wild); falls back to the AC-formula path for the empty state. LOOP-388: Precedence is
-// DEVLOOP_REPORTS_DIR > DEVLOOP_DATA_DIR > workspace-derived (from DEVLOOP_HUB_DB) > machine-global.
+// (LOOP-388 AC1: precedence is explicit DEVLOOP_REPORTS_DIR > DEVLOOP_DATA_DIR > DB-derived workspace root > legacy fallbacks)
 const REPORT_DATED: Record<string, RegExp> = { daily: /^\d{4}-\d{2}-\d{2}$/, weekly: /^\d{4}-W\d{2}$/, monthly: /^\d{4}-\d{2}$/ };
 export function reportsRoot(projectKey: string): string {
   if (process.env.DEVLOOP_REPORTS_DIR) return process.env.DEVLOOP_REPORTS_DIR;
-  // Build bases with correct precedence: explicit DEVLOOP_DATA_DIR, workspace-derived, machine-global, legacy plugin.
   const bases: string[] = [];
+  // AC1: DEVLOOP_DATA_DIR (explicit global)
   if (process.env.DEVLOOP_DATA_DIR) bases.push(process.env.DEVLOOP_DATA_DIR);
-  const wsDir = workspaceDataDir();
-  if (wsDir) bases.push(wsDir);
-  bases.push(devloopHome());
+  // AC1: DEVLOOP_HUB_DB → derive workspace root (daemon's env; workspace/.dev-loop/hub.db)
+  const hubDb = process.env.DEVLOOP_HUB_DB?.trim();
+  if (hubDb) {
+    const wsRoot = dirname(dirname(hubDb)); // workspace root is two dirs up from hub.db
+    bases.push(wsRoot);
+  }
+  // Fallbacks (legacy paths): machine-global ~/.dev-loop, then Claude plugin data
+  bases.push(devloopDataDir());
   if (process.env.CLAUDE_PLUGIN_DATA) bases.push(process.env.CLAUDE_PLUGIN_DATA);
   const candidates = bases.flatMap((b) => [join(b, projectKey, "reports"), join(b, "reports")]);
   for (const c of candidates) { try { if (statSync(c).isDirectory()) return c; } catch { /* not here */ } }
@@ -30,7 +33,7 @@ const lsDated = (p: string, level: string): string[] => { const re = REPORT_DATE
 
 // GET /reports — agents + their dated reports (daily is the must-have; weekly/monthly when present).
 // F2: projectKey scopes the report links + back link to /p/<key>/ via href().
-// AC3: Always show which root is being read, so a wrong root can never look like a thin one.
+// AC3: always name the root so wrong-root bugs cannot hide behind a non-empty section list.
 export function reportsIndexPage(root: string, projectKey: string): string {
   const agents = lsSubdirs(root).sort();
   const sections = agents.map((agent) => {
@@ -42,9 +45,9 @@ export function reportsIndexPage(root: string, projectKey: string): string {
     }).filter(Boolean).join("");
     return levels ? `<section class="ragent"><h3>${esc(agent)}</h3>${levels}</section>` : "";
   }).filter(Boolean).join("");
-  const rootInfo = `<p><small>Reading reports from: <code>${esc(root)}</code></small></p>`;
-  const content = sections || `<p class="empty">No reports found yet under <code>${esc(root)}</code>.</p>`;
-  return `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><article class="detail"><h1>Reports</h1>${rootInfo}` + content + `</article>`;
+  const rootInfo = `<p class="rootinfo">Reports root: <code>${esc(root)}</code></p>`;
+  return `<a class="back" href="${esc(href(projectKey, "/"))}">← board</a><article class="detail"><h1>Reports</h1>${rootInfo}`
+    + (sections || `<p class="empty">No reports found yet.</p>`) + `</article>`;
 }
 // GET /reports/<agent>/<level>/<date> — one report, read-only. "badpath" → 400 (traversal/garbage), null → 404.
 export function reportPage(root: string, projectKey: string, agent: string, level: string, date: string): { html: string } | "badpath" | null {
