@@ -234,6 +234,134 @@ try {
     }
   }
 
+  // ══ 4b. LOOP-477 — the inventory discriminates VERBS, not files ════════════════════════════════
+  //
+  // Sections 2 and 4 bind the gate's callers at FILE granularity, and that is how `board snapshot`
+  // shipped ungated for three tickets: `board.ts` imports the gate and calls a verdict — in its
+  // `restore` branch — so IMPORTS_GATE() counts it, `gateCallers.length === 4` holds, and its case
+  // above passes on `restore` alone. A second destructive subcommand in the same file is invisible
+  // to a file-level predicate BY CONSTRUCTION; the predicate can express which files reach the gate,
+  // never which verbs do.
+  //
+  // So the inventory is re-run one level down: every `sub === "…"` branch in a gate-calling file is
+  // discovered from source and must carry an explicit disposition. Adding a subcommand to one of
+  // these files now fails this suite until someone classifies it, which is the same ratchet
+  // `gateCallers.length === 4` applies to the files.
+  {
+    const HELP = new Set(["--help", "-h", "help"]);
+    const subcommandsOf = (src: string): string[] =>
+      [...new Set([...stripComments(src).matchAll(/\bsub\s*===\s*"([^"]+)"/g)].map((m) => m[1]))]
+        .filter((s) => !HELP.has(s)).sort();
+
+    // Disposition per verb. `destroys: true` means "this verb can delete operator data, so a fire
+    // must not complete it" — each one is asserted behaviourally below. `false` is a claim that the
+    // verb only reads, or only writes config it is asked to write, and is reviewed like any other.
+    const DISPOSITION: Record<string, Record<string, boolean>> = {
+      "board.ts": { snapshot: true, snapshots: false, restore: true },
+      "team-edit.ts": { "add-project": false, "add-repo": false, "add-provider": false, set: false, "remove-project": true },
+    };
+
+    for (const f of gateCallers) {
+      const found = subcommandsOf(readFileSync(join(SRC, f), "utf8"));
+      const declared = Object.keys(DISPOSITION[f] ?? {}).sort();
+      if (!found.length && !declared.length) continue; // no sub dispatch (bundle.ts, team-repair.ts) — section 4's file case is the whole verb
+      ok(JSON.stringify(found) === JSON.stringify(declared),
+        `AC4 ${f}: every subcommand has a declared disposition — found [${found.join(", ")}], declared [${declared.join(", ")}]`);
+    }
+
+    // …and every verb the table calls destructive is actually DRIVEN by an arm. Without this the
+    // table could claim `true` and assert nothing, which is the same failure one level up: a
+    // disposition nobody checks is a comment, not coverage.
+    const DRIVEN = ["board.ts:restore", "board.ts:snapshot", "team-edit.ts:remove-project"]; // restore + remove-project: section 4's CASES; snapshot: the AC5 arm below
+    const declaredDestructive = Object.entries(DISPOSITION)
+      .flatMap(([f, verbs]) => Object.entries(verbs).filter(([, d]) => d).map(([v]) => `${f}:${v}`)).sort();
+    ok(JSON.stringify(declaredDestructive) === JSON.stringify([...DRIVEN].sort()),
+      `AC4: every verb declared destructive is driven by an arm in this suite — declared [${declaredDestructive.join(", ")}], driven [${DRIVEN.join(", ")}]`);
+
+    // The discovery must be able to MISS, or the equality above is vacuous (the lesson section 2
+    // records about IMPORTS_GATE, applied to this predicate).
+    ok(subcommandsOf(`if (sub === "reap") destroy();`).join() === "reap",
+      "AC4: the subcommand discovery finds a dispatch branch");
+    ok(subcommandsOf(`// if (sub === "ghost") destroy();`).length === 0,
+      "AC4: …and does not count a dispatch branch that is commented out");
+    ok(subcommandsOf(`if (sub === "--help") usage();`).length === 0,
+      "AC4: …and does not count the help forms as verbs");
+    ok(subcommandsOf(`if (other === "snapshot") {}`).length === 0,
+      "AC4: …and is anchored to the `sub` discriminant, not to any string comparison");
+
+    // AC5 — the measurement in the ticket, reproduced as an assertion. THIS is the arm that
+    // discriminates `snapshot` from `restore`: it goes red on a tree where only `restore` is gated.
+    const pruneDir = join(ROOT, "prune-probe"); // its own dir — never the fixture's, whose newest generation backs the restore case
+    for (const marker of MARKERS) {
+      rmSync(pruneDir, { recursive: true, force: true });
+      // Three generations. Distinct --reason values, because the embedded timestamp has 1-second
+      // resolution and three spawns can land inside one second — same reason would collide on the
+      // filename and silently make this a 1-generation fixture that survives any prune.
+      for (const gen of ["gen-a", "gen-b", "gen-c"])
+        cli(["board", "snapshot", "--dir", pruneDir, "--reason", gen], ws, noFire());
+      const before = readdirSync(pruneDir).sort();
+      ok(before.length === 3, `AC5 (${marker}): fixture — three generations exist before the prune (${before.length})`);
+
+      const r = cli(["board", "snapshot", "--dir", pruneDir, "--keep", "1", "--reason", "from-fire"], ws, inFire(marker));
+      const after = readdirSync(pruneDir).sort();
+      ok(r.code === 0, `AC5 (${marker}): \`board snapshot --keep 1\` still SUCCEEDS inside a fire — taking a copy is additive and is not refused (${r.code})`);
+      ok(after.length === 4, `AC5 (${marker}): …and every pre-existing generation survives --keep 1 (${before.length} before → ${after.length} after; on main this is 1)`);
+      ok(before.every((f) => after.includes(f)),
+        `AC5 (${marker}): …and they are the SAME generations, not a same-count coincidence`);
+      // The take must still happen, and the path contract must still hold: callers read it off the
+      // LAST line of stdout, so the skip notice may never be the last line.
+      const printed = r.stdout.trim().split("\n").pop() ?? "";
+      ok(existsSync(printed) && printed.startsWith(pruneDir),
+        `AC5 (${marker}): …and the new snapshot was written and its path is still the last line of stdout (${printed})`);
+      // AC2 — the behaviour is stated at the moment it applies, and names the marker responsible.
+      ok(/retention skipped/.test(r.out) && r.out.includes(marker),
+        `AC5/AC2 (${marker}): …and the command says retention was skipped, naming the marker (${r.out.split("\n").find((l) => /retention skipped/.test(l))?.slice(0, 120) ?? "no notice"})`);
+    }
+
+    // AC2 — no argv re-enables the prune. The sweep mirrors section 4's "WITH the token" posture:
+    // a guard that only holds when the caller forgot the magic word is not a guard.
+    {
+      const BYPASS_ATTEMPTS: string[][] = [
+        ["--keep", "1"],
+        ["--keep", "0"],
+        ["--keep", "1", "--force"],
+        ["--keep", "1", confirmationToken("firegate")],
+        // Masquerading as the daemon's own trigger does not buy the daemon's retention either:
+        // `--reason` rides the filename, it is not a claim about who is calling.
+        ["--keep", "1", "--reason", "cadence"],
+      ];
+      for (const extra of BYPASS_ATTEMPTS) {
+        rmSync(pruneDir, { recursive: true, force: true });
+        for (const gen of ["gen-a", "gen-b", "gen-c"])
+          cli(["board", "snapshot", "--dir", pruneDir, "--reason", gen], ws, noFire());
+        const r = cli(["board", "snapshot", "--dir", pruneDir, "--reason", "sweep", ...extra], ws, inFire("DEVLOOP_DEV_SPLIT"));
+        const survived = readdirSync(pruneDir).length;
+        // An unknown flag is rejected at exit 2 without writing — that is also "did not prune".
+        ok(survived >= 3, `AC2: \`board snapshot ${extra.join(" ")}\` did not re-enable pruning inside a fire (${survived} generation(s) left, exit ${r.code})`);
+      }
+    }
+
+    // AC3 — the in-process callers still prune. They run INSIDE the fire-gated verbs (the
+    // pre-destructive copy is taken by the very verbs section 4 drives), so a restriction placed in
+    // the shared helper instead of the CLI branch would silently disable retention for the daemon
+    // cadence too — unbounded snapshot growth, reported by nothing.
+    {
+      const probeDir = join(ROOT, "inprocess-probe");
+      rmSync(probeDir, { recursive: true, force: true });
+      const probe = spawnSync("node", ["--input-type=module", "-e", `
+        import { takeBoardSnapshot, boardSnapshotTick, snapshotBeforeDestructive, listSnapshots } from ${JSON.stringify(join(SRC, "board-snapshot.ts"))};
+        const dbPath = ${JSON.stringify(wsDb)}, dir = ${JSON.stringify(probeDir)};
+        for (const reason of ["gen-a", "gen-b", "gen-c"]) takeBoardSnapshot({ dbPath, dir, keep: 10, reason });
+        boardSnapshotTick({ dbPath, dir, keep: 2 });
+        console.log("tick:" + listSnapshots(dir).length);
+        snapshotBeforeDestructive({ dbPath, dir, keep: 1, verb: "probe" });
+        console.log("pre:" + listSnapshots(dir).length);
+      `], { encoding: "utf8", env: inFire("DEVLOOP_DEV_SPLIT"), timeout: 90_000 });
+      ok(/tick:2\b/.test(probe.stdout), `AC3: boardSnapshotTick still prunes to its configured keep inside a fire (${probe.stdout.trim().replace(/\n/g, " ") || probe.stderr?.slice(-160)})`);
+      ok(/pre:1\b/.test(probe.stdout), `AC3: …and snapshotBeforeDestructive does too — the restriction is on the CLI verb, not the shared helper (${probe.stdout.trim().replace(/\n/g, " ")})`);
+    }
+  }
+
   // ══ 5. AC5 — the previews report the SAME verdict the live path enforces ════════════════════════
   {
     const prev = cli(["team", "remove-project", "real", "--dry-run", "--force", confirmationToken("real")], ws, inFire("DEVLOOP_DEV_SPLIT"));
