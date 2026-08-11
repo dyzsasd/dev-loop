@@ -26,6 +26,7 @@ import { acquireRepoLock } from "./locks.ts";
 import { repoLandingLockPath, resolveDefaultBranchForRepoDir } from "./repo-lock-path.ts";
 import { resolveGhRepo } from "./merge-guard.ts";
 import { pushGuard, approvalRefusalLine, type PushGuardResult } from "./push-guard.ts";
+import { defaultBranchPushRefusalLine } from "./default-branch-push.ts";
 
 // A refusal names its CLASS, never one collapsed "refused" — the remedies differ (drop the commit /
 // resolve the ticket / get the approval granted / configure the remote) and two classes can refuse
@@ -34,9 +35,9 @@ import { pushGuard, approvalRefusalLine, type PushGuardResult } from "./push-gua
 // gate into an action while dropping the caller's pre-filter is a REGRESSION. So it moves inside too,
 // and it is labelled honestly rather than dressed up as an axis.
 export interface PushHold {
-  class: "readiness" | "findings" | "passengers" | "governance" | "approvals";
+  class: "readiness" | "findings" | "passengers" | "governance" | "approvals" | "landing";
   token: string;   // stable machine token: no-branch | no-remote | ride-along | passenger |
-                   // governance | ungranted-approval
+                   // governance | ungranted-approval | landing-mode
   detail: string;  // the human line — the guard's own objection text for this class
 }
 
@@ -237,6 +238,11 @@ function holdsFrom(g: PushGuardResult): PushHold[] {
       // change these files", it is "changes to them are operator-committed proposals".
       detail: `${gv.sha} "${gv.subject}" edits ${gv.file} — ${gv.reason === "conventions" ? "conventions" : "a SKILL"} is operator-committed, not agent-editable. Route: drop it from this branch and file the change as a proposal for the operator to apply`,
     });
+  }
+  if (g.landing) {
+    // LOOP-567 — the fifth class. `dev-loop push --branch main` in a `landing:"pr"` repo is the
+    // same defect as the bare merge-back, reached through the verb instead of around it.
+    holds.push({ class: "landing", token: "landing-mode", detail: defaultBranchPushRefusalLine(g.landing) });
   }
   for (const a of g.approvals) {
     // The refusal names the approval path and NO bypass (design §9.4). There is no flag that turns
