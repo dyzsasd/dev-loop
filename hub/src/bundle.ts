@@ -24,6 +24,7 @@ import { tryResolveWorkspace, wsHubDb, wsLockPath } from "./workspace.ts";
 import type { TeamFile, Workspace } from "./team-config.ts";
 import { doctorWorkspace, isGitWorkTree } from "./doctor.ts";
 import { openDb } from "./db.ts";
+import type { DatabaseSync } from "node:sqlite";
 import { snapshotBoardDb } from "./board-snapshot.ts"; // LOOP-337: the consistent-copy primitive
 import { workspaceIsolationVerdict } from "./destructive-guard.ts"; // LOOP-316: the SHARED gate, workspace-scoped
 import { ensureSeed } from "./seed.ts";
@@ -358,6 +359,44 @@ function gateForceReseed(
   return false;
 }
 
+// LOOP-506: ONE atomic statement, not a SELECT-parse-UPDATE loop. The old shape read every row
+// outside any transaction and wrote each back whole, so a concurrent `settings set` that committed
+// between this pass's read and its write was erased by the stale copy. json_set does the merge inside
+// SQLite — there is no window to lose an update in, and no second JSON policy in JS. It creates the
+// intermediate `$.hub` object when absent and leaves every sibling key untouched.
+//
+// The refusal is `MERGEABLE_SQL`, and `json_valid` alone is NOT enough (Codex review, PR #321).
+// LOOP-368: a fire may not destroy operator data through any verb — the old `catch { s = {} }` failed
+// OPEN, rewriting one unparseable row as `{"hub":{"transport":"daemon"}}` and costing the operator
+// every other key in it. But a row can be perfectly valid JSON and still be untraversable by this
+// path: a non-object root (`[1,2]`, `"str"`, `null`) or a `$.hub` that is already a scalar/array.
+// json_set returns those UNCHANGED — and SQLite still counts them in `changes`, so a `json_valid`-only
+// predicate reports "gate seeded, attach writes live" over rows where `hub.transport` was never set.
+// A false success is worse than the refusal it replaced, so those shapes are refused and NAMED too.
+//
+// `$.hub: null` is the one shape that is untraversable but NOT a refusal: JSON null is the absence of
+// a value, and the JS loop this replaced read it as absent (`s.hub ?? {}`). Refusing it would regress
+// a row that used to seed, so it is normalized away with json_remove before the set. This keeps ONE
+// policy for the column: `parseSettingsJson` refuses a non-object root in exactly the same way.
+//
+// Exported so its regression test drives THIS statement rather than a copy of it pasted into the
+// test: a test that re-declares the SQL it is checking cannot fail when the shipped SQL changes.
+const SETTINGS_SQL = "COALESCE(settings_json,'{}')";
+const MERGEABLE_SQL = `json_valid(${SETTINGS_SQL})
+  AND json_type(${SETTINGS_SQL}) = 'object'
+  AND (json_type(${SETTINGS_SQL}, '$.hub') IS NULL OR json_type(${SETTINGS_SQL}, '$.hub') IN ('object','null'))`;
+export function seedOpApiGate(db: DatabaseSync): { changed: number; refused: string[] } {
+  const refused = (db.prepare(`SELECT key FROM projects WHERE NOT (${MERGEABLE_SQL})`).all() as Array<{ key: string }>).map((r) => r.key);
+  const res = db.prepare(
+    `UPDATE projects SET settings_json = json_set(
+         CASE WHEN json_type(${SETTINGS_SQL}, '$.hub') = 'null' THEN json_remove(${SETTINGS_SQL}, '$.hub') ELSE ${SETTINGS_SQL} END,
+         '$.hub.transport', 'daemon')
+       WHERE ${MERGEABLE_SQL}
+         AND json_extract(${SETTINGS_SQL}, '$.hub.transport') IS NOT 'daemon'`,
+  ).run();
+  return { changed: Number(res.changes), refused };
+}
+
 export async function bundleLoad(file: string, dir: string, opts: { forceReseed: boolean; noRun?: boolean; argv?: readonly string[] }): Promise<number> {
   const { manifest, payload } = readBundle(file);
 
@@ -485,19 +524,16 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
     }
   }
 
+
   // Op-API gate for the remote board/attach surface (§4.5 step 3): seed hub.transport="daemon" on
   // every project row — idempotent JSON merge; the daemon reads it fresh per request.
   if (ws.file.team.backend === "service" && existsSync(dbPath)) {
     try {
       const db = openDb(dbPath);
       try {
-        for (const row of db.prepare("SELECT id, settings_json FROM projects").all() as Array<{ id: string; settings_json?: string }>) {
-          let s: Record<string, unknown>; try { s = JSON.parse(row.settings_json ?? "{}"); } catch { s = {}; }
-          const hub = (s.hub ?? {}) as Record<string, unknown>;
-          if (hub.transport === "daemon") continue;
-          s.hub = { ...hub, transport: "daemon" };
-          db.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify(s), row.id);
-        }
+        const { changed, refused } = seedOpApiGate(db);
+        if (refused.length) console.warn(`•  op-API gate SKIPPED for ${refused.length} project row(s) with an unreadable settings_json (${refused.join(", ")}) — left untouched, not overwritten; inspect with: sqlite3 -readonly ${dbPath} "SELECT key, settings_json FROM projects;"`);
+        if (changed) console.log(`op-API gate: ${changed} project row(s) updated`);
       } finally { db.close(); }
       console.log("op-API gate seeded (settings_json.hub.transport='daemon') — the token-authed board/attach write surface is live");
     } catch (e) { console.warn(`op-API gate seeding failed (${(e as Error).message}) — attach writes stay dormant until seeded`); }

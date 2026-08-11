@@ -236,18 +236,29 @@ function checkSettable(path: string): SettingSpec {
 // `catch { settings = {} }` the bespoke helpers use — would have this verb DESTROY every key an
 // operator hand-wrote the moment one of them was unparseable (LOOP-368: a fire may not destroy
 // operator data through any verb).
-export function readSettings(db: DatabaseSync, key: string): Record<string, unknown> {
-  const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
-  if (!row) die(`no hub row for project '${key}' — seed it first: dev-loop seed ${key} "<Project Name>" <PREFIX>`, 1);
+// The refusal POLICY for this column, extracted so the other writers share it rather than each
+// keeping their own (LOOP-506). It THROWS instead of dying because its callers disagree about what a
+// refusal costs: `settings set` is the operator's explicit verb and dies, while
+// `syncScratchProjectRow` is a best-effort projection that must warn and let `team set` finish —
+// die() there would exit the process AFTER dev-loop.json was already written. The invariant both
+// share is the one that matters: a settings_json this function cannot read is never overwritten.
+export class MalformedSettingsError extends Error {}
+export function parseSettingsJson(key: string, raw: string | null | undefined): Record<string, unknown> {
   // `== null` and NOT a falsy check: the column is NOT NULL but does not forbid the empty string, and `''`
   // is MALFORMED JSON, not "absent". A falsy test would route it to the `{}` default and the next `set`
   // would overwrite it — precisely the data-destruction this function's refusal exists to prevent.
-  if (row.settings_json == null) return {};
+  if (raw == null) return {};
   let parsed: unknown;
-  try { parsed = JSON.parse(row.settings_json); }
-  catch (e) { die(`project '${key}' has a malformed settings_json and this verb will not overwrite it (${(e as Error).message}).\n  inspect it: sqlite3 -readonly <workspace>/.dev-loop/hub.db "SELECT settings_json FROM projects WHERE key='${key}';"`, 1); }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) die(`project '${key}' has a settings_json that is not a JSON object — refusing to overwrite it`, 1);
+  try { parsed = JSON.parse(raw); }
+  catch (e) { throw new MalformedSettingsError(`project '${key}' has a malformed settings_json and this verb will not overwrite it (${(e as Error).message}).\n  inspect it: sqlite3 -readonly <workspace>/.dev-loop/hub.db "SELECT settings_json FROM projects WHERE key='${key}';"`); }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new MalformedSettingsError(`project '${key}' has a settings_json that is not a JSON object — refusing to overwrite it`);
   return parsed as Record<string, unknown>;
+}
+export function readSettings(db: DatabaseSync, key: string): Record<string, unknown> {
+  const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
+  if (!row) die(`no hub row for project '${key}' — seed it first: dev-loop seed ${key} "<Project Name>" <PREFIX>`, 1);
+  try { return parseSettingsJson(key, row.settings_json); }
+  catch (e) { die((e as Error).message, 1); }
 }
 export function writeSettings(db: DatabaseSync, key: string, settings: Record<string, unknown>): void {
   db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify(settings), key);
