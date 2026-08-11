@@ -528,8 +528,8 @@ release check. Filed **LOOP-549** (P1, `Improvement`+`pm`, junior) for the missi
 distinguished from LOOP-442 on that ticket and this one — 442 fixes two remedies disagreeing while
 the alarm is ON, 549 fixes the alarm being OFF.
 
-**The authorization system reached nine shipped tickets and zero enforced actions here.** The
-approvals record (C1–C9) is present in the build and inert in this workspace: `team.approvals`
+**The authorization system reached seven shipped tickets and zero enforced actions here.** The
+approvals record (C1–C7) is present in the build and inert in this workspace: `team.approvals`
 absent, 0 rows in the `approvals` table, 0 approval events, no `doctor` line. Default-empty
 enforcement is the shipped design and the operator owns the opt-in, so the state itself is
 permitted. What is missing is any report of it — W40 requires approval rows to exist, LOOP-495's
@@ -550,6 +550,28 @@ letting the stall arm yield to a provider-scoped class no longer erases the reco
 watchdog fired, which removes the information-loss argument for that ticket's option (c) and leaves
 only its evidence question. Not yet live on this host — the installed build is `a6b0a60` and 0 of
 1723 ledger rows carry the field.
+
+**The approvals consumer list is now a set the build derives, and correcting this section's own
+count is what showed the sentence above had decayed.** LOOP-396 (C5) verified `Done` against the
+merged tree at `2fc31aa`: `approvals.ts` exports `CONSUMER_INVENTORY` and
+`hub/test/approvals-inventory.ts` derives the real `consultApproval` call sites from `hub/src/**`,
+asserting SET EQUALITY against the migrated entries — so it fails in both directions, a new call
+site with no entry and an entry whose call site was deleted. Verified by seven mutations rather
+than by the four the handoff reported; the two added were the ones that decide whether the suite is
+honest at all — a residual that quietly starts consulting goes red on AC3, and the same call
+written only in a comment is correctly ignored, which is what stops the whole derivation from
+passing off prose. Measured coverage: **1 of the 6 enforcing consumers is migrated** (push-guard);
+the five residual are recorded in the module itself with what each migration needs, and design §12
+sequences them per-verb after the switch has been exercised once, which C8/C9 own — so they are
+deferred by the design, not unowned.
+
+The count correction in the paragraph above came out of that measurement: this section had recorded
+**"nine shipped tickets … (C1–C9) is present in the build"** while C8 (LOOP-522) and C9 (LOOP-523)
+were still `Todo` and the program's Done set was **seven** (C1–C7). That is LOOP-555's defect class
+— a child's *planned* place in a design read as its *built* state — reappearing in this doc's own
+prose about the very module that just shipped a test to stop exactly this decay elsewhere. Re-derived
+at rung 3 before the edit: 0 rows in `approvals`, 0 approval events, no `doctor` line. The enforcement
+posture is unchanged; only the claim about how much of the chain exists was wrong.
 
 ## Personas
 
