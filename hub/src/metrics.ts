@@ -1182,6 +1182,98 @@ export function ownerLiveness(
   return out;
 }
 
+// LOOP-450: stale claim findings — In Progress tickets whose most recent events-ledger row
+// is older than a threshold, regardless of owner fire recency. Complementary to ownerLiveness
+// (W16), which reports owners that NEVER fire; this one reports claims that are stalled while
+// the owner is still firing.
+export interface StaleClaimFinding {
+  ticketId: string;
+  owner: string | null;
+  lastEventAt: string;
+  lastEventAgeHours: number;
+  state: string;
+}
+
+/**
+ * Every non-blocked In Progress ticket whose most recent events-ledger row is older than `windowMs`.
+ * Does NOT consult the owner's fire recency — a stale claim is a finding even when the owner
+ * fired 1 minute ago.
+ *
+ * Age comes from the events ledger (MAX(events.created_at)), NOT tickets.updated_at, following the
+ * precedent decisionEnteredAt (line 940) sets and states.
+ */
+export function staleClaimFindings(
+  db: import("node:sqlite").DatabaseSync,
+  projectId: string,
+  opts: { windowMs?: number; nowMs?: number } = {},
+): StaleClaimFinding[] {
+  const windowMs = opts.windowMs ?? 24 * 3_600_000;
+  const nowMs = opts.nowMs ?? Date.now();
+  const since = new Date(nowMs - windowMs).toISOString();
+  const out: StaleClaimFinding[] = [];
+  // In Progress tickets, non-blocked, with assignee (a claim is held by an actor)
+  const tickets = db.prepare(
+    "SELECT id, assignee, labels, state, updated_at FROM tickets WHERE project_id=? AND state='In Progress' ORDER BY updated_at",
+  ).all(projectId) as { id: string; assignee: string | null; labels: string; state: string; updated_at: string }[];
+  for (const t of tickets) {
+    let labels: string[] = [];
+    try { labels = JSON.parse(t.labels) as string[]; } catch { labels = []; }
+    if (labels.includes("blocked")) continue;
+    // Age from the events ledger, not tickets.updated_at
+    const lastEvent = db.prepare(
+      "SELECT MAX(created_at) as last_at FROM events WHERE ticket_id=?",
+    ).get(t.id) as { last_at: string | null } | undefined;
+    const lastAt = lastEvent?.last_at ?? t.updated_at;
+    if (lastAt >= since) continue;
+    const ageHours = (nowMs - Date.parse(lastAt)) / 3_600_000;
+    out.push({
+      ticketId: t.id,
+      owner: t.assignee,
+      lastEventAt: lastAt,
+      lastEventAgeHours: ageHours,
+      state: t.state,
+    });
+  }
+  return out;
+}
+
+/**
+ * LOOP-566: the set W43 actually emits — stale claims MINUS those held by a dead owner.
+ *
+ * The W16/W43 precedence is composed HERE, beside the two predicates, rather than inside either of
+ * them. `staleClaimFindings` stays fire-free by construction (a stale claim is a fact about the
+ * board alone, and that is what lets it be tested without a ledger); `ownerLiveness` decides only
+ * whether W16 itself speaks. Neither can express "exactly one of the two reports this ticket", so
+ * the intersection is a third function.
+ *
+ * Direction: a ticket whose owner has not fired inside the liveness window is W16's to report —
+ * its remedy ("re-owner them, or mark the role manual") is the actionable one for a dead owner,
+ * while W43's ("release them to Todo") would hand the ticket back to a queue nobody serves.
+ *
+ * Three owners are deliberately NOT suppressed, because none of them can be called dead:
+ *  - an unassigned ticket (`owner === null`) — there is no actor whose fires could be read;
+ *  - an owner outside `handles` (the AGENT_HANDLES roster) — ownerLiveness never evaluates it;
+ *  - an owner ownerLiveness skips for having no owned tickets — unreachable for a stale claim
+ *    (the claim itself is an owned In Progress ticket), stated so the set algebra is checkable.
+ * `manualHandles` is deliberately not passed: it only downgrades W16's rendering from warn to
+ * info, and that info line still reports the dead owner's tickets, so the exclusivity holds.
+ */
+export function liveOwnerStaleClaims(
+  db: import("node:sqlite").DatabaseSync,
+  projectId: string,
+  ledgerPath: string,
+  opts: { windowMs?: number; nowMs?: number; livenessWindowMs?: number; handles?: readonly string[] } = {},
+): StaleClaimFinding[] {
+  const stale = staleClaimFindings(db, projectId, { windowMs: opts.windowMs, nowMs: opts.nowMs });
+  if (!stale.length) return stale;
+  const dead = new Set(
+    ownerLiveness(db, projectId, ledgerPath, {
+      windowMs: opts.livenessWindowMs, nowMs: opts.nowMs, handles: opts.handles,
+    }).map((f) => f.owner),
+  );
+  return stale.filter((f) => f.owner === null || !dead.has(f.owner));
+}
+
 // P4: sensitive mis-tier backstop — non-terminal tickets carrying `sensitive` AND assigned to the
 // junior-dev tier (by assignee or label). Surfaced as doctor W21 and in the board-health rollup
 // (design sensitive-routing §§3-4). Silent in single-dev projects (no senior-dev actor present).

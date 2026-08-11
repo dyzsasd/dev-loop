@@ -567,6 +567,35 @@ export function checkOwnerLiveness(ctx: BoardCtx): void {
 }
 
 /**
+ * Row 10a (board scope) — W43 stale claim: In Progress tickets whose last event from the events
+ * ledger is older than the threshold (default 24h), MINUS those held by a dead owner.
+ *
+ * Precedence with W16 (LOOP-450 AC5): when an owner is BOTH dead (no fire in the liveness window)
+ * AND holds a stale claim, W16 reports that ticket and W43 is silent. The function that does the
+ * suppressing is `liveOwnerStaleClaims` (metrics.ts) — it intersects the two predicates' outputs
+ * and hands this renderer only the survivors. It is NOT done by `ownerLiveness`'s
+ * `if (alive) continue` gate: that gate decides whether W16 speaks and has no bearing on this code
+ * path. `staleClaimFindings` itself remains fire-free, so the predicate can still be tested with
+ * no ledger, and the composition lives beside the two predicates rather than inside either.
+ *
+ * W43 therefore fires when the claim is stalled AND its owner is one W16 will not speak for: an
+ * owner that is alive, an owner outside the agent roster, or no owner at all — i.e. the claimant
+ * is firing (or is not a claimant the liveness check can judge) but the claim is not advancing.
+ */
+export function checkStaleClaim(ctx: BoardCtx): void {
+  const { ws, db, projectKey: key, projectId: pid, out } = ctx;
+  const { liveOwnerStaleClaims } = require_metrics();
+  const findings = liveOwnerStaleClaims(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"));
+  if (findings.length > 0) {
+    const oldest = findings.reduce((a, b) => a.lastEventAt < b.lastEventAt ? a : b);
+    const ageStr = oldest.lastEventAgeHours >= 48
+      ? `${Math.round(oldest.lastEventAgeHours / 24)}d`
+      : `${Math.round(oldest.lastEventAgeHours)}h`;
+    out.warn(`[W43] [${key}] ${findings.length} claimed ticket(s) have had no activity for over 24h (oldest ${oldest.ticketId}, ${ageStr}) — the claimant is firing but the claim is not advancing; release them to Todo or close them`);
+  }
+}
+
+/**
  * Row 12 (board scope) — W21 sensitive mis-tier backstop (design sensitive-routing §§3-4):
  * non-terminal tickets whose labels include `sensitive` AND are routed to the junior-dev tier
  * (assignee or label). Layer-1/2 enforce at write/queue time; this layer surfaces pre-gate or
