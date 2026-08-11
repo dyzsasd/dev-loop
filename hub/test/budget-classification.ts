@@ -16,7 +16,7 @@ import { classifyFireError, PROVIDER_SCOPED_CLASSES } from "../src/breaker.ts";
 // NB: usdLabel lives in metrics.ts, not run-agents.ts, deliberately — run-agents.ts calls main()
 // unconditionally at import (LOOP-58 deleted its entry-point guard), so a test that imported the helper
 // from there would launch the scheduler.
-import { ratePerMsFor, profileDeadlines, usdLabel, type FireRow } from "../src/metrics.ts";
+import { ratePerMsFor, profileDeadlines, usdLabel, wasWatchdogKilled, watchdogKindOf, type FireRow, type WatchdogKind } from "../src/metrics.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -202,6 +202,77 @@ for (const exit of [124, 125, 126]) {
 // Guard the other direction: an ORDINARY failure is NOT a watchdog kill and must still count.
 ok(Math.abs(rate([row({ costUsd: 6, durationMs: 1_200_000, exitCode: 1 })]) - 6 / 1_200_000) < 1e-12,
   "AC3: exit 1 (an ordinary task failure) still counts — the exclusion is watchdog kills only, not all failures");
+
+// ── LOOP-462 — the discriminator is the RECORDED watchdog fact, not the exit code ────────────────────
+//
+// Every assertion above pins LOOP-445's exclusion through its exit-code proxy, and each one keeps passing
+// below: those fixture rows carry no `watchdog` key, so they are legacy rows and the proxy still decides
+// them (AC5 — the 12-killed-rows fixture above still yields FALLBACK, unchanged).
+//
+// What the proxy got wrong is a fire the scheduler did NOT kill whose CHILD exited 124/125/126 on its own
+// (GNU `timeout` returns 124; a wrapper script returns whichever it likes). run-agents.ts stamps 124/125/126
+// only on its watchdog arms — on the last arm it records `code ?? 1` verbatim — so the code alone cannot
+// tell the two apart. Dropping such a fire is not benign: if the dropped rows are a profile's only samples,
+// ratePerMsBasis falls back to ~$18.21/hr where claude/claude-opus-5 measures ~$7/hr, and a HIGHER rate is a
+// SHORTER deadline — the over-aggressive kill LOOP-445 was filed about, re-entered through its own predicate.
+const NEW = (o: { costUsd: number; durationMs: number; exitCode: number; watchdog: WatchdogKind | null }): FireRow =>
+  ({ ...row(o), watchdog: o.watchdog });
+
+// AC1, direction 1 — the fire this ticket is about. Child exited 124 by itself; no watchdog fired.
+for (const exit of [124, 125, 126]) {
+  const own = NEW({ costUsd: 6, durationMs: 1_200_000, exitCode: exit, watchdog: null });
+  ok(Math.abs(rate([own]) - 6 / 1_200_000) < 1e-12,
+    `AC1: a COMPLETE priced fire whose child exited ${exit} on its own (watchdog:null) is a rate sample — got ${rate([own]).toExponential(3)}, want ${(6 / 1_200_000).toExponential(3)}`);
+}
+
+// AC1, direction 2 — a fire the scheduler really killed is still excluded, and it is excluded by the FACT.
+// Two choices here are what give this assertion discriminating power, and both were found by mutating the
+// predicate back to cac9393's and watching an earlier draft pass anyway:
+//   • exitCode 0 — under the old predicate this row COUNTS (0 ∉ {124,125,126}), so passing requires
+//     reading `watchdog`.
+//   • a NON-ZERO cost — a $0 kill contributes a 0 quotient, and a median of 0 collapses to FALLBACK on its
+//     own, so `=== FALLBACK` would have held whether the row was excluded or not. Priced at $6/20min the
+//     two outcomes are 5.000e-6 and the fallback, and only exclusion produces the fallback.
+for (const kind of ["timeout", "stalled", "retry-loop", "budget"] as const) {
+  const killed = NEW({ costUsd: 6, durationMs: 1_200_000, exitCode: 0, watchdog: kind });
+  ok(rate([killed]) === FALLBACK,
+    `AC1: a PRICED fire the scheduler killed (watchdog:"${kind}") is excluded even when its exit code is 0 — the discriminator is the recorded fact, not the code`);
+}
+
+// AC2 — the writer's encoder, pinned against hardcoded expectations. run-agents.ts calls THIS function at
+// the same site that stamps the exit code (it cannot be imported here: run-agents.ts calls main() at import,
+// see the header note), so the two halves of the contract cannot drift apart. The precedence mirrors the
+// exit-code ladder, and `retryLoop` refines `stalled` because the liveness watchdog sets both.
+ok(watchdogKindOf(false, false, false, false) === null,
+  "AC2: no watchdog fired ⇒ null — a POSITIVE record that the child's own exit code is its own, never an omission");
+ok(watchdogKindOf(true, false, false, false) === "budget", "AC2: budgetKilled ⇒ \"budget\"");
+ok(watchdogKindOf(false, true, false, false) === "timeout", "AC2: timedOut ⇒ \"timeout\"");
+ok(watchdogKindOf(false, false, true, false) === "stalled", "AC2: stalled ⇒ \"stalled\"");
+ok(watchdogKindOf(false, false, true, true) === "retry-loop", "AC2: stalled+retryLoop ⇒ \"retry-loop\" (the liveness watchdog sets both)");
+ok(watchdogKindOf(true, true, true, true) === "budget",
+  "AC2: precedence matches the exit-code ladder (budget 126 → timeout 124 → stall 125) when several timers raced");
+// The property AC2 actually asks for: the non-watchdog path can produce exactly ONE value, and the reader
+// counts it. No exit code the child chooses can manufacture a kill marker, because the code is not consulted.
+ok(!wasWatchdogKilled(NEW({ costUsd: 6, durationMs: 1_200_000, exitCode: 126, watchdog: watchdogKindOf(false, false, false, false) })),
+  "AC2: the value the non-watchdog path produces is not a kill marker, even on a row whose exit code is 126");
+
+// AC3 — the disposition of rows written BEFORE the field existed, and the three states kept distinct.
+// `"watchdog" in row` is the test; `row.watchdog != null` would collapse present-null into absent and hand
+// the proxy back every new non-watchdog row — the exact regression this asserts against.
+const LEGACY_KILLED = row({ costUsd: 0, durationMs: 3_600_000, exitCode: 126 }); // no `watchdog` key at all
+ok(!("watchdog" in LEGACY_KILLED), "AC3: the legacy fixture genuinely carries NO watchdog key (the test's own premise)");
+ok(wasWatchdogKilled(LEGACY_KILLED),
+  "AC3: a row predating the field falls back to the exit-code proxy and stays EXCLUDED — the chosen direction: it preserves LOOP-445's closure on every row already on disk rather than re-opening it");
+ok(!wasWatchdogKilled(NEW({ costUsd: 0, durationMs: 3_600_000, exitCode: 126, watchdog: null })),
+  "AC3: a row that RECORDS watchdog:null is NOT decided by the proxy — present-null and absent are different states");
+
+// AC5 — LOOP-445's guarantee restated against the new predicate, so the truncated-sample loop stays closed
+// for rows that carry the fact as well as for legacy ones.
+// Priced, for the reason spelled out at AC1 direction 2: 12 kills at $0 would yield a 0 median and reach
+// FALLBACK without being excluded at all, so the assertion would hold against a predicate that excludes
+// nothing. At $4.34/48.2min (the 13:08 fire) the counted outcome is ~1.5e-6 and only exclusion is FALLBACK.
+ok(rate(Array.from({ length: 12 }, () => NEW({ costUsd: 4.34, durationMs: 2_892_000, exitCode: 126, watchdog: "budget" }))) === FALLBACK,
+  "AC5: 12 recorded budget kills that DID spend still read as UNPRICED (the conservative fallback) — the exclusion survives the move to the recorded fact");
 
 // ── The two review findings on PR #276 — the same defect class, one layer up in the DISPLAY ──────────
 //

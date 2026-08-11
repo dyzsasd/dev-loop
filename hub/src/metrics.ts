@@ -48,7 +48,13 @@ export interface UsageAdapter {
   // killed fire still shows something, never zero output.
   resultText?(stdout: string): string | null;
 }
-export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; interrupted?: boolean; errorClass?: string; bootBytes?: number; fireId?: string; usage?: FireUsage; turns?: number | null }
+// LOOP-462 — which watchdog, if any, ENDED this fire. The scheduler is the only writer, and it writes the
+// field from the in-process booleans that armed the kill (run-agents.ts), never from the exit code it also
+// stamps. `null` is a recorded fact and not an absence: it says the fire ended on its own, so whatever exit
+// code the row carries is the CHILD's own. The field being ABSENT is the third state — a row written before
+// this field existed — and it is the only one that falls back to the exit-code proxy (see wasWatchdogKilled).
+export type WatchdogKind = "timeout" | "stalled" | "retry-loop" | "budget";
+export interface FireRow { ts: string; agent: string; project: string; codingAgent?: string; provider?: string; model?: string; effort?: string; durationMs?: number; exitCode?: number; timedOut?: boolean; suspectError?: boolean; interrupted?: boolean; errorClass?: string; watchdog?: WatchdogKind | null; bootBytes?: number; fireId?: string; usage?: FireUsage; turns?: number | null }
 export interface FireMetrics {
   windowMs: number; fires: number; failures: number; timeouts: number; suspectErrors: number; interrupted: number;
   discardedFires: number;            // LOOP-219: fires that produced nothing (suspectError | interrupted)
@@ -275,7 +281,47 @@ export function usdLabel(n: number): string {
   return Math.abs(n) >= 0.01 ? n.toFixed(2) : String(n);
 }
 
+// LOOP-445 stamped these on the watchdog arms of run-agents.ts; LOOP-462 demoted them from the
+// DISCRIMINATOR to the legacy fallback below. They are the scheduler's marks, but only on the arms that
+// set them — on the last arm the CHILD's own exit code is recorded verbatim, and a coding-agent CLI can
+// return any of the three for its own reasons (GNU `timeout` exits 124; a wrapper script picks its own).
 const WATCHDOG_KILL_EXITS = new Set([124, 125, 126]); // 124 wall-timeout · 125 stalled/retry-loop · 126 perFireUsd (LOOP-445)
+
+// LOOP-462 — "did a watchdog end this fire?", answered from a recorded FACT wherever one exists.
+//
+// The three states of `watchdog` are deliberately distinct, and JSON expresses all three:
+//   • present, non-null → the scheduler killed it. EXCLUDED. This is written from `budgetKilled` /
+//     `timedOut` / `stalled` / `retryLoop` — the in-process booleans that armed the kill — so no
+//     non-watchdog path can produce it (AC2).
+//   • present, null     → the fire ended on its own. COUNTED, whatever its exit code is. This is the
+//     case the exit-code proxy got wrong: a complete, priced fire whose child happened to exit 124/125/126
+//     was dropped from the median (AC1).
+//   • ABSENT            → the row predates the field. There is no fact to read, so fall back to the
+//     LEGACY proxy (AC3).
+//
+// The fallback errs toward EXCLUDING historical 124/125/126 rows, and that direction is chosen, not
+// incidental. Counting them instead would re-open LOOP-445 AC3 on every row already on disk — the
+// truncated-sample loop, where each kill's $0/hr quotient drags the median down and manufactures the
+// shorter deadline that justifies the next kill. Excluding them at worst discards a completed fire that
+// happened to exit 124/125/126, which is the status quo this ticket inherited and which decays to nothing
+// as the window rolls forward: the ledger is read over a bounded window, so once the window contains only
+// rows written after this field shipped, the proxy is unreachable and the mis-detection is gone for good.
+// `"watchdog" in r` is the test, NOT `r.watchdog != null` — the latter collapses the null and absent
+// states into one and would silently restore the proxy for every new non-watchdog row.
+export function wasWatchdogKilled(r: FireRow): boolean {
+  if ("watchdog" in r) return r.watchdog != null;
+  return r.exitCode != null && WATCHDOG_KILL_EXITS.has(r.exitCode);
+}
+
+// The ENCODER for the field wasWatchdogKilled decodes. It lives beside the decoder, and the scheduler calls
+// it rather than repeating the ternary, so the two halves of the contract cannot drift: a test that pins
+// this pins what run-agents.ts actually writes. The precedence mirrors the exit-code stamp at the same call
+// site (budget 126 → timeout 124 → stall 125), and `retryLoop` refines `stalled` because the liveness
+// watchdog sets both. Returning `null` — not undefined — is the point: it serialises to a present JSON
+// field, which is what tells a later reader this row was written by a scheduler that knows the answer.
+export function watchdogKindOf(budgetKilled: boolean, timedOut: boolean, stalled: boolean, retryLoop: boolean): WatchdogKind | null {
+  return budgetKilled ? "budget" : timedOut ? "timeout" : stalled ? (retryLoop ? "retry-loop" : "stalled") : null;
+}
 // ─── ratePerMsFor (LOOP-230) — per-profile $/ms for the in-flight perFireUsd watchdog ─────────────────────
 // The perFireUsd watchdog (run-agents.ts, budget-ceiling Child 4) has no mid-flight cost signal — cost is
 // known only post-hoc — so it kills at a wall-clock deadline: perFireUsd / ratePerMs. This returns that rate
@@ -310,7 +356,7 @@ export function ratePerMsBasis(rows: FireRow[], codingAgent: string | null | und
     // (6.985e-6 → 7.364e-6 $/ms once excluded), so the loop had not yet closed here — but the shape is a
     // ratchet: it needs only the killed rows to reach half the window to pin the whole profile at $0 and
     // hand every fire the conservative fallback.
-    if (r.exitCode != null && WATCHDOG_KILL_EXITS.has(r.exitCode)) continue;
+    if (wasWatchdogKilled(r)) continue;
     if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
       rates.push(r.usage.costUsd / r.durationMs);
   }
