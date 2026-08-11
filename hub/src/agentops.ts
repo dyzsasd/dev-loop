@@ -364,6 +364,7 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
       related_to: a.relatedTo                                                                       // APPEND-only union (§18)
         ? JSON.stringify([...new Set([...(JSON.parse(cur.related_to) as string[]), ...a.relatedTo])])
         : cur.related_to,
+      waiting_on: a.waitingOn === undefined ? cur.waiting_on : a.waitingOn,                         // scalar; undefined=keep (LOOP-384 AC1)
     };
     if (next.state !== cur.state && a.assignee === undefined) {                                     // DL-24 assignTo (implicit assignee only)
       const resolved = resolveAssignTo(db, projectId, actor, cur.state, next.state, JSON.parse(next.labels) as string[]);
