@@ -1153,6 +1153,17 @@ function checkGitTreeLeaks(root: string, treeLabel: string, warn: (msg: string) 
   // e.g. a previously committed marker that was re-staged. indexStates() returns all applicable states.
   if (existsSync(join(root, movedRel)) && !isPathIgnored(root, movedRel))
     for (const state of indexStates(root, movedRel)) leaks.push({ path: ".dev-loop/moved.json", state });
+  // LOOP-519: agent state artifacts (*-state.json, reports/) can also leak when untracked and un-ignored.
+  // These are name-identified, not magic-identified, so a separate scan is needed.
+  const STATE_ARTIFACT_RE = /^(?:[^/]+-state\.json|reports(?:\/.*)?)$/;
+  try {
+    const lsOut = execFileSync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"],
+      { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 24, encoding: "utf8" }).toString();
+    for (const rel of lsOut.split("\0").filter(Boolean)) {
+      if (!STATE_ARTIFACT_RE.test(rel)) continue;
+      if (!isPathIgnored(root, rel)) leaks.push({ path: rel, state: "untracked" });
+    }
+  } catch { /* not a repo, or git error — safe to skip */ }
   if (leaks.length) {
     // Remediation must match each artifact's git STATE (LOOP-235 review P1 #7/#8), because the escape
     // differs and getting it wrong still leaks: a .gitignore rule removes an UNTRACKED artifact from the
