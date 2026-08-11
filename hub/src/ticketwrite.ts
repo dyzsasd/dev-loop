@@ -458,8 +458,8 @@ export function updateTicketRow(
   // ownership gate must not also refuse pm for the qa label the ticket carries from its type.
   if (gate && gate !== DESIGN_PARENT_DECIDED) return { ok: false, status: 400, error: gate };
   const t = nowIso();
-  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
-    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, t, id, projectId);
+  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,waiting_on=?,updated_at=? WHERE id=? AND project_id=?`)
+    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, resolved.waiting_on, t, id, projectId);
   logEvent(db, resolved.state !== fromState
     ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: resolved.state, assignee: resolved.assignee } }
     : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
