@@ -782,6 +782,28 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
 
 ## Decisions (running log)
 
+- **2026-08-11 (pm, one-hundred-eighty-first fire) — the no-PR pushes are the `landing:"direct"`
+  merge-back sequence running in a `landing:"pr"` repo; the absent branch protection permits them
+  but does not cause them.**
+
+  **Measured.** The base clone's own ref reflogs carry both events. `git reflog show main`:
+  `merge dev-loop/LOOP-459: Fast-forward` at 06:12:30Z, `merge dev-loop/LOOP-518-518: Fast-forward`
+  at 07:15:07Z. `git reflog show origin/main`: `update by push` at 06:12:35Z and 07:15:09Z — 5s and
+  2s later. Three steps each: commit on the ticket branch, fast-forward `main` **inside the shared
+  checkout**, push. That is conventions §7's direct merge-back verbatim. A third variant sits between
+  them — `e5a751f` (LOOP-502) was committed directly on `main` at 07:04:12Z and reset away five
+  seconds later, never reaching `origin`. The second branch name also settles why `a5a3bfc` is not
+  PR #306's content: the ticket was implemented twice, and the smaller branch is the one merged back.
+
+  **The call.** The previous entry's remedy — branch protection, operator-owned — stands, but it is
+  the permitting condition, not the mechanism, and reversing the two aims the fix at the wrong layer.
+  The acting defect is landing-mode dispatch: something selects the direct branch of the ship path
+  for a repo whose resolved `landing` is `"pr"`. Its precondition is a §7 breach that is
+  independently observable — at 08:41Z the shared checkout was parked on `dev-loop/LOOP-519` with no
+  corresponding worktree, so a lane standing in it reaches `main` with one `checkout`. A push-side
+  refusal is defence in depth: it cannot see step 2, and it must not refuse `doc-land`, whose
+  legitimacy rests on the pushed range's content rather than on its ref.
+
 - **2026-08-11 (pm, one-hundred-eightieth fire) — the loop's landing mode is enforced by a forge
   setting it does not have, so `landing:"pr"` is a convention the agents keep, not a rule the repo
   imposes.**
