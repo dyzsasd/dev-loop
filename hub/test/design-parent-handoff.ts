@@ -78,7 +78,7 @@ try {
   });
   const toInReview = (o: Partial<TicketUpdateFields> = {}): TicketUpdateFields => ({
     title: "t", description: "", type: "Improvement", state: "In Review",
-    assignee: "senior-dev", priority: 0, labels: "[]", duplicate_of: null, related_to: "[]", ...o,
+    assignee: "senior-dev", priority: 0, labels: "[]", duplicate_of: null, related_to: "[]", waiting_on: null, ...o,
   });
 
   // `landingContextFor` resolves the workspace from cwd; without this the gate sees no repoRoot and

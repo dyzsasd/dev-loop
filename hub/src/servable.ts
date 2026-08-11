@@ -15,14 +15,14 @@ import type { State, Ticket } from "./db.ts";
 interface TicketRow {
   id: string; project_id: string; title: string; description: string; type: string;
   state: State; assignee: string | null; priority: number; labels: string;
-  duplicate_of: string | null; related_to: string; created_by: string; created_at: string; updated_at: string;
+  duplicate_of: string | null; related_to: string; waiting_on: string | null; created_by: string; created_at: string; updated_at: string;
 }
 const toTicket = (r: TicketRow): Ticket => ({
   id: r.id, project_id: r.project_id, title: r.title, description: r.description, type: r.type,
   state: r.state, assignee: r.assignee, priority: r.priority,
   labels: JSON.parse(r.labels) as string[],
   duplicateOf: r.duplicate_of, relatedTo: JSON.parse(r.related_to) as string[],
-  created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
+  waiting_on: r.waiting_on, created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
 });
 
 // §5 pick rank: urgent bug → urgent feature → edge-case bug → bug → feature → urgent improvement → improvement (FIFO within a rank).

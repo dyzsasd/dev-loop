@@ -51,7 +51,7 @@ try {
   // Helper: minimal TicketUpdateFields
   const updateFields = (override: Partial<TicketUpdateFields> = {}): TicketUpdateFields => ({
     title: "t", description: "", type: "Feature", state: "In Progress",
-    assignee: null, priority: 0, labels: "[]", duplicate_of: null, related_to: "[]",
+    assignee: null, priority: 0, labels: "[]", duplicate_of: null, related_to: "[]", waiting_on: null,
     ...override,
   });
 
