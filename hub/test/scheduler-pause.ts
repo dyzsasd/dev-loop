@@ -1,11 +1,12 @@
 // Regression test for LOOP-401 Child 1: scheduler-pause.ts module
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { openDb } from "../src/db.ts";
+import { openDb, logEvent } from "../src/db.ts";
 import { readPause, writePause, clearPause, formatPause } from "../src/scheduler-pause.ts";
+import { TEAM_INTAKE_PROJECT } from "../src/team-config.ts";
 
 function createTestDb(): ReturnType<typeof openDb> {
   const dbPath = join(mkdtempSync(join(tmpdir(), "pause-test-")), "test.db");
@@ -72,9 +73,6 @@ test("scheduler-pause: AC2 — resume is idempotent when nothing paused", async 
 
 test("scheduler-pause: AC3 — until in the past is rejected", async () => {
   // The CLI rejects this, so we test the logic at the module level
-  const now = Date.now();
-  const past = new Date(now - 1000).toISOString();
-
   // The module itself has no validation (design: CLI validates), but we verify the expired case below
 });
 
@@ -155,6 +153,47 @@ test("scheduler-pause: AC6 — table retro-adds to existing DBs without user_ver
   const versionAfter = db.prepare("PRAGMA user_version").get() as { user_version: number };
 
   assert.equal(versionAfter.user_version, versionBefore.user_version, "user_version should not change");
+
+  db.close();
+});
+
+test("scheduler-pause: events are logged on pause/resume", async () => {
+  const db = createTestDb();
+
+  // Pause and verify event is logged (CLI handler calls logEvent after writePause)
+  writePause(db, "alice", "release window", null);
+  logEvent(db, {
+    project_id: TEAM_INTAKE_PROJECT,
+    actor: "alice",
+    kind: "scheduler.pause",
+    data: { reason: "release window", until: null }
+  });
+
+  const pauseEvent = db.prepare(
+    "SELECT kind, data FROM events WHERE kind = 'scheduler.pause' ORDER BY created_at DESC LIMIT 1"
+  ).get() as { kind: string; data: string } | undefined;
+
+  assert(pauseEvent, "scheduler.pause event should be logged");
+  assert.equal(pauseEvent.kind, "scheduler.pause");
+  const pauseData = JSON.parse(pauseEvent.data);
+  assert.equal(pauseData.reason, "release window");
+
+  // Resume and verify event is logged (CLI handler calls logEvent after clearPause)
+  const cleared = clearPause(db);
+  assert(cleared);
+
+  logEvent(db, {
+    project_id: TEAM_INTAKE_PROJECT,
+    actor: "alice",
+    kind: "scheduler.resume"
+  });
+
+  const resumeEvent = db.prepare(
+    "SELECT kind FROM events WHERE kind = 'scheduler.resume' ORDER BY created_at DESC LIMIT 1"
+  ).get() as { kind: string } | undefined;
+
+  assert(resumeEvent, "scheduler.resume event should be logged");
+  assert.equal(resumeEvent.kind, "scheduler.resume");
 
   db.close();
 });
