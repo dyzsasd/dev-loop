@@ -350,6 +350,34 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   authority, so **LOOP-560** carries it to the operator (`Human-Blocked`, P1) with the options and a
   re-measurement AC. Consequence for this board: ~60 of 72 `Backlog` tickets are junior-tier, and
   their promotion gate opens only as junior delivers.
+  **Pass 134 (2026-08-11T03:12Z) locates that gap downstream of the model, and withdraws pass 133's
+  stated lever.** The junior tier's work is not missing; it is in seven green pull requests. Measured
+  this pass: **#292** (LOOP-384), **#297** (LOOP-459), **#300** (LOOP-502), **#304** (LOOP-517),
+  **#306** (LOOP-518), **#309** (LOOP-519), **#315** (LOOP-388) — every one `CLEAN` with 3/3 required
+  checks `SUCCESS`, **878 insertions across 30 files in 6.5 h**. All seven are **exactly 5 commits
+  behind `origin/main`** (`git rev-list --count origin/dev-loop/<id>..origin/main`), and merge-guard
+  refuses each on `ciFreshness`. Those ⛔ holds are posted **by the junior fires themselves**
+  (LOOP-384 01:34Z/01:56Z, LOOP-519 01:35Z/01:56Z, LOOP-388 02:14Z), so the tier reaches the landing
+  gate and is refused there rather than failing earlier. merge-guard's printed remedy names
+  **dev-agent Step 0.5's re-freshen** — and **LOOP-553** (PM-verified 00:42Z, operator-approved
+  01:30Z) establishes that Step 0.5 reaches no split-dev fire: `boot-prefix.ts` ships the
+  ship-sequence slice at SKILL lines 109–260 while Step 0.5 sits at line 59. `ciFreshness` is
+  therefore **terminal for this loop, not transient**, and the delivered-rate counter measures the
+  last link of that chain while pass 133 attributed it to the first. **`team.agents.junior-dev.model`
+  is withdrawn as the lever** — not refuted, unsupported: no junior increment has completed the
+  delivery path, so junior *output quality* has never been observed and the model question is not
+  currently answerable. The abandoned-claim mechanism pass 133 recorded at rung 3 stands as a
+  **second, independent** defect — the fires that do reach a PR still skip §12b step 7, leaving the
+  ticket `In Progress` with no `In Review` handoff — and the same change does not fix it. **The
+  unlock is one operator action:** PR **#313** carries LOOP-553's fix and is itself held on
+  `ciFreshness` (refused 02:29Z at 5 behind, 02:55Z at 2), so the PR that teaches fires to re-freshen
+  a stale PR cannot be re-freshened by a fire; nothing in the loop will land it. **LOOP-454** is the
+  same stall's third recurrence (8 PRs 08-08, 8 on 08-09, 7 now) and its first on the junior lane —
+  `Backlog`, P1, junior-tier, behind a cap held full by the very PRs it would drain.
+- **E20 shipped (LOOP-473, `36ba510`, PR #314, verified Done 2026-08-11T03:00Z)** — `doctor` reports
+  a home-anchored `~/.dev-loop` tree that still holds state. The detector half only: LOOP-473 landed
+  3 of its 7 ACs as a declared split, and **LOOP-556** (`Todo`, senior, `sensitive`) carries AC1/2/4/7
+  verbatim plus the `devloopHome()` removal. Merged, not published.
 - **The board's write surface has a supported switch (LOOP-479, `6b451ed`, verified Done
   2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
