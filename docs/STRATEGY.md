@@ -514,6 +514,29 @@ release check. Filed **LOOP-549** (P1, `Improvement`+`pm`, junior) for the missi
 distinguished from LOOP-442 on that ticket and this one — 442 fixes two remedies disagreeing while
 the alarm is ON, 549 fixes the alarm being OFF.
 
+**The authorization system reached nine shipped tickets and zero enforced actions here.** The
+approvals record (C1–C9) is present in the build and inert in this workspace: `team.approvals`
+absent, 0 rows in the `approvals` table, 0 approval events, no `doctor` line. Default-empty
+enforcement is the shipped design and the operator owns the opt-in, so the state itself is
+permitted. What is missing is any report of it — W40 requires approval rows to exist, LOOP-495's
+check requires an enforced class, and W42 requires `enforce` to include `push`, and empty
+enforcement is what prevents all three preconditions from being met. Filed **LOOP-554** (P2,
+senior, `sensitive`) for the check that asks the question without requiring the feature to already
+be in use, keyed on the absent-vs-`[]` distinction the config schema already accepts.
+
+**The watchdog-kill discriminator is now a recorded fact.** LOOP-462 verified `Done` against the
+merged tree at `a47f76b`: `FireRow.watchdog` (`"timeout" | "stalled" | "retry-loop" | "budget" |
+null`) is written unconditionally by the scheduler from the booleans that arm the kill, and the
+per-profile $/ms median excludes a kill by reading it rather than by testing exit code 124/125/126,
+which a child CLI returns on its own. Verified by mutation: deleting the one decoder line turns 9
+assertions red. The decoder's three-state contract survives the read path — `readFireRows` is a bare
+`JSON.parse`, so a present `"watchdog": null` is not collapsed into an absent key. A second
+consequence is recorded on **LOOP-466**: `errorClass` and `watchdog` are now independent fields, so
+letting the stall arm yield to a provider-scoped class no longer erases the record that a stall
+watchdog fired, which removes the information-loss argument for that ticket's option (c) and leaves
+only its evidence question. Not yet live on this host — the installed build is `a6b0a60` and 0 of
+1723 ledger rows carry the field.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -547,6 +570,46 @@ the alarm is ON, 549 fixes the alarm being OFF.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-fifty-ninth fire) — the authorization system is enforcing nothing
+  here, and each of the three checks built to report that takes a precondition which empty
+  enforcement removes.**
+
+  **What was measured.** `team.approvals` is absent from `dev-loop.json`; `dev-loop approvals --all
+  --json` returns `[]`; a direct read of `hub.db` gives **0** rows in the `approvals` table and **0**
+  events whose kind matches `%approv%`; `doctor` prints no approvals line. The approvals record was
+  built across nine tickets (C1–C9: LOOP-383, 391–396, 521, 522, 523) and gates no action in the one
+  workspace that runs the loop.
+
+  **That state is permitted; the absence of any report of it is the defect.** `approvals.enforce`
+  ships default-empty by design (§8) and opting in belongs to the operator. Three W-codes report
+  enforcement health and none can fire in this state: **W40** returns at `if (!rows.length) return;`
+  (`doctor.ts`), **LOOP-495**'s check requires `enforce` to name a class, and **W42** (LOOP-522)
+  requires `enforce` to include `push`. The precondition each takes is produced only by a workspace
+  already using the feature, and the way a workspace acquires zero rows is that nothing refuses, so
+  no agent ever files a `request`. Empty enforcement removes the evidence W40 needs in order to
+  report empty enforcement.
+
+  **LOOP-522's own table is what identifies the gap.** It assigns W40 the question *"is enforcement
+  configured at all?"* with the predicate *"rows exist, `enforce` empty"*. Those are two different
+  questions, and the table has no row for a workspace that has never adopted the feature. Filed
+  **LOOP-554** (P2, `Improvement`+`pm`+`sensitive`, senior direct-code) as that fourth row, with the
+  constraint LOOP-522 states — the codes must not absorb one another — carried into its ACs.
+
+  **The discriminator needs no new configuration.** `team-config.ts`'s own E18 message already says
+  *"omit it or use `[]` to enforce nothing"*, so an absent `enforce` and an explicit `enforce: []`
+  are distinguishable today: absence records that the question was never asked, `[]` records a
+  deliberate decision to enforce none. LOOP-554 AC2 requires this be measured through the mutator
+  rather than assumed, because `config-schema.md` says the empty string "clears it" and whether that
+  writes `[]` or deletes the key decides whether the opt-out exists at all.
+
+  **This repeats a defect already solved twelve lines away in the same file.** `checkLessonsLiveness`
+  (W30, LOOP-91) sits directly below `checkApprovalsHealth` and was written for this shape: *"a
+  library that has never been written produces no warning anywhere … Absent and healthy were the
+  same output — empty for 120 fires with every surface reporting healthy."* W40's own comment
+  records the same failure mode — *"that state is INVISIBLE from either side"* — above an early
+  return whose comment reads *"nobody uses the feature ⇒ nothing to say"*. The causality runs the
+  other way: nothing is enforced, therefore nobody uses the feature.
 
 - **2026-08-11 (pm, one-hundred-fifty-eighth fire) — the remedy for one release alarm is the thing
   that silences the other, so the loop cleared its own skew twice this week while the artifact
