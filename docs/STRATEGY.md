@@ -459,6 +459,29 @@ for the remedy-text half. The half that is **not** a product defect — whether 
 than filed. `[W18]` now reads 10 code commits behind (up from 7 at LOOP-542's filing), and `[W17]`
 (`testproj` has repos but no `strategyDoc`) arrived with the same row.
 
+**Board at this fire's close: Todo 22 unblocked (senior 12/10, junior 10/10) — the junior tier had
+one slot and it was used; Backlog 72 (−1 promoted, +1 filed).** LOOP-519 (W06 certifies a tree it
+did not measure) was promoted Backlog→Todo as the junior tier's top pick by rank — a `Bug` at rank 3
+ahead of sixteen P1 Improvements at rank 4.5 — and its evidence is still live in the tree
+(`?? qa-state.json` remains untracked and un-ignored at the repo root). The senior tier stays over
+cap at 12/10, so nothing was promoted there. Job A was empty at boot and at close: the sole
+`In Review` item, LOOP-536, is a `Bug` with the `qa` owner label and is QA's to verify, not PM's.
+
+**The §9c edge audit ran clean for the fourth consecutive fire.** All five parks hold at least one
+open blocker edge and none is an unpark candidate: LOOP-396→542, LOOP-402/403/404→401, LOOP-483→543.
+No zero-edge park exists, so no ticket is sitting behind a label with nothing that can clear it.
+
+**LOOP-542 re-measured and unchanged at 10 code commits behind** (installed build `c7a9e11`, read
+from `build-commit.json` rather than `--version`, which reads 1.15.1 on both sides and distinguishes
+nothing). No new code commit landed since the previous fire, so the park did not decay further and no
+comment was added — the tracker is re-measured every fire and commented only when the number moves.
+
+**A false ⚠️ was added to the doctor surface's known set: `[W24]`.** It was previously attributed to
+LOOP-543/483/466 as a taxonomy-coverage gap; this fire established it is a defect in W24's own
+denominator and filed LOOP-547 for it. The standing inventory line — every doctor W-code has a
+ticket or a named owner — now reads W24→547 (arithmetic) alongside 543/483/466 (the stall and
+no-op classes, which consume these counts but do not compute them).
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -492,6 +515,45 @@ than filed. `[W18]` now reads 10 code commits behind (up from 7 at LOOP-542's fi
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-10 (pm, one-hundred-fifty-seventh fire) — the failure-taxonomy alarm reported the
+  taxonomy two-thirds blind on a window in which every failure carries a class, because its
+  denominator counts fires that cannot carry the thing it measures.**
+
+  **What was measured.** `dev-loop doctor` on this workspace prints `[W24] 419 of 630 failure-ish
+  fires (67%) carry no errorClass — the taxonomy is blind here … the provider breaker … cannot
+  engage on them`. Re-derived from the ledger the check itself reads
+  (`.dev-loop/team/fires.jsonl`, same 7d window, 1072 rows): fires with `exitCode != 0` = **211**;
+  of those, fires carrying an `errorClass` = **211**. Failed-and-unclassified in the window: **0**.
+  The `top errors` line W24 calls incomplete sums to exactly 211 — `stalled×92 + spawn-failed×59 +
+  budget-per-fire×46 + rate-limit×5 + timeout×4 + network×2 + budget-deadline×2 + auth×1`.
+
+  **Root cause, in one expression.** `checkFailureTaxonomyBlind` (`hub/src/doctor.ts`) computes
+  `failureish = fires.failures + fires.timeouts + fires.suspectErrors`. Those three counters are
+  incremented in `hub/src/metrics.ts` by independent predicates over the same row, so they do not
+  partition the fire set. Two consequences, measured: the 5 `timedOut` rows all also exit non-zero
+  (exit 124), so they are counted twice; and the 414 `suspectError` rows all exit **0**, so they
+  can never carry an `errorClass` — 414 of the 419 "unclassified" fires come from there. The share
+  therefore tracks the no-op rate rather than the classifier's coverage.
+
+  **Why it is recorded rather than treated as cosmetic.** The prescribed remedy is
+  `grep '"exitCode":1' .dev-loop/team/fires.jsonl | tail`; run verbatim it returns rows that are
+  100% classified, so the operator who follows the instruction finds nothing and learns to discount
+  the code. The line also asserts that the provider breaker cannot engage, which is the actionable
+  half and is false — the breaker keys on `errorClass` over failures, and every failure has one.
+  And it lands on a surface that is already hard-red, where a false ⚠️ competes with `[W18]` and
+  `[W20]` for the operator's attention: the same displacement measured one fire earlier under
+  LOOP-546.
+
+  **The neighbouring arm is correct, which is the evidence that the relation was known.**
+  `successRate` (`metrics.ts:223`) omits `timeouts` from its subtraction precisely because they are
+  already inside `failures`. The subset relation is honoured in one file and lost in the other.
+
+  Filed **LOOP-547** (Bug, `qa` owner, junior tier, P2), `relatedTo` LOOP-543 and cross-commented
+  there. The two are separable and the dedupe note says so in both directions: LOOP-543 owns whether
+  an exit-0 no-op fire should be ledgered as a success at all; LOOP-547 owns W24's arithmetic. If
+  543's remedy assigns those rows an `errorClass`, W24's warning disappears as a side effect while
+  the denominator stays wrong, so 547 is not closable on 543 landing without re-measuring its AC3.
 
 - **2026-08-10 (pm, one-hundred-fifty-sixth fire) — the workspace health gate went hard-red on a
   registry row whose printed remedy cannot be performed, and the ❌ displaced both live day-2
