@@ -756,6 +756,27 @@ installed CLI — W18 still prints the pre-LOOP-547 W24 wording, 9 code commits 
 
 ## Decisions (running log)
 
+- **2026-08-11 (pm, one-hundred-seventy-second fire) — a ruling that names a mechanism as its actor
+  is not actioned until the mechanism is shown to exist.**
+
+  **Measured.** Two rulings — LOOP-560 (03:31Z) and LOOP-562 (04:31Z) — each assign their remaining
+  ACs to a *"queued scheduler restart (detached, fires at the next claude-idle window)"*. It does not
+  exist: no second `run-agents` process (only pid 99400, up 4 h 36 m), empty `atq`, no launchd entry,
+  no artifact in `.dev-loop/team/`, and **no implementation in the source** — `grep -rlE
+  'claude-idle|idleWindow|queuedRestart|pendingRestart|scheduleRestart' hub/src/` returns no files.
+  The CLI has no deferred-restart feature; its only affordance prints the command for a human to run.
+  Consequence at 04:39Z, 8 minutes after the second ruling: qa and junior-dev still launching
+  `opencode`/`openrouter` on an account returning 402. **Five consecutive PM fires reported AC4 as
+  "not measurable"**, each addressed to an actor that was never going to act.
+
+  **The call.** Pass 138 established *configured ≠ running*. This pass adds the rung above it:
+  **ruled ≠ actioned.** Where a ruling names an automated actor, PM verifies that actor exists before
+  entering a wait on it — and when it does not, the ticket moves to `Human-Blocked` with the literal
+  command, rather than accruing another In-Review comment. Four such comments had already failed;
+  the fifth would have been the same error, so LOOP-560 is now parked in the decision queue with
+  `kill 99400` written out. The generalisation PM keeps: **a wait is only legitimate once the thing
+  waited on has been located.**
+
 - **2026-08-11 (pm, one-hundred-seventy-first fire) — a config change is not a delivered change; a
   lever is verified at the fire ledger, never at the config read-back.**
 
@@ -1607,6 +1628,19 @@ _(The overflow parking lot: strong ideas not yet filed, each with the condition 
 becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verbatim in
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J).)_
 
+
+- **The test suites leak hub daemons, and 40 of them are running right now (2026-08-11, pass 139).**
+  Measured this fire: `ps` shows **40 live `hub/src/daemon.ts` processes, 326 MB total RSS** (mean
+  8.1 MB), oldest up **1 d 8 h 22 m**. By tree: 24 from the main checkout, 5 from
+  `.dev-loop/wt/LOOP-477`, and **7 whose tree no longer exists** (`/private/tmp/loop477`,
+  `/private/tmp/v391`). Severity checked rather than assumed and it is **low**: all are `Ss` at 0.0%
+  CPU, none holds a listening socket, and none holds a `hub.db` handle — so this is a resource leak,
+  not the LOOP-477-class hazard of a daemon serving a deleted board. Not filed: the Backlog is 72
+  with `Todo` at 28 against a cap of 10 and the junior lane delivering ~1 ticket/day, so a 73rd
+  ticket for 326 MB of idle sleep is padding, not throughput. **REVERSAL CONDITION: file it when the
+  delivery lane is running again** (LOOP-560's restart), **or sooner if a leaked daemon is ever
+  observed holding a socket or a `hub.db` handle** — that is a different, correctness-class finding
+  and should not wait on backlog depth.
 
 - **Should the release cadence stay a human act? A `Goals`-level question for the operator, named
   rather than filed (2026-08-11, pass 127).** landing-observability §9.7 kept the human release gate
