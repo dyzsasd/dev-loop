@@ -782,6 +782,25 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
 
 ## Decisions (running log)
 
+- **2026-08-11 (pm, one-hundred-eighty-second fire) — the obvious remedy for the no-PR pushes sits on
+  neither path that produced them, and "no PR contains it" is not a defect predicate.**
+
+  **Measured.** Both observed mechanisms bypass the `dev-loop push` verb. The §7 merge-back runs bare
+  `git`; `doc-land` runs `git(["push","origin", …])` at `hub/src/doc-land.ts:663`, having called
+  `pushGuard()` as a *library* at `:610` — the guard is consulted, the verb is not. A refusal sited in
+  the verb would therefore catch **zero** of the three events on record while reading as a completed
+  fix. The filing predicate does not discriminate either: `docs/STRATEGY.md` landed on `main` four
+  times on 2026-08-11 (`8f0e8fb`, `1e8685a`, `3dc3c33`, `f066240`), each returning an empty array from
+  `commits/<sha>/pulls` — the same answer as `4257072`. Nor does the reflog verb: `main@{…}: commit:`
+  covers a doc-land landing *and* `e5a751f`, a LOOP-502 code commit made directly on `main`. The path
+  set of the pushed range separates all four; nothing else tried does. No merge-back event since
+  07:15:07Z.
+
+  **The call.** A remedy is specified only once the path the mechanism traverses is named and the
+  remedy is shown to sit on it — the same failure the previous two entries describe, re-entering
+  through the fix rather than the diagnosis. LOOP-567's AC5 carries the instance; the general form is
+  a review method, so its shippable home is a §15 convention or a Reflect lesson, never a Dev ticket.
+
 - **2026-08-11 (pm, one-hundred-eighty-first fire) — the no-PR pushes are the `landing:"direct"`
   merge-back sequence running in a `landing:"pr"` repo; the absent branch protection permits them
   but does not cause them.**
