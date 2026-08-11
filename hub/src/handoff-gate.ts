@@ -176,6 +176,9 @@ export function handoffGateRejection(inp: HandoffGateInput): string | null {
       + `The work is still uncommitted in the working tree, where another fire's \`git checkout\` discards it silently and a \`git add -A\` lands it under someone else's ticket. `
       + `Commit it on a branch first (\`git checkout -b dev-loop/${inp.id}\`, then commit naming ${inp.id}), then hand off. `
       + `This check reads LOCAL git only — it does not require \`gh\`, a PR, or a network.`;
+  // LOOP-573 — a commit named correctly but on the wrong branch (shared checkout left on another's branch)
+  const misaligned = misalignedCommitRejection(inp.repoRoot, inp.id);
+  if (misaligned) return misaligned;
   // LOOP-544 — a commit exists, so LOOP-309 is satisfied; the increment can still be HALF here.
   return splitTreeRejection(inp.repoRoot, inp.id);
 }
@@ -205,3 +208,69 @@ function splitTreeRejection(repoRoot: string, id: string): string | null {
     + `Every fire is spawned with its cwd set to the shared checkout, so a relative path writes HERE by default — move each file into the worktree and commit it there (\`git -C ${wt ?? `<worktree>`} …\`), then hand off. `
     + `This check reads LOCAL git only — no \`gh\`, no PR, no network.`;
 }
+
+// ─── LOOP-573: the increment committed on the wrong branch ─────────────────────────────────────────
+//
+// LOOP-309 + LOOP-544 together check whether a commit exists and whether it is the WHOLE increment
+// (not split). A third class escapes both: a commit whose MESSAGE names ticket X, but which sits on
+// a BRANCH NOT NAMED for X. The shared checkout is writable and can be left on an arbitrary branch.
+// A fire commits to it, names its own ticket in the message, but inherits the prior branch. The
+// result is a well-formed commit on a foreign branch, orphaned by any later `git checkout`.
+//
+// The repro (LOOP-573 AC3): shared checkout parked on `dev-loop/A`, a fire commits naming `B`,
+// then checkouts back to main. Commit is unreachable until someone re-checks out the `A` branch
+// — and if that branch gets pruned, the commit is silently lost. Every existing check answers
+// "fine" because the commit text is real, there is no uncommitted dirt, and a `dev-loop/B` branch
+// exists — just not on this fire's commit.
+
+/**
+ * AC1: a commit naming ticket X, on a branch NOT named for X, is detected.
+ * AC2: the detection reports both the branch and the sha, so recovery is actionable.
+ * AC3: the rejection does not short-circuit on `git status --porcelain` being clean.
+ *
+ * Reads LOCAL git only; always silent on any git error.
+ */
+function misalignedCommitRejection(repoRoot: string, ticketId: string): string | null {
+  const git = (args: string[]): string => execFileSync("git", ["-C", repoRoot, ...args],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+
+  try {
+    // Find the most recent commit naming this ticket
+    const sha = git(["log", "--all", "--fixed-strings", `--grep=${ticketId}`, "--format=%H", "-1"]).trim();
+    if (!sha) return null;  // No commit names this ticket; other checks will handle it
+
+    // Find what branch(es) that commit is reachable from. --remote is left out deliberately: for an
+    // orphaned local commit, `--all` returns local branches plus tracking branches (origin/*), which
+    // is exact. A commit orphaned even from local branches would not be dangerous in the shared
+    // checkout — it would exist in the reflog but be invisible to `git checkout` — so reporting it
+    // is lower priority. --contains refuses detached SHAs, so the try/catch matters.
+    let branchOutput = "";
+    try {
+      branchOutput = git(["branch", "--contains", sha, "--format=%(refname:short)"]).trim();
+    } catch { return null; }  // Commit is detached or unreachable; not this gate's concern
+
+    if (!branchOutput) return null;  // Commit on no branch somehow; very unlikely, but silent
+
+    const branches = branchOutput.split("\n").map((b) => b.trim()).filter(Boolean);
+    const expectedBranch = `dev-loop/${ticketId}`;
+
+    // AC1: check if the commit is on a branch named for this ticket. Allow local or tracking-branch
+    // forms (e.g., `dev-loop/LOOP-573` OR `origin/dev-loop/LOOP-573`).
+    const isOnCorrectBranch = branches.some((b) => b === expectedBranch || b.endsWith(`/${expectedBranch}`));
+    if (!isOnCorrectBranch) {
+      // Commit is named correctly but on the wrong branch. Report both for recovery (AC2).
+      const currentBranch = branches[0];  // Report the first branch in the list
+      return `verify gate: In Progress → In Review blocked — commit ${sha.slice(0, 7)} in ${repoRoot} names ${ticketId} `
+        + `but sits on branch ${currentBranch}, not dev-loop/${ticketId}. `
+        + `The work is orphaned: another fire's \`git checkout\` will make it unreachable, and pruning the branch will discard it silently. `
+        + `To recover: \`git cherry-pick ${sha.slice(0, 7)}\` onto dev-loop/${ticketId}. `
+        + `To prevent: every dev-tier fire must work in a per-ticket worktree (§7), never in the shared checkout. `
+        + `This check reads LOCAL git only — no \`gh\`, no PR, no network.`;
+    }
+  } catch {
+    // Any git error; silently return null and let other checks handle it
+  }
+
+  return null;
+}
+

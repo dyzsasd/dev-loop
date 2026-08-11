@@ -381,6 +381,18 @@ try {
     updateFields({ state: "In Review", labels: JSON.stringify([...QA_OWN, "needs-qa"]) }));
   ok(hySweep.ok && stateOf(hyId) === "In Review", "LOOP-208: a non-transition write (sweep re-labels an In Review qa ticket) is NOT gated (edge-specific)");
 
+  // ── LOOP-578: waiting_on field persistence ──────────────────────────────────
+  // AC1 from LOOP-384: waiting_on discriminator should round-trip through create/read/update
+  const woId = insertTicket(db, "p", "pm", newFields({ state: "Human-Blocked", waiting_on: "human-action" }), {});
+  const woRow = db.prepare("SELECT waiting_on FROM tickets WHERE id=?").get(woId) as { waiting_on: string | null };
+  ok(woRow?.waiting_on === "human-action", "LOOP-578: waiting_on persists in create");
+
+  const woUpdated = updateTicketRow(db, "p", "pm", woId, "Human-Blocked",
+    updateFields({ state: "Human-Blocked", waiting_on: "external" }));
+  ok(woUpdated.ok, "LOOP-578: update with waiting_on succeeds");
+  const woRow2 = db.prepare("SELECT waiting_on FROM tickets WHERE id=?").get(woId) as { waiting_on: string | null };
+  ok(woRow2?.waiting_on === "external", "LOOP-578: waiting_on updates properly");
+
   db.close();
 } finally {
   rmSync(ROOT, { recursive: true, force: true });

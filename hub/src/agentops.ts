@@ -345,7 +345,7 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
     const id = insertTicket(db, projectId, actor,
       { title: a.title, description: a.description ?? "", type: a.type ?? "Feature", state: (a.state as State) ?? "Todo",
         assignee: tierAssignee, priority: a.priority ?? 0, labels,
-        duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [] },
+        duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [], waiting_on: a.waitingOn ?? null },
       { title: a.title, type: a.type });
     return okR(toTicket(getRow(db, projectId, id)!));
   }
