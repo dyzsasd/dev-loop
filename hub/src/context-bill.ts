@@ -43,7 +43,7 @@ export const BUDGETS: Record<string, Budget> = {
   "senior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "junior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "sweep-agent":         { lines: 220, bytes: 16 * 1024 },
-  "dev-agent":           { lines: 266, bytes: 19_968 }, // canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a); raised 260/18K → 266/19.5K for the LOOP-277 stale-re-freshen branch (operator-applied §17, 2026-08-04) — actuals 264/19,467, headroom deliberately thin so regrowth trips here
+  "dev-agent":           { lines: 268, bytes: 19_968 }, // canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a); raised 260/18K → 266/19.5K for LOOP-277, then 266 → 268 lines for LOOP-553's fire-start marker pair (operator-applied §17, 2026-08-11) — headroom deliberately thin so regrowth trips here
   "reflect-agent":       { lines: 200, bytes: 14 * 1024 },
   "ops-agent":           { lines: 200, bytes: 14 * 1024 },
   "architect-agent":     { lines: 200, bytes: 14 * 1024 },
@@ -243,6 +243,24 @@ export function conventionsLoad(c: Conventions, anchors: readonly string[]): Mea
   return { lines: ln, bytes };
 }
 
+// ─── the inherited dev slices (LOOP-553) ────────────────────────────────────────────────────────────
+// The split tiers inherit dev-agent's fire-start (Step 0.5) and ship-sequence slices by marker pair.
+// This extractor is the ONE parser both the assembler (boot-prefix.ts) and the bill use, so what
+// ships and what is billed cannot drift. Markers missing ⇒ that slice is absent (fail-open).
+export const DEV_SLICE_MARKERS = [
+  { label: "Step 0.5", begin: "<!-- fire-start:begin -->", end: "<!-- fire-start:end -->" },
+  { label: "Steps 4–6.5 + 7 + HARD LIMITS", begin: "<!-- ship-sequence:begin -->", end: "<!-- ship-sequence:end -->" },
+] as const;
+export function devInheritedSlices(devSkillText: string): Array<{ label: string; text: string }> {
+  const out: Array<{ label: string; text: string }> = [];
+  for (const m of DEV_SLICE_MARKERS) {
+    const b = devSkillText.indexOf(m.begin);
+    const e = devSkillText.indexOf(m.end);
+    if (b !== -1 && e > b) out.push({ label: m.label, text: devSkillText.slice(b + m.begin.length, e).trim() });
+  }
+  return out;
+}
+
 // ─── the bill ───────────────────────────────────────────────────────────────────────────────────────
 export interface BillRow {
   skill: string;
@@ -251,6 +269,9 @@ export interface BillRow {
   prose: Measure; cheat: Measure; conventions: Measure; lessons: Measure;
   // null when the agent is not in STRATEGY_DOC_READERS; StrategyDocStat (bytes may be 0) when it is.
   strategyDoc: StrategyDocStat | null;
+  // The dev-agent slices a split tier receives in its corpus (LOOP-553) — billed at worst case
+  // (both slices), matching the lessons-cap doctrine; ZERO for every other row.
+  inherited: Measure;
   total: Measure; tokens: number;
   budget: Budget; withinBudget: boolean;
 }
@@ -283,13 +304,16 @@ export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat):
     const rowStrategyDoc: StrategyDocStat | null = (isReader && strategyDoc) ? strategyDoc : null;
     const docBytes = rowStrategyDoc?.bytes ?? 0;
     const docLines = rowStrategyDoc?.lines ?? 0;
+    const inherited: Measure = (dir === "senior-dev-agent" || dir === "junior-dev-agent")
+      ? measureOf(splitLines(devInheritedSlices(readFileSync(join(root, "skills", "dev-agent", "SKILL.md"), "utf8")).map((sl) => sl.text).join("\n\n")))
+      : ZERO;
     const total: Measure = {
-      lines: prose.lines + cheat.lines + conventions.lines + lessons.lines + docLines,
-      bytes: prose.bytes + cheat.bytes + conventions.bytes + lessons.bytes + docBytes,
+      lines: prose.lines + cheat.lines + conventions.lines + lessons.lines + docLines + inherited.lines,
+      bytes: prose.bytes + cheat.bytes + conventions.bytes + lessons.bytes + docBytes + inherited.bytes,
     };
     const budget = BUDGETS[dir] ?? { lines: 0, bytes: 0 }; // unknown dir → 0-budget (the lint fails it loudly)
     rows.push({
-      skill: dir, agent, sections: sec.anchors, prose, cheat, conventions, lessons,
+      skill: dir, agent, sections: sec.anchors, prose, cheat, conventions, lessons, inherited,
       strategyDoc: rowStrategyDoc,
       total, tokens: Math.ceil(total.bytes / BYTES_PER_TOKEN),
       budget,

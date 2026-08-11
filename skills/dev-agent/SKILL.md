@@ -56,6 +56,7 @@ far: verify and finish/hand it off rather than redoing it. None ⇒ orphan: unas
 re-queued.`, verify the move (§10). Unresolvable repo target in a multi-repo project ⇒ don't
 grep a guessed tree; leave it for Step 3 (§19).
 
+<!-- fire-start:begin -->
 ### Step 0.5 — Merge eligible loop PRs (feature + deploy, §12c)
 When `git.autoMerge` and/or `deploy.style:"release-pr"` are set (absent ⇒ no-op), run the §12c
 fire-start pass exactly. `git worktree prune` first (under the §7 lock).
@@ -81,6 +82,7 @@ onto `origin/<defaultBranch>` + `--force-with-lease` (unresolvable ⇒ block); p
 **Deploy PRs** (`release-pr`): merge only `auto:true` envs' NEWEST open deploy PR (never
 `--delete-branch`; run the env's `healthCheck` after); `auto:false` (prod) is the operator's gate.
 Idempotent + race-safe; these are the ONLY merge/deploy actions (no `deploy.command`, no Step 6.5).
+<!-- fire-start:end -->
 
 ### Step 1 — Pick the top ticket
 On `backend:"service"` ONE call returns it: `dev-loop queue` — `todo` arrives already in the
