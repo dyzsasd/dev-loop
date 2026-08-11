@@ -39,9 +39,22 @@ type StoredRow = TicketUpdateFields;
 
 const exists = (db: DatabaseSync, projectId: string, id: string): boolean =>
   !!db.prepare("SELECT 1 FROM tickets WHERE id=? AND project_id=?").get(id, projectId);
-const rowFor = (db: DatabaseSync, projectId: string, id: string): StoredRow | undefined =>
+// LOOP-587: the ONE way to hydrate a TicketUpdateFields row. Every caller that reads a ticket in order to
+// write it back through updateTicketRow goes through here — merge-guard's forge trip and ticket-release's
+// infra-kill release included — so the column list exists in exactly one place.
+//
+// Why this is exported rather than each caller writing its own SELECT: the interface's fields are REQUIRED,
+// but a `db.prepare(...).get()` result is cast, not checked, so a hand-rolled list that omits a column
+// type-checks and then fails at the bind. LOOP-384 added `waiting_on` to the interface and to the UPDATE
+// and updated this reader — the two hand-rolled copies in merge-guard.ts and ticket-release.ts kept
+// hydrating the 9-column shape, so `waiting_on` arrived `undefined` and node:sqlite refused it
+// ("Provided value cannot be bound to SQLite parameter 10"). That broke merge-guard loudly and the
+// infra-kill release SILENTLY, because its per-ticket `catch {}` swallowed the throw and the ticket was
+// simply never released. One list, one reader, so the next column addition cannot repeat it.
+export const readTicketUpdateFields = (db: DatabaseSync, projectId: string, id: string): TicketUpdateFields | undefined =>
   db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to,waiting_on FROM tickets WHERE id=? AND project_id=?")
     .get(id, projectId) as StoredRow | undefined;
+const rowFor = readTicketUpdateFields;
 
 // ─── release/env config + the staging-deploy gate (DL-32 / DL-38, design §7) ──
 export interface ReleaseConfig {

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { findProject } from "./seed.ts";
-import { updateTicketRow, insertComment, type TicketUpdateFields } from "./ticketwrite.ts";
+import { updateTicketRow, insertComment, readTicketUpdateFields } from "./ticketwrite.ts";
 
 // Releases tickets claimed by a fire that was killed by infrastructure (timeout, stall, or the LOOP-230
 // per-fire budget watchdog). Queries the events ledger for claims this fire stamped (issue.transition →
@@ -23,9 +23,9 @@ export function releaseClaimedTickets(
     ).all(projectId, fireId) as { ticket_id: string }[];
     for (const { ticket_id } of rows) {
       try {
-        const cur = db.prepare(
-          `SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?`
-        ).get(ticket_id, projectId) as TicketUpdateFields | undefined;
+        // LOOP-587: the shared reader, never a hand-rolled column list — this loop's `catch` below is
+        // per-ticket and silent, so a row missing a column would strand the release with no signal.
+        const cur = readTicketUpdateFields(db, projectId, ticket_id);
         if (!cur || cur.state !== "In Progress") continue;
         updateTicketRow(db, projectId, actor, ticket_id, "In Progress", { ...cur, state: "Todo" });
         const killName = killClass === "timeout" ? "timeout" : killClass === "stall" ? "stall" : killClass === "budget" ? "budget perFireUsd" : "timeout/stall";
