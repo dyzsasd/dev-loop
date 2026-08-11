@@ -174,8 +174,13 @@ visible; only surviving to close, or writing the trail incrementally, can fill i
 **The fourth gap is CLOSED.** A required check that never RAN presented as `CLEAN` and `autoMerge`
 landed it — eight PRs merged on zero test signal. **LOOP-407** shipped 2026-08-08 (`a12bfab`),
 verified on live forge data: an absent required check is now an unconditional hold, and doctor
-**W38** names the unprotected-branch posture that keeps the forge silent. Residual: nothing
-refuses a squash that skipped the guard (**LOOP-444**).
+**W38** names the unprotected-branch posture that keeps the forge silent. Its named residual —
+nothing refuses a squash that skipped the guard — has since shipped as well: **LOOP-444**
+(`53077f0`, 2026-08-08) makes the gate the precondition of the squash rather than a step before it,
+with no argv that skips it, and **LOOP-448** (`fba3170`) routed every dev tier's Step 0.5 through
+that one verb. What remains is forge-side and deliberate: `main` carries no required-check
+protection, so a squash issued outside the loop's own path is still unrefused — the posture W38
+reports, not an open build item.
 
 First program — the five controls: **LOOP-382** (pause/resume as board state) · **LOOP-383** (typed
 approval objects) · **LOOP-384** (a `waiting-on` discriminator for Human-Blocked) · **LOOP-385**
