@@ -190,7 +190,7 @@ function resolveDesignParents(
   for (const t of rows) {
     const ptr = designPointerOf(t.description ?? "");
     if (!ptr) continue;
-    const asParent = /^parent\s+(\S+)/i.exec(unwrapCodeSpan(ptr));
+    const asParent = PARENT_POINTER_RE.exec(unwrapCodeSpan(ptr));
     // BOUND 1 — the id a child names must be a ticket on THIS board. An unchecked id put `LOOP-2`,
     // which exists nowhere here, into an authorization set; a set of ids nobody can hold is a set
     // nobody can audit.
@@ -215,7 +215,7 @@ function resolveDesignParents(
   let pendingSlug: string | null = null;
   if (pending) {
     const ptr = designPointerOf(pending.description ?? "");
-    const slug = ptr && !/^parent\s+\S+/i.test(unwrapCodeSpan(ptr)) ? docSlugOf(ptr) : null;
+    const slug = ptr && !PARENT_POINTER_RE.test(unwrapCodeSpan(ptr)) ? docSlugOf(ptr) : null;
     if (slug !== null) {
       pendingSlug = slug;
       board.push({ id: PENDING_ID, description: pending.description, related_to: JSON.stringify(pending.relatedTo) });
@@ -471,6 +471,12 @@ const unwrapCodeSpan = (pointer: string): string => {
 const HUB_POINTER_RE = new RegExp(`^hubDoc:design/(${SLUG_TOKEN})`, "i");
 const FILE_POINTER_RE = new RegExp(`^docs/design/(${SLUG_TOKEN})\\.?$`, "i");
 
+// The `parent <id>` form, ONCE. It was written inline twice inside resolveDesignParents — once
+// capturing, once as a bare test — and parseDocPointer below would have made it four copies of a
+// grammar this module exists to state once (LOOP-344). Same pattern, same flags, no `g`, so it is
+// stateless and safe to share between an `.exec` and a `.test` call site.
+const PARENT_POINTER_RE = new RegExp(`^parent\\s+(\\S+)`, "i");
+
 /** `hubDoc:design/<slug>` and `docs/design/<slug>.md` normalise to the same slug. */
 export function docSlugOf(pointer: string): string | null {
   const p = unwrapCodeSpan(pointer);
@@ -478,6 +484,77 @@ export function docSlugOf(pointer: string): string | null {
   if (hub) return stripMdSuffix(hub[1]);
   const file = FILE_POINTER_RE.exec(p);
   return file ? stripMdSuffix(file[1]) : null;
+}
+
+// ── The §21a pointer as a VALUE (LOOP-451/LOOP-572) ────────────────────────────────────────────────
+// docSlugOf answers one question — "which design doc does this child point at?" — and answers it
+// with `null` for both "not a doc pointer" and "not a pointer at all". `dev-loop doc get --pointer`
+// needs the other two facts docSlugOf discards: WHICH form was written (a `parent <id>` pointer is
+// perfectly valid and simply does not name a doc), and WHY an unresolvable token failed.
+//
+// It lives HERE, next to the regexes, rather than in cli-agentops.ts where its only consumer sits,
+// for two reasons that are facts about those files rather than preferences:
+//   • cli-agentops.ts ends in a top-level `await main()`, so importing it from a test EXECUTES the
+//     CLI. A function exported from there is not unit-testable; adding `export` in place would have
+//     satisfied the letter of "exported" and none of its purpose.
+//   • the pointer grammar is already stated here. A second parse elsewhere is the divergence
+//     LOOP-344's one-definition rule exists to prevent — and it would have diverged immediately,
+//     since the code-span unwrap and the trailing-full-stop tolerance below were both bought with
+//     live misroutes (LOOP-372, LOOP-361) and a fresh parser would not have had them.
+// This module's only import is `import type`, so it stays loadable without the DB/zod graph.
+
+/** The three pointer forms §21a defines for a child ticket's `Design:` line. */
+export type DocPointer =
+  | { form: "hubDoc"; kind: string; slug: string }
+  | { form: "repoFile"; kind: "design"; slug: string }
+  | { form: "parent"; parentId: string };
+
+/**
+ * Why a code and not just a message: the caller decides the exit path from the code, and the three
+ * shape failures are NOT the same as `unrecognized`. `hubDoc:design` is a typo in a form the writer
+ * clearly intended; `LOOP-401` alone is not a pointer at all. Collapsing them would tell a writer
+ * who dropped a slug to go read the whole grammar.
+ */
+export type DocPointerFailure = "empty" | "hubdoc-shape" | "repofile-shape" | "parent-shape" | "unrecognized";
+
+export type DocPointerResult =
+  | { ok: true; pointer: DocPointer }
+  | { ok: false; code: DocPointerFailure; message: string };
+
+// Kind-general, unlike HUB_POINTER_RE above: §21a's own spelling is `hubDoc:design/<slug>` because
+// `design` is the multi-instance kind, but the CLI flag addresses any doc kind, and refusing
+// `hubDoc:strategy/x` here would be this function inventing a restriction the op does not have.
+// Anchored at both ends, so `hubDoc:a/b/c` is a REFUSAL rather than a silent truncation to `a`/`b`.
+const HUB_POINTER_ANY_KIND_RE = new RegExp(`^hubDoc:(${SLUG_TOKEN})/(${SLUG_TOKEN})\\.?$`, "i");
+
+/**
+ * Parse one §21a `Design:` pointer token. Never returns undefined: every input lands on exactly one
+ * of the three forms or on a typed failure carrying the reason.
+ *
+ * Dispatch is by the form's PREFIX, then validation inside that form — not "try each regex, else
+ * unrecognized". `hubDoc:design` must fail as a malformed hubDoc pointer, because that is what the
+ * writer was writing; a first-match-wins chain would have called it unrecognized.
+ */
+export function parseDocPointer(raw: string): DocPointerResult {
+  const p = unwrapCodeSpan(raw ?? "").trim();
+  if (!p) return { ok: false, code: "empty", message: "pointer is empty — expected 'hubDoc:<kind>/<slug>', 'docs/design/<slug>.md' or 'parent <ticket-id>'" };
+
+  if (/^hubDoc:/i.test(p)) {
+    const m = HUB_POINTER_ANY_KIND_RE.exec(p);
+    if (!m) return { ok: false, code: "hubdoc-shape", message: `malformed pointer '${p}' — the hubDoc form is 'hubDoc:<kind>/<slug>', e.g. 'hubDoc:design/scheduler-pause'` };
+    return { ok: true, pointer: { form: "hubDoc", kind: m[1], slug: stripMdSuffix(m[2]) } };
+  }
+  if (/^docs\//i.test(p)) {
+    const m = FILE_POINTER_RE.exec(p);
+    if (!m) return { ok: false, code: "repofile-shape", message: `malformed pointer '${p}' — the repo-file form is 'docs/design/<slug>.md'` };
+    return { ok: true, pointer: { form: "repoFile", kind: "design", slug: stripMdSuffix(m[1]) } };
+  }
+  if (/^parent\b/i.test(p)) {
+    const m = PARENT_POINTER_RE.exec(p);
+    if (!m) return { ok: false, code: "parent-shape", message: `malformed pointer '${p}' — the parent form is 'parent <ticket-id>', e.g. 'parent LOOP-401'` };
+    return { ok: true, pointer: { form: "parent", parentId: m[1] } };
+  }
+  return { ok: false, code: "unrecognized", message: `unrecognized pointer '${p}' — expected 'hubDoc:<kind>/<slug>', 'docs/design/<slug>.md' or 'parent <ticket-id>'` };
 }
 
 // LOOP-379 — there was a BODY_SLUG_RE / docSlugsOfBody pair here that scanned a ticket's prose for

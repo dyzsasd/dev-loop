@@ -28,6 +28,7 @@ import { reposOfProject, type RepoEntry, type Workspace } from "./team-config.ts
 import { agentOp, isAgentOp, AGENT_OPS, AGENT_WRITE_OPS, type AgentOp, type OpResult } from "./agentops.ts";
 import { makeGhExec, defaultGhExec, annotateTicketLanding, GH_EXEC_TIMEOUT_MS } from "./landing.ts";
 import { checkReviewAdmission } from "./review-admission.ts";
+import { parseDocPointer } from "./design-parent.ts"; // LOOP-572: the §21a pointer grammar has ONE parse
 import { opRunfilePath, resolveOpPort, postOp, postOpUrl } from "./op-client.ts";
 
 const TYPES = ["Bug", "Feature", "Improvement"] as const;
@@ -531,12 +532,39 @@ async function docList(dargs: string[]): Promise<never> {
 }
 
 async function docGetOrHistory(verb: "get" | "history", dargs: string[]): Promise<never> {
-  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", ...(verb === "get" ? { "--version": "v" } : {}), ...COMMON });
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--pointer": "v", ...(verb === "get" ? { "--version": "v" } : {}), ...COMMON });
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-  if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail(`doc ${verb} needs --slug S or --kind K`);
+  const pointerVal = str(flags, "--pointer");
+  const slugVal = str(flags, "--slug");
+  const kindVal = str(flags, "--kind");
+  if (!pointerVal && !slugVal && !kindVal) fail(`doc ${verb} needs --slug S or --kind K or --pointer hubDoc:kind/slug`);
+  // `--pointer` excludes the pair; `--slug` and `--kind` do NOT exclude each other. Carrying the
+  // three-way count forward would have made `doc get --kind design --slug <slug>` — the invocation
+  // gen-cheatsheets.ts prints into junior-dev's own cheat-sheet for the Step-4 `Design:` read, and
+  // the one this verb has always accepted — an exit-2 usage error. Caught by comparing the two
+  // spellings' output (AC3); it is invisible to any test that only exercises --pointer.
+  if (pointerVal && (slugVal || kindVal)) fail("--pointer, --slug, and --kind are mutually exclusive");
+
   const args: Record<string, unknown> = {};
-  if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
-  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  if (pointerVal) {
+    const parsed = parseDocPointer(pointerVal);
+    if (!parsed.ok) fail(parsed.message);
+    // `parent <id>` is a WELL-FORMED §21a pointer that names a ticket, not a doc — so it gets its own
+    // message routing the reader to the verb that can serve it, never the malformed-pointer error.
+    // Telling someone their correct pointer is invalid sends them to fix the one thing that is right.
+    if (parsed.pointer.form === "parent") fail(`pointer '${pointerVal}' names a ticket, not a hub doc — the parent ticket IS the design (§21a); read it with: dev-loop ticket ${parsed.pointer.parentId}`);
+    args.kind = parsed.pointer.kind;
+    args.slug = parsed.pointer.slug;
+  } else {
+    if (slugVal) {
+      if (slugVal.includes("/") || slugVal.startsWith("hubDoc:")) {
+        fail(`--slug '${slugVal}' looks like a Design: pointer — resolve it as --slug ${slugVal.split("/").pop()} --kind ${slugVal.split("/")[0]}`);
+      }
+      args.slug = slugVal;
+    }
+    if (kindVal) args.kind = kindVal;
+  }
+
   const ver = str(flags, "--version");
   if (ver !== undefined) args.version = ver === "latest" ? "latest" : intFlag("--version", ver, 1);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
