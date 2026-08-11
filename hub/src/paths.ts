@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 
 // The installed package version — src/paths.ts and dist/paths.js both sit one level under the
@@ -97,4 +97,14 @@ export function projectConfigCandidates(dataDir?: string): string[] {
 
 export function hubDbPath(): string {
   return pathEnv("DEVLOOP_HUB_DB") || join(devloopHome(), "hub.db");
+}
+
+// LOOP-388: Derive the workspace data dir from the hub DB path when set (daemon case).
+// Hub DB lives at <workspace>/.dev-loop/hub.db, so <workspace>/.dev-loop is dirname(hubDb).
+export function workspaceDataDir(): string | undefined {
+  const hubDb = pathEnv("DEVLOOP_HUB_DB");
+  if (hubDb) {
+    return dirname(hubDb);
+  }
+  return undefined;
 }
