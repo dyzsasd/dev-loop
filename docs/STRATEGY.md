@@ -659,6 +659,61 @@ outward, since a legacy repo's first PRs are exactly where untested files arrive
 adoptability claim in `Goals` is not corrected here: no measurement contradicts the *path*, only the
 verdict the gate returns once adopted, and LOOP-561 owns that.
 
+**The split tiers' assembled corpus now carries the fire-start pass they are instructed to follow
+(pm, one-hundred-sixty-ninth fire).** LOOP-553 verified `Done` against the merged tree at `5a032fe`.
+Both split-tier SKILLs delegate their fire-start merge pass to dev-agent Step 0.5 *"exactly as
+dev-agent Step 0.5 spells out"*, while the assembler shipped only the `ship-sequence` marker slice —
+Step 0.5 sat outside it, so every assembled split fire referenced a section absent from its corpus.
+The applied change wraps Step 0.5 in a second marker pair, ships both slices through one extractor
+shared with `context-bill.ts` so what is shipped and what is billed cannot diverge, and raises the
+dev-agent bill row 266 → 268 lines. Verified on a clean `/tmp` checkout of the merged commit rather
+than this repo's working tree, which currently carries uncommitted edits to `hub/src/doctor*.ts` and
+`metrics.ts` that a branch-green would have read: the assembler's own test asserts the positive case
+(the junior corpus carries Step 0.5 including the re-freshen safety rule), the pruning negative
+control (a project with neither `autoMerge` nor a release PR prunes the slice along with §12c), and
+the non-reader control (pm receives no inherited slice). Of the four re-freshen rules that existed
+only in that section, the load-bearing one is the prohibition on re-freshening a PR merge-guard
+holds for `forgeReview` or `boardState`, since rebasing such a branch moves it out from under the
+review it is held for; it is now delivered. Not live on this host: `fire-start:begin` and
+`devInheritedSlices` both resolve to zero occurrences in installed 1.15.1, so the tiers still boot
+without it and the stale-PR queue is not yet self-clearing.
+
+**A second provider-credit exhaustion took five of the eight lanes down three days after the first
+was closed, and the two-provider split decides which half of the loop survives it (pm,
+one-hundred-sixty-ninth fire).** From 2026-08-11T03:22:00Z every OpenRouter request returns HTTP
+402; the fires exit 0 with `suspectError: true` after 6–8 s having performed no work. Counts in the
+current log rotation: 3,901 402 responses for junior-dev, 3,860 for qa, and **0** for pm and
+senior-dev, which run the Anthropic lane — the control is in the same window on the same board, so
+the failure domain is the provider account and not the loop. Five agents are configured on that
+account (`sweep`, `ops`, `communication`, `dev`, `qa`); junior-dev is down on it as well, because the
+LOOP-560 ruling moved its config to `claude`/`claude-haiku-4-5` but the running scheduler caches its
+modules and still launches the previous pair. Two of the affected lanes are load-bearing for the
+board rather than merely idle: qa is the sole verifier of every `qa`-owned `In Review` item, and
+sweep is the only lane that reclaims an orphaned `In Progress` claim. The tickets that would surface
+this condition — LOOP-543, LOOP-447, LOOP-508, LOOP-505 — are themselves queued behind the lanes
+that are down. Recorded as a durable fact rather than an incident: LOOP-463 closed on *"add
+OpenRouter credit"* and the same condition recurred within three days, so credit top-up is a remedy
+with a measured half-life, and the current allocation places five of eight agents in one failure
+domain whose recurrence interval is now observed twice. Filed as **LOOP-562**, parked
+`Human-Blocked`; the remedy is credit or a config mutator, both operator-owned, so no dev tier is
+assigned. `doctor` W12 reports `LARK_WEBHOOK_URL` unresolvable, so the daemon's park reminder for it
+will not reach anyone.
+
+**W18 measures this host's build rather than the released artifact, so the release-staleness number
+it prints is not the number the outward-adoption promise depends on (pm, one-hundred-sixty-ninth
+fire).** LOOP-549 was filed on the observation that W18 falls silent on a source-build host; it no
+longer does, and the replacement behaviour is harder to detect. This fire it prints *"installed
+@dyzsasd/dev-loop v1.15.1 is 8 code commit(s) behind origin/main (5a032fe) (+12 doc-only)"* with the
+remedy *"reinstall from the updated source"*. Both statements are accurate about the local build at
+`a6b0a60`. The distance that governs `Goals`' adoptability claim is a different measurement: the
+published package is tag `v1.15.1` = `af59700`, and `git log --no-merges v1.15.1..origin/main --
+hub/ skills/ references/ .github/` counts **66** code commits (166 including docs). A reader is
+therefore shown 8 where the adopter-relevant figure is 66, with the `+12 doc-only` qualifier making
+the remaining gap appear largely documentary. LOOP-549 is groomed with this measurement and its
+acceptance criteria are noted as needing to pin the *published* distance as a printed number — an
+acceptance criterion satisfied by the mere presence of a W18 line now passes without testing the
+finding.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
