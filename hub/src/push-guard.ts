@@ -202,6 +202,38 @@ const branchTicketId = (br: string): string | undefined => {
 };
 
 /**
+ * LOOP-548 — which ticket is this commit's WORK, as distinct from which tickets it merely names.
+ *
+ * The ride-along class below asks "is this commit canceled work?", and before this it answered by
+ * scanning the whole message: every id anywhere in subject or body was read as attribution. That
+ * makes the loop's own hand-off grammar unpushable. §3's close+follow-up rule and §21a's escalation
+ * both require a follow-up to supersede a `Canceled` predecessor, so a well-written follow-up commit
+ * names that predecessor in its rationale — and the guard read the citation as the work. Measured on
+ * `dev-loop/LOOP-452` at bb9d7c8: subject `test(w37): … (LOOP-452)`, LOOP-452 In Progress, one
+ * mention of the superseded LOOP-426 in the body, HELD with no flag that waives the gate — and a
+ * branch that cannot be refreshed also cannot clear merge-guard's ciFreshness axis, so the ticket
+ * could not land by any route.
+ *
+ * The passenger class twenty lines below already separates the two (`allIds.includes(ownId)`); this
+ * gives the ride-along class the same notion, keyed on the SUBJECT because that is where the repo's
+ * commit convention puts the id — and where both MP-275 fixtures (`CERT-1: canceled work rides
+ * along`, `CERT-3: superseded duplicate`) put it, so that class is detected exactly as before.
+ *
+ * A subject naming NO ticket falls back to the whole message, which is LOOP-25's class: an agent
+ * commit carrying the id only in a `Ticket-Id:` trailer is attributed by that trailer, because there
+ * is nothing else to attribute it to.
+ *
+ * The residual is deliberate. A commit whose subject names a live ticket while its content is really
+ * canceled work is no longer caught by a body reference. Attribution beats mention: the alternative
+ * hard-stops the normal follow-up shape, and a check that fires on routine work gets routed around —
+ * the same reasoning the generated-cheatsheet exemption above already records.
+ */
+function attributedTicketIds(msg: string): string[] {
+  const inSubject = [...new Set(msg.split("\n")[0].match(TICKET_RE) ?? [])] as string[];
+  return inSubject.length ? inSubject : ([...new Set(msg.match(TICKET_RE) ?? [])] as string[]);
+}
+
+/**
  * Was this path ALREADY a real approvals record, before anyone opened it? Returns the reason it is
  * not, or `null` when it is usable (R5, PR #283 review).
  *
@@ -502,7 +534,9 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     : subtractPublished
       ? parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range, "--not", `${remote}/${defaultBranch}`]))
       : commits;
-  const refs = new Map<string, { sha: string; subject: string }[]>();
+  // Every referenced id, so `unknownRefs` still reports a ghost ref wherever it appears (LOOP-25).
+  // Whether a reference is this commit's WORK is a separate question, asked per finding below.
+  const refs = new Map<string, { sha: string; subject: string; msg: string }[]>();
   for (const c of scanCommits) {
     for (const id of c.msg.match(TICKET_RE) ?? []) (refs.get(id) ?? refs.set(id, []).get(id)!).push(c);
   }
@@ -526,7 +560,12 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
         const row = conn.prepare("SELECT state FROM tickets WHERE id=?").get(id) as { state?: string } | undefined;
         if (!row) { unknownRefs.push(id); continue; }
         if (row.state === "Canceled" || row.state === "Duplicate")
-          for (const c of cs) findings.push({ sha: c.sha.slice(0, 7), subject: c.subject, ticket: id, state: row.state as string });
+          // LOOP-548 — a finding means "this commit IS canceled work", so it needs the commit to be
+          // ATTRIBUTED to the terminal ticket, not merely to name it.
+          for (const c of cs) {
+            if (!attributedTicketIds(c.msg).includes(id)) continue;
+            findings.push({ sha: c.sha.slice(0, 7), subject: c.subject, ticket: id, state: row.state as string });
+          }
       }
     } finally { conn.close(); }
   } else if (refs.size) {
