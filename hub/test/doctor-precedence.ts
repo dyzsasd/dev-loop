@@ -57,22 +57,37 @@ try {
   ok(nextStep(ws, [], [], undefined, null, null, []) === "dev-loop run",
     "LOOP-322: all green ⇒ run the loop");
 
-  // ── LOOP-204: W24 fires only when the taxonomy is genuinely blind ──
+  // ── LOOP-204/LOOP-547: W24 fires only when the failure taxonomy is genuinely blind ──
+  // LOOP-547: tests use DERIVED expected counts (AC5) — the fixture computes expected values from
+  // the row set it builds, not by restating the function's own arithmetic as test literals.
   {
     const seen: string[] = [];
     const warn = (m: string) => seen.push(m);
-    // 82 failure-ish rows, 18 classified → 78% blind (the ticket's measured shape).
-    checkFailureTaxonomyBlind({ failures: 65, timeouts: 4, suspectErrors: 13, byErrorClass: { timeout: 4, "rate-limit": 14 } }, warn);
-    ok(seen.length === 1 && /\[W24\]/.test(seen[0]) && /64 of 82/.test(seen[0]) && /78%/.test(seen[0]),
-      `LOOP-204: W24 fires and names both counts and the percentage (got ${JSON.stringify(seen[0] ?? "")})`);
+    // AC4: a fixture where a MAJORITY of failed fires carry no errorClass → W24 fires.
+    // Input: 65 failures, 18 classified (4 timeout + 14 rate-limit) → 47 unclassified, 47/65 ≈ 72%
+    const inFailures = 65;
+    const inClassified: Record<string, number> = { timeout: 4, "rate-limit": 14 };
+    const inClassifiedSum = Object.values(inClassified).reduce((a, b) => a + b, 0);
+    const expectedUnclassified = inFailures - inClassifiedSum;
+    const expectedShare = Math.round(expectedUnclassified / inFailures * 100);
+    checkFailureTaxonomyBlind({ failures: inFailures, timeouts: 4, suspectErrors: 13, byErrorClass: inClassified }, warn);
+    ok(seen.length === 1 && /\[W24\]/.test(seen[0]) && new RegExp(`${expectedUnclassified} of ${inFailures}`).test(seen[0]) && new RegExp(`${expectedShare}%`).test(seen[0]),
+      `LOOP-547 AC4: W24 fires and names both counts and the percentage (got ${JSON.stringify(seen[0] ?? "")})`);
+
+    // AC1/AC2: exit-0 suspectErrors and double-counted timeouts do NOT inflate the denominator.
+    // Same fixture, but suspectErrors are large — they should be excluded from the count.
+    const suspectOnly: string[] = [];
+    checkFailureTaxonomyBlind({ failures: 10, timeouts: 0, suspectErrors: 999, byErrorClass: { "rate-limit": 9 } }, (m) => suspectOnly.push(m));
+    ok(suspectOnly.length === 0, `LOOP-547 AC1/AC2: exit-0 suspectErrors (999) do NOT inflate the denominator — W24 stays silent (got ${JSON.stringify(suspectOnly[0] ?? "none")})`);
 
     const quiet: string[] = [];
+    // 10 failures, 9 classified → 1/10 = 10% unclassified — below threshold, silent.
     checkFailureTaxonomyBlind({ failures: 10, timeouts: 0, suspectErrors: 0, byErrorClass: { "rate-limit": 9 } }, (m) => quiet.push(m));
     ok(quiet.length === 0, "LOOP-204: a mostly-classified window emits NOTHING — not a warning, not an info line");
 
     const zero: string[] = [];
     checkFailureTaxonomyBlind({ failures: 0, timeouts: 0, suspectErrors: 0, byErrorClass: {} }, (m) => zero.push(m));
-    ok(zero.length === 0, "LOOP-204: zero failure-ish rows ⇒ silent, never 0%/NaN/Infinity");
+    ok(zero.length === 0, "LOOP-204: zero failures ⇒ silent, never 0%/NaN/Infinity");
 
     const tiny: string[] = [];
     checkFailureTaxonomyBlind({ failures: 2, timeouts: 0, suspectErrors: 0, byErrorClass: {} }, (m) => tiny.push(m));
