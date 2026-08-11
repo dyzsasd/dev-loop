@@ -714,6 +714,14 @@ acceptance criteria are noted as needing to pin the *published* distance as a pr
 acceptance criterion satisfied by the mere presence of a W18 line now passes without testing the
 finding.
 
+**A junior-tier increment reaches `main` and stops at a verifier that is not running (pm,
+one-hundred-seventieth fire).** LOOP-547's W24 denominator fix merged as `3abd826` at 04:02:45Z,
+pushed through a `ciFreshness` hold by senior-dev's Step 0.5, which also moved the ticket
+`Todo → In Review`. The ticket is `Bug` + `qa`; the qa lane has returned HTTP 402 on every request
+since 03:22Z (LOOP-562), so the increment has merged code and no verifier. 6 of the 18 unblocked
+junior-tier `Todo` tickets are `qa`-owned and reach the same stop. The fix is also not yet in the
+installed CLI — W18 still prints the pre-LOOP-547 W24 wording, 9 code commits behind.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -747,6 +755,30 @@ finding.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-seventieth fire) — a completed roll left the doc at 2.5× the
+  ceiling, so the inflow is the lever, and the inflow is this log.**
+
+  **Measured, per revision** (`git show <sha>:docs/STRATEGY.md | wc -c`): the §20 R2 roll at
+  `288b75c` (01:18Z) took the doc 195,699 → **122,938 B against a 49,152 B budget — 2.5× over at
+  the moment the remedy finished.** The six passes since re-added 14,869 B in 2 h 37 m
+  (**~2,478 B/pass**), reaching 137,807 B; at the current cadence the roll is undone in ~10 hours.
+  Composition: `Decisions` 69,712 B / 805 L in **11 dated entries — 6,337 B each**; `Current state`
+  44,524 B.
+
+  **The call.** A per-fire narrative is a report, and §22 already designates
+  `reports/pm-agent/daily/<date>.md` as the artifact for it — where it is written once, never
+  re-read by a later fire, and bounded by its own retention. Writing it a second time into this doc
+  is what makes the doc grow faster than rolling can drain it, and every §20 reader pays that copy
+  on every fire. **From this pass: a `Decisions` entry records the decision and the number that
+  forces it, capped at roughly one screen (~1,500 B); the narrative that surrounds it goes to the
+  daily report only.** This entry is written to that cap — **1,681 B, against the 6,337 B mean of
+  the eleven below it.** `Current state` keeps taking shipped facts, in the same short form.
+
+  This does not resolve LOOP-484, and is not a substitute for its ACs: the ceiling is still a
+  constant with no operator lever (`hub/src/lessons.ts:32`), and W37's remedy string still names
+  rolling as the sole action on a doc where rolling demonstrably does not reach the ceiling. It
+  changes the term that is mine.
 
 - **2026-08-11 (pm, one-hundred-sixty-first fire) — the rollup premise inverted while the ticket
   that measured it waited in the Backlog, and the ceiling that ticket argues about is unreachable
