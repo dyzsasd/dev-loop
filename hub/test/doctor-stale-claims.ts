@@ -1,6 +1,10 @@
-// doctor-stale-claims.ts — W43 regression: stale claim detection (LOOP-450).
-// Tests AC1–AC5: stale claim findings, no double-report with W16, events-ledger age,
-// healthy-lane silence, stale-lane silence, and the metrics.ts predicate.
+// doctor-stale-claims.ts — W43 regression: stale claim detection (LOOP-450, LOOP-566).
+// Two layers, deliberately:
+//   · the predicate arms (LOOP-450) exercise staleClaimFindings directly with a fixed nowMs —
+//     events-ledger age, the blocked exclusion, the window knob;
+//   · the rendered arms (LOOP-566) drive doctorWorkspace, because the W16/W43 precedence lives in
+//     the composer the renderer calls and cannot be observed from either predicate alone, and
+//     because checkStaleClaim's own line shipped with zero coverage.
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,6 +186,120 @@ try {
     db.close();
     ok(findings48.length === 0, "AC5b: staleClaimFindings with 48h window returns 0 (neither ticket is 48h+ stale)");
     ok(findings12.length === 1 && findings12[0].ticketId === "LOOP-7b", "AC5b: staleClaimFindings with 12h window finds only LOOP-7b (30h > 12h)");
+  }
+
+  // ── LOOP-566 AC3/AC4 — the RENDERED doctor path ───────────────────────────────────────────
+  // checkStaleClaim and checkOwnerLiveness take no nowMs override, so every fixture below is
+  // stamped against the REAL clock: the fixed NOW above sits outside W16's 7d fire window and
+  // would make every owner read as dead.
+  const realNow = Date.now();
+  const agoIso = (ms: number) => new Date(realNow - ms).toISOString();
+  const H = 3_600_000, DAY = 86_400_000;
+  // The one W43 line, isolated. Asserting against the whole capture would let an id printed by
+  // some other check pass as W43 content.
+  const w43LineOf = (out: string) => out.split("\n").find((l) => l.includes("[W43]")) ?? "";
+
+  function seedFires(root: string, rows: Array<{ agent: string; ts: string }>): void {
+    mkdirSync(join(root, ".dev-loop", "team"), { recursive: true });
+    writeFileSync(
+      join(root, ".dev-loop", "team", "fires.jsonl"),
+      rows.map((r) => JSON.stringify({ ts: r.ts, agent: r.agent, project: "loop", exitCode: 0 })).join("\n") + "\n",
+    );
+  }
+
+  // ── AC3a: dead owner + stale claim → W16 reports it, W43 is SILENT ──
+  {
+    const root = join(tmp, "loop566-dead");
+    seedWs(root);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(
+      dbPath,
+      [{ id: "LOOP-10", state: "In Progress", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: "junior-dev" }],
+      [{ ticketId: "LOOP-10", lastEventAt: agoIso(30 * H) }],
+    );
+    seedFires(root, [{ agent: "junior-dev", ts: agoIso(8 * DAY) }]);   // last fire outside the 7d window ⇒ dead
+    const ws = loadWorkspace(root);
+    const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
+    ok(out.includes("[W16]"), "AC3a: dead owner holding a stale claim — W16 reports it");
+    ok(/\[W16\][^\n]*junior-dev/.test(out), "AC3a: the W16 line names the dead owner");
+    ok(!out.includes("[W43]"), "AC3a: …and W43 is silent on the same ticket (liveOwnerStaleClaims drops dead owners)");
+  }
+
+  // ── AC3b: live owner + stale claim → the inverse; W43 reports it, W16 is silent ──
+  {
+    const root = join(tmp, "loop566-live");
+    seedWs(root);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(
+      dbPath,
+      [{ id: "LOOP-11", state: "In Progress", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: "junior-dev" }],
+      [{ ticketId: "LOOP-11", lastEventAt: agoIso(30 * H) }],
+    );
+    seedFires(root, [{ agent: "junior-dev", ts: agoIso(60_000) }]);    // fired a minute ago ⇒ alive
+    const ws = loadWorkspace(root);
+    const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
+    ok(out.includes("[W43]"), "AC3b: live owner holding a stale claim — W43 reports it");
+    ok(w43LineOf(out).includes("LOOP-11"), "AC3b: the W43 line names the ticket");
+    ok(!out.includes("[W16]"), "AC3b: …and W16 is silent (its owner is alive)");
+  }
+
+  // ── AC4a: the W43 line's content — count, oldest id, and the >=48h days branch ──
+  {
+    const root = join(tmp, "loop566-render-days");
+    seedWs(root);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(
+      dbPath,
+      [
+        { id: "LOOP-12a", state: "In Progress", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: "junior-dev" },
+        { id: "LOOP-12b", state: "In Progress", labels: ["dev-loop", "Bug", "qa", "senior-dev"], assignee: "senior-dev" },
+      ],
+      [
+        { ticketId: "LOOP-12a", lastEventAt: agoIso(54 * H) },         // the oldest
+        { ticketId: "LOOP-12b", lastEventAt: agoIso(30 * H) },
+      ],
+    );
+    seedFires(root, [{ agent: "junior-dev", ts: agoIso(60_000) }, { agent: "senior-dev", ts: agoIso(60_000) }]);
+    const ws = loadWorkspace(root);
+    const w43 = w43LineOf(await capture(() => doctorWorkspace(ws, { boardDb: dbPath })));
+    ok(w43.includes("2 claimed ticket(s)"), "AC4a: the W43 line carries the finding count");
+    ok(w43.includes("(oldest LOOP-12a, 2d)"), "AC4a: it names the OLDEST ticket and renders >=48h as days (54h ⇒ 2d)");
+    ok(!w43.includes("LOOP-12b"), "AC4a: the younger finding is counted, not named");
+  }
+
+  // ── AC4b: the same line below 48h renders hours ──
+  {
+    const root = join(tmp, "loop566-render-hours");
+    seedWs(root);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(
+      dbPath,
+      [{ id: "LOOP-13", state: "In Progress", labels: ["dev-loop", "Bug", "qa", "junior-dev"], assignee: "junior-dev" }],
+      [{ ticketId: "LOOP-13", lastEventAt: agoIso(30 * H) }],
+    );
+    seedFires(root, [{ agent: "junior-dev", ts: agoIso(60_000) }]);
+    const ws = loadWorkspace(root);
+    const w43 = w43LineOf(await capture(() => doctorWorkspace(ws, { boardDb: dbPath })));
+    ok(w43.includes("1 claimed ticket(s)"), "AC4b: single finding counted as 1");
+    ok(w43.includes("(oldest LOOP-13, 30h)"), "AC4b: below 48h the age renders in hours, not days");
+  }
+
+  // ── LOOP-566: a live owner's BLOCKED stale claim stays out of the rendered line too ──
+  // The predicate already excludes it (AC5 above); this pins that the composer does not
+  // re-admit it while filtering on owner liveness.
+  {
+    const root = join(tmp, "loop566-blocked");
+    seedWs(root);
+    const dbPath = join(root, ".dev-loop", "hub.db");
+    seedDb(
+      dbPath,
+      [{ id: "LOOP-14", state: "In Progress", labels: ["dev-loop", "Bug", "qa", "junior-dev", "blocked"], assignee: "junior-dev" }],
+      [{ ticketId: "LOOP-14", lastEventAt: agoIso(54 * H) }],
+    );
+    seedFires(root, [{ agent: "junior-dev", ts: agoIso(60_000) }]);
+    const ws = loadWorkspace(root);
+    const out = await capture(() => doctorWorkspace(ws, { boardDb: dbPath }));
+    ok(!out.includes("[W43]"), "blocked + live owner: W43 stays silent through the rendered path");
   }
 
 } catch (e) {
