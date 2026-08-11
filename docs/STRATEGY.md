@@ -391,6 +391,20 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   the guard, and the fires that produced all five instances did not (§7 mandates
   `push-guard --strict` on the agent, not in git). The other half is a SKILL edit the loop may not
   self-apply — **LOOP-580**, `Human-Blocked`, awaiting the operator. Merged, not published.
+- **`doc get|history --pointer` resolves the three §21a `Design:` forms, and the grammar has one parse
+  (LOOP-572, `491390c`, PR #331, verified Done 2026-08-11T10:59Z)** — `parseDocPointer` is exported from
+  `design-parent.ts`, beside the regexes it shares, rather than from the CLI file its only consumer sits
+  in: `cli-agentops.ts` ends in a top-level `await main()`, so a function exported from there is not
+  unit-testable at all. It returns a discriminated value, not a slug — which form was written, and why an
+  unresolvable token failed — so `parent <id>`, a well-formed pointer that names a ticket rather than a
+  doc, routes to `dev-loop ticket <id>` instead of being reported as malformed. Verified against the
+  merged tree with the shipped mutation arms **re-run independently**: 4 red / 47 green, and 2 red. The
+  green ones are the finding — a suite that reddens wholesale under mutation is not discriminating.
+  **What the AC bought:** requiring the round-trip to be asserted by *comparing the two spellings' output*
+  rather than by reasoning that they agree caught a regression in the carried commit that no
+  `--pointer`-only test could see — `doc get --kind design --slug <slug>`, the invocation
+  `gen-cheatsheets.ts` prints into junior-dev's own cheat-sheet, had become an exit-2 usage error. Merged,
+  not published.
 
 ### 2026-08-10 (pm, one-hundred-thirty-sixth fire): the block that bounds the doc has started carrying facts that decay, and the sawtooth measured end to end
 
@@ -822,6 +836,40 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
   Repaired under `with-repo-lock` with `reset --keep` after verifying the salvage ref. LOOP-567's
   guard would have refused the *push*; nothing refuses the *commit*, which is why LOOP-580's SKILL
   half is the load-bearing one.
+
+- **2026-08-11 (pm, one-hundred-eighty-eighth fire) — a ticket's carve-out home can be canceled
+  underneath the ticket that names it, and neither end notices.**
+
+  **Measured.** [[LOOP-572]] closed `Done` this fire carrying the line "the not-found **exit-code**
+  change and the **cheat-sheet** line stay carved out in [[LOOP-569]] and are explicitly NOT in scope
+  here." LOOP-569 had been `Canceled` at 09:38Z — eleven minutes *before* LOOP-572 was filed — by
+  sweep, as a "stranded design child". Two measured ACs (a not-found `doc get` exits **0**; the junior
+  cheat-sheet never names the pointer grammar) were therefore owned by nobody, while a live ticket
+  pointed confidently at a terminal id. Refiled as [[LOOP-584]]. Blast radius checked before
+  generalizing: **exactly one** ticket, not a batch.
+
+  **Why the classification was reachable.** LOOP-569 carries no `Design:` pointer line, was created by
+  `pm` as a §3 carve-out, and its only link is `relatedTo: ["LOOP-451"]` — a junior implementation
+  ticket that failed review, never a design parent. The trap is that **`relatedTo` is the same link in
+  both cases**: a §3 follow-up carries it to the ticket it supersedes exactly as a §21a design child
+  carries it to its parent. The discriminator is the `Design:` line, and kinship alone never proves
+  parenthood (§9c already says `relatedTo` is never an edge; this is the same rule one level up).
+  *Why the agent classified it that way is 原因未查明* — `grep -rn "stranded design child" hub/src/`
+  returns nothing, so the phrase is agent prose, not a code path, and no mechanism is asserted here.
+
+  **The call, and it is a verifier's rule rather than a janitor's.** A ticket that carves work out
+  names its new home by id; that reference is a **claim about another ticket's state**, and this loop's
+  standing rule is that a claim is located, never trusted. So: **before closing anything `Done`, resolve
+  every `[[id]]` it names as a scope boundary and read that id's state.** One command. A terminal
+  referent means the excluded work has no owner, and the close is what makes it unrecoverable —
+  the verifier is the last actor positioned to see it, because they are the one reading the exclusion.
+  The generalization worth carrying: **an out-of-scope marker is a pointer, and this loop has now been
+  bitten twice by pointers whose referent moved** — once by a label that no surface queried (fire 187),
+  once by an id that had gone terminal. Both were correct when written.
+
+  **Not filed as a defect against sweep.** One instance, no code path, and the recovery is ordinary
+  grooming; a Bug on agent prose would be filing against a judgement rather than a mechanism. If it
+  recurs it is a different signal.
 
 - **2026-08-11 (pm, one-hundred-eighty-fourth fire) — the verifier's isolation step is itself an
   unguarded precondition, and when it fails open the verdict describes a different tree than the one
