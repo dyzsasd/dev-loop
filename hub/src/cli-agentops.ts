@@ -531,17 +531,44 @@ async function docList(dargs: string[]): Promise<never> {
 }
 
 async function docGetOrHistory(verb: "get" | "history", dargs: string[]): Promise<never> {
-  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", ...(verb === "get" ? { "--version": "v" } : {}), ...COMMON });
+  const { flags, pos } = parseFlags(dargs, { "--slug": "v", "--kind": "v", "--pointer": "v", ...(verb === "get" ? { "--version": "v" } : {}), ...COMMON });
   if (pos.length) fail(`unexpected argument '${pos[0]}'`);
-  if (flags["--slug"] === undefined && flags["--kind"] === undefined) fail(`doc ${verb} needs --slug S or --kind K`);
+  const pointerVal = str(flags, "--pointer");
+  const slugVal = str(flags, "--slug");
+  const kindVal = str(flags, "--kind");
+  if (!pointerVal && !slugVal && !kindVal) fail(`doc ${verb} needs --slug S or --kind K or --pointer hubDoc:kind/slug`);
+  if ((pointerVal ? 1 : 0) + (slugVal ? 1 : 0) + (kindVal ? 1 : 0) > 1) fail("--pointer, --slug, and --kind are mutually exclusive");
+
   const args: Record<string, unknown> = {};
-  if (flags["--slug"] !== undefined) args.slug = str(flags, "--slug");
-  if (flags["--kind"] !== undefined) args.kind = str(flags, "--kind");
+  if (pointerVal) {
+    const parsed = parseDocPointer(pointerVal);
+    if (!parsed) fail(`invalid pointer format '${pointerVal}' — expected 'hubDoc:kind/slug' or 'docs/path.md' or 'parent-id'`);
+    args.kind = parsed.kind;
+    args.slug = parsed.slug;
+  } else {
+    if (slugVal) {
+      if (slugVal.includes("/") || slugVal.startsWith("hubDoc:")) {
+        fail(`--slug '${slugVal}' looks like a Design: pointer — resolve it as --slug ${slugVal.split("/").pop()} --kind ${slugVal.split("/")[0]}`);
+      }
+      args.slug = slugVal;
+    }
+    if (kindVal) args.kind = kindVal;
+  }
+
   const ver = str(flags, "--version");
   if (ver !== undefined) args.version = ver === "latest" ? "latest" : intFlag("--version", ver, 1);
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   const op: AgentOp = verb === "get" ? "doc.get" : "doc.history";
   return emit(op, await runOp(openHub(), op, args));
+}
+
+function parseDocPointer(pointer: string): { kind: string; slug: string } | null {
+  if (pointer.startsWith("hubDoc:")) {
+    const rest = pointer.slice("hubDoc:".length);
+    const [kind, slug] = rest.split("/");
+    if (kind && slug) return { kind, slug };
+  }
+  return null;
 }
 
 async function docDiff(dargs: string[]): Promise<never> {
