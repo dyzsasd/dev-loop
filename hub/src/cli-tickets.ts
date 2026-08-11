@@ -213,7 +213,7 @@ async function main(): Promise<number> {
   // a read needs no DEVLOOP_ACTOR to run; the resolved actor only parameterizes assignee:"me" + attribution-free reads
   const { actor, projectKey, projectFromCwd, projectResolved } = resolveIdentity();
   if (!projectResolved) {
-    console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
+    console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in the workspace.");
     return 1;
   }
   const db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — same resolver as op/seed/doctor
