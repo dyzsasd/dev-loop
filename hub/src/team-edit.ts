@@ -67,7 +67,7 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.backup\.keep$/, kind: "int" },
   { re: /^team\.backup\.dir$/, kind: "string" },
   // LOOP-335 — repos.<ref>.ciIrrelevantPaths, through the validated mutator like every other tunable.
-  { re: /^repos\.[^.]+\.ciIrrelevantPaths$/, kind: "string-list" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.ciIrrelevantPaths$/, kind: "string-list" },
   // LOOP-394 (design approvals §8) — the per-action-class enforcement enable list, default EMPTY.
   // Members are checked against the ACTION_CLASSES registry at the set gate below, not just at load:
   // an operator turning enforcement ON must learn about a typo now, not from a fire that was never
@@ -104,19 +104,19 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   // strategyDoc: the repo-relative file path pointer consumed by doc-land / roadmap-banner / file-watcher.
   // Stored as a plain string; absolute paths and Linear doc URLs are rejected at the set gate (not schema-level).
   { re: /^projects\.[^.]+\.strategyDoc$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.style$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.healthCheck$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.auto$/, kind: "boolean" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.deployPrPrefix$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.command$/, kind: "string" },
-  { re: /^repos\.[^.]+\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.deploy\.style$/, kind: "string" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.deploy\.healthCheck$/, kind: "string" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.deploy\.environments\.[a-z0-9][a-z0-9._-]{0,31}\.auto$/, kind: "boolean" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.deploy\.environments\.[a-z0-9][a-z0-9._-]{0,31}\.deployPrPrefix$/, kind: "string" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.deploy\.environments\.[a-z0-9][a-z0-9._-]{0,31}\.command$/, kind: "string" },
+  { re: /^repos\.[a-z0-9][a-z0-9._-]{0,31}\.deploy\.environments\.[a-z0-9][a-z0-9._-]{0,31}\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
   "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,agents.<a>.{codingAgent,model,effort}}, " +
   "projects.<key>.{enabled,weight,devSplit,scratch,mode,autonomy,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
-  "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}, " +
+  "repos.<ref>.{ciIrrelevantPaths,deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}}, " +
   "projects.<key>.strategyDoc";
 
 // LOOP-245: Number("0x64") === 100, so a plain Number() check lets hex/octal/binary through silently.
