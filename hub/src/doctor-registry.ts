@@ -18,6 +18,7 @@ import {
   checkConfigValidate, checkRepoRegistered, checkStrategyDocPointer, checkLinearMcpScope,
   checkFiresTaxonomy, checkCommsWebhook, checkProviderAuth, checkOpencodeDrift,
   checkOpencodeVersion, checkOwnerLiveness, checkDecisionQueueStall, checkSensitiveMistier,
+  checkStaleClaim,
 } from "./doctor.ts";
 
 // ── Contracts (design §4) ────────────────────────────────────────────────────
@@ -252,6 +253,17 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     scope: "workspace",
     bestEffort: true,
     run: (ctx) => { checkOpencodeVersion(ctx.ws, ctx.out.pass, ctx.out.warn); },
+  },
+  // Row 9a — W43 (stale claim — In Progress ticket with no activity, owner still firing) — board scope.
+  // Registered here rather than at the tail because the W16 row below reads the same project board
+  // and the two conditions are complementary (LOOP-450).
+  {
+    codes: ["W43"],
+    id: "w43-stale-claim",
+    scope: "board",
+    applies: boardApplies,
+    bestEffort: true,
+    run: (ctx) => { checkStaleClaim(ctx as BoardCtx); },
   },
   // Row 10 — W16 (owner liveness) — board scope
   {
