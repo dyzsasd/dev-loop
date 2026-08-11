@@ -620,14 +620,25 @@ export function spendCurvePoints(
 // past that point — pure absence of data — is what "never reaches $20" was read off. `supportMs` is the
 // largest elapsed time this profile has ever been observed AND priced at; past it the curve has nothing to
 // say, and the caller must not read the carried-forward maximum as a measurement.
+//
+// LOOP-565 — `samples` and `supportMinMs` are what `supportMs` alone could not say: how much evidence
+// stands behind that edge. A horizon read off 5 fires that all ran 6 minutes and one read off 256 fires
+// spanning 0.5–58.9 min are the same number and not the same claim, and every consumer of `supportMs`
+// was reading them identically. `supportMinMs` is the SHORTEST priced fire, so the pair brackets the
+// range the curve has observations in; when the two sit inside one multiplicative band the population
+// is a single point rather than a curve, and it has no slope to extrapolate.
 export function spendCurveDeadline(
   ceilingUsd: number, points: Array<{ durationMs: number; costUsd: number }>,
-): { deadlineMs: number | null; estimable: boolean; peakUsd: number; supportMs: number } {
+): { deadlineMs: number | null; estimable: boolean; peakUsd: number; supportMs: number; samples: number; supportMinMs: number } {
   let running = 0;
   let estimable = false;
   let deadlineMs: number | null = null;
   let supportMs = 0;
-  for (const p of points) if (p.durationMs > supportMs) supportMs = p.durationMs;
+  let supportMinMs = 0;
+  for (const p of points) {
+    if (p.durationMs > supportMs) supportMs = p.durationMs;
+    if (supportMinMs === 0 || p.durationMs < supportMinMs) supportMinMs = p.durationMs;
+  }
   for (let t = SPEND_CURVE_STEP_MS; t <= SPEND_CURVE_HORIZON_MS; t += SPEND_CURVE_STEP_MS) {
     const band: number[] = [];
     for (const p of points)
@@ -639,7 +650,17 @@ export function spendCurveDeadline(
     }
     if (deadlineMs === null && running >= ceilingUsd) deadlineMs = t;
   }
-  return { deadlineMs, estimable, peakUsd: running, supportMs };
+  return { deadlineMs, estimable, peakUsd: running, supportMs, samples: points.length, supportMinMs };
+}
+
+// LOOP-565 — a support range narrower than one multiplicative band is ONE POINT, not a curve. The band
+// is the width the scan already treats as "near t" (SPEND_CURVE_BAND either side), so a population whose
+// longest and shortest priced fire sit inside it was never observed at two different elapsed times: it
+// establishes where those fires ended and nothing about how spend grows. Derived from the constant the
+// scan uses rather than picked, so it moves with the band and cannot drift from it.
+export function spendCurveSupportIsThin(supportMinMs: number, supportMs: number): boolean {
+  if (!(supportMinMs > 0) || !(supportMs > 0)) return true;
+  return supportMs <= supportMinMs * SPEND_CURVE_BAND * SPEND_CURVE_BAND;
 }
 
 export function perFireDeadline(
@@ -656,6 +677,13 @@ export function perFireDeadline(
     // deadline. Only the deadline itself changes model.
     const ratePerMs = ratePerMsFor(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs);
     const curve = spendCurveDeadline(ceilingUsd, spendCurvePoints(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs));
+    // The linear bound, derived once so both branches below read the SAME number: the elapsed time at
+    // which this profile's measured $/ms reaches the ceiling. Bounds are deliberately ASYMMETRIC. Past
+    // the 32-bit setTimeout limit (LOOP-260) the ceiling is unreachable inside any real fire, so nothing
+    // arms and the wall timeout owns it. Below 1ms it CLAMPS rather than disarming: that ceiling is
+    // crossed instantly, so killing at once IS its meaning.
+    const budgetMs = ceilingUsd / ratePerMs;                  // ms of runtime whose estimated spend == the ceiling
+    const linearMs = Number.isFinite(budgetMs) && budgetMs <= 2_147_483_647 ? Math.max(1, budgetMs) : null;
     if (curve.estimable) {
       if (curve.deadlineMs !== null)
         return { deadlineMs: Math.max(1, curve.deadlineMs), ratePerMs, basis: "spend-curve" };
@@ -678,18 +706,38 @@ export function perFireDeadline(
       // a crossing is capped by SPEND_CURVE_HORIZON_MS (4h), while a horizon is a duration read off a
       // ledger row and is only as sane as that row. A single corrupt durationMs must disarm, exactly as
       // the linear branch does below, not overflow setTimeout into an immediate kill.
-      if (curve.supportMs > 0 && curve.supportMs <= 2_147_483_647)
-        return { deadlineMs: Math.max(1, curve.supportMs), ratePerMs, basis: "curve-horizon" };
-      return null;                                             // no usable horizon ⇒ the wall owns the fire
+      //
+      // LOOP-565 — the horizon is a FLOOR on the deadline, not the deadline itself. Read as a deadline it
+      // bounds a profile by its own ramp-up: `estimable` flips the moment ONE band reaches
+      // SPEND_CURVE_MIN_SAMPLES, so a profile billing $0.15 against a $20 ceiling went from 800 min to
+      // 6.0 min on its 5th priced fire — a 133x tightening with no change in spend, reached by default
+      // rather than by measurement. Five fires establish where five fires ended; they do not establish a
+      // spend ceiling, and `perFireUsd` is stated in dollars.
+      //
+      // The two facts compose instead of competing, because they speak about different regions:
+      //   · INSIDE the support the curve MEASURED that p90 spend never reached the ceiling, so no deadline
+      //     is defensible there — that is the floor, and it is exactly what LOOP-557 established (it is
+      //     what keeps claude/claude-opus-5 at 58.9 min rather than the linear model's 40.8, whose kills
+      //     landed at $0.00-$5.97 against a $20 ceiling — LOOP-461's finding, unchanged).
+      //   · PAST the support there are no observations at all, which is the SAME state of knowledge the
+      //     not-estimable branch below already governs — and it governs it with the linear model.
+      // So: fall back to linear past the edge, but never arm earlier than the edge. Every deadline this
+      // rule produces is therefore >= the one it produced before, which is the property that makes this a
+      // strict relaxation of LOOP-557 rather than a re-litigation of it: the horizon can only raise a
+      // deadline, never lower one, and a genuinely runaway profile is still caught by the crossing above.
+      const horizonMs = curve.supportMs > 0 && curve.supportMs <= 2_147_483_647 ? Math.max(1, curve.supportMs) : null;
+      if (horizonMs === null) return null;                     // no usable horizon ⇒ the wall owns the fire
+      // A linear bound past the timer limit is not a later deadline, it is NO deadline — the ceiling is
+      // unreachable at this profile's measured rate. Keeping the horizon there is what preserves the
+      // ⚠ arms-NOTHING reporting for such a profile instead of silently disarming it.
+      if (linearMs === null || linearMs <= horizonMs)
+        return { deadlineMs: horizonMs, ratePerMs, basis: "curve-horizon" };
+      return { deadlineMs: linearMs, ratePerMs, basis: "linear" };
     }
     // Too little history to shape a curve ⇒ the pre-LOOP-461 linear model, unchanged. It is the conservative
     // one (it over-predicts long-fire spend, so it arms EARLY), which is the right default while unknown.
-    const budgetMs = ceilingUsd / ratePerMs;                  // ms of runtime whose estimated spend == the ceiling
-    // Bounds are deliberately ASYMMETRIC. Past the 32-bit setTimeout limit (LOOP-260) the ceiling is
-    // unreachable inside any real fire, so nothing arms and the wall timeout owns it. Below 1ms it
-    // CLAMPS rather than disarming: that ceiling is crossed instantly, so killing at once IS its meaning.
-    if (!Number.isFinite(budgetMs) || budgetMs > 2_147_483_647) return null;
-    return { deadlineMs: Math.max(1, budgetMs), ratePerMs, basis: "linear" };
+    if (linearMs === null) return null;
+    return { deadlineMs: linearMs, ratePerMs, basis: "linear" };
   } catch { return null; }                                    // any read error => fail open, never break a launch
 }
 
@@ -710,7 +758,12 @@ export function perFireDeadline(
 // LOOP-557 — `basis:"curve-horizon"` names the third case: the curve is real, it never reached the ceiling
 // inside the range it has fires for, and the deadline is that range's edge. `curveSupportMinutes` carries
 // the edge itself, so the operator can see the deadline is the last observation rather than a model output.
-export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number; basis: "spend-curve" | "curve-horizon" | "linear"; curvePeakUsd: number | null; curveSupportMinutes: number | null }
+// LOOP-565 — `curveSamples` / `curveSupportMinMinutes` / `curveSupportThin` are the support's OWN
+// provenance. `fires` counts every fire in the window including unpriced ones, so it could not answer
+// "how many observations stand behind this horizon": an 11-priced-fire horizon and a 256-priced-fire one
+// read identically on the cost line. These carry the count and the range it spans, and `curveSupportThin`
+// flags the case where that range is one band wide — the deadline then rests on a single point.
+export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number; basis: "spend-curve" | "curve-horizon" | "linear"; curvePeakUsd: number | null; curveSupportMinutes: number | null; curveSamples: number | null; curveSupportMinMinutes: number | null; curveSupportThin: boolean }
 export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, windowMs: number, nowMs: number): ProfileDeadline[] {
   const cutoff = nowMs - windowMs;
   const seen = new Map<string, { codingAgent: string; model: string; fires: number }>();
@@ -746,6 +799,9 @@ export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, win
       basis: d?.basis ?? (curve?.estimable ? "spend-curve" : "linear"),
       curvePeakUsd: curve?.estimable ? curve.peakUsd : null,
       curveSupportMinutes: curve?.estimable && curve.supportMs > 0 ? curve.supportMs / 60_000 : null,
+      curveSamples: curve?.estimable ? curve.samples : null,
+      curveSupportMinMinutes: curve?.estimable && curve.supportMinMs > 0 ? curve.supportMinMs / 60_000 : null,
+      curveSupportThin: curve?.estimable ? spendCurveSupportIsThin(curve.supportMinMs, curve.supportMs) : false,
     });
   }
   return out.sort((a, b) => b.fires - a.fires);
@@ -1643,12 +1699,25 @@ export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?:
       // data the curve has, because those two arm for opposite reasons and only one of them is a spend
       // estimate. The horizon line quotes both numbers it rests on, so the deadline can be checked rather
       // than trusted: the plateau it never crossed, and the last priced fire it stops at.
+      // LOOP-565 AC4 — the support's own provenance, printed wherever a curve exists. The horizon line
+      // quoted the plateau and the last priced fire but never how many observations stood behind them, so
+      // a deadline resting on 11 priced fires and one resting on 256 read identically. `curve-horizon` is
+      // also no longer the only basis a curve can produce: once the horizon became a floor rather than the
+      // deadline, a plateaued curve whose linear bound sits further out reports basis `linear`, and the
+      // operator still needs to see the horizon it cleared.
+      const support = d.curveSamples !== null
+        ? ` — from ${d.curveSamples} priced fire${d.curveSamples === 1 ? "" : "s"} spanning ${(d.curveSupportMinMinutes ?? 0).toFixed(1)}–${(d.curveSupportMinutes ?? 0).toFixed(1)} min${
+            d.curveSupportThin ? ", THIN SUPPORT: that range is one band wide, so the curve is a single point and its horizon is where those fires ended, not a spend bound" : ""
+          }`
+        : "";
       const basis = `${
         d.basis === "spend-curve" ? "spend curve p90"
         : d.basis === "curve-horizon"
           ? `curve support horizon — p90 plateaus at $${(d.curvePeakUsd ?? 0).toFixed(2)} under the ceiling and the last priced fire is ${(d.curveSupportMinutes ?? 0).toFixed(1)} min, so the crossing is UNOBSERVED, not absent`
-          : "linear rate"
-      }, ${d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile"}`;
+          : d.curvePeakUsd !== null
+            ? `linear rate past the curve's support — p90 plateaus at $${d.curvePeakUsd.toFixed(2)} under the ceiling, and past ${(d.curveSupportMinutes ?? 0).toFixed(1)} min the curve has no observations, so the measured rate bounds the fire`
+            : "linear rate"
+      }${support}, ${d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile"}`;
       // AC3: when the budget deadline lands inside the wall timeout, the ceiling — not fireTimeout —
       // is what actually bounds the fire. Legitimate, but it must be legible.
       const undercuts = d.deadlineMinutes !== null && deadlines.wallMinutes > 0 && d.deadlineMinutes < deadlines.wallMinutes
