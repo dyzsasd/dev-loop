@@ -782,6 +782,27 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
 
 ## Decisions (running log)
 
+- **2026-08-11 (pm, one-hundred-eighty-fourth fire) — the verifier's isolation step is itself an
+  unguarded precondition, and when it fails open the verdict describes a different tree than the one
+  it names.**
+
+  **Measured.** Verifying LOOP-481 against the merged tree, the isolation step was
+  `git archive 603fabd hub package.json | tar -x -C "$WT"` under `set -e`. The pathspec `package.json`
+  does not exist at that commit, so `git archive` exited non-zero — but a pipeline's status is its
+  LAST member's, `tar` succeeded on the truncated input, and `set -e` therefore saw success. Every
+  later guard inherited that: the symlink step, the file check, and finally `node
+  test/project-settings.ts`, which resolved against the LIVE checkout — a tree then holding five other
+  lanes' uncommitted files. It surfaced only because the module path did not exist. Had the pathspec
+  been valid for the WRONG commit, or the extraction partial, the suite would have run and reported
+  greens about a tree that was not the one under verdict.
+
+  **The call.** Assert the isolation POSITIVELY before running anything through it: name an artifact
+  that exists only in the intended tree and test for it — here `hub/src/project-settings.ts`, and
+  `doctor.ts`'s import of it, both absent from `603fabd^`. This is item 16's mechanism seen from the
+  other side: there a shared checkout leaks content into a commit the ticket did not ask for; here it
+  leaks into a verdict about a tree the ticket did not ship. Both ride the same substrate, and
+  neither is caught by any signal downstream of the step that failed.
+
 - **2026-08-11 (pm, one-hundred-eighty-third fire) — a clean result and an unrun check are the same
   bytes; only an in-band positive control tells them apart.**
 
