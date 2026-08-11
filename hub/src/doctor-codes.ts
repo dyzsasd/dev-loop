@@ -44,7 +44,7 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W03", name: "lessons INDEX/shard over budget", source: "lessons.ts" },
   { code: "W04", name: "unknown agent name in agents{} — the block never applies", source: "team-config.ts" },
   { code: "W05", name: "workspace/backend wiring nag", source: "doctor.ts" },
-  { code: "W06", name: "state/bundle artifacts leaking into a git work tree", source: "doctor.ts" },
+  { code: "W06", name: "state/bundle artifacts and agent state files leaking into a git work tree", source: "doctor.ts" },
   { code: "W07", name: "repo deploys but has no health probe", source: "team-config.ts" },
   { code: "W08", name: "config project with no hub.db row", source: "doctor.ts" },
   { code: "W09", name: "dev-loop not runnable on PATH", source: "doctor.ts" },
