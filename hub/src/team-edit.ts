@@ -164,6 +164,27 @@ function unsettableGuidance(path: string): string {
   return `  no operator-settable writer exists for this path yet — there is no supported route to change it from the CLI.\n  Field reference: references/config-schema.md. \`dev-loop doctor\` validates the config; it does not authorize hand-editing it.`;
 }
 
+// LOOP-568 — resolveRepoSegments reconstructs multi-dot repo refs by longest-match against the registry.
+// When a path like 'repos.a.b.c.deploy.style' is split on dots to ['repos', 'a', 'b', 'c', 'deploy', 'style'],
+// this function matches 'a.b.c' against registered repos and returns ['repos', 'a.b.c', 'deploy', 'style'].
+function resolveRepoSegments(segs: string[], file: TeamFile): string[] {
+  if (segs[0] !== "repos" || segs.length < 2) return segs;
+
+  const repos = file.repos;
+  // Longest-match: try to match as many segments as possible to a registered repo ref.
+  // Start from the longest possible candidate (segs.length - 2, leaving room for at least one field after the ref)
+  // and work backward to the shortest (segs.length - 1 at minimum for a single-segment ref).
+  for (let len = Math.min(segs.length - 2, 10); len >= 1; len--) {
+    const candidate = segs.slice(1, 1 + len).join(".");
+    if (Object.hasOwn(repos, candidate)) {
+      // Matched: reconstruct segs with the repo ref as a single segment.
+      return ["repos", candidate, ...segs.slice(1 + len)];
+    }
+  }
+  // No match: return unchanged (the validation below will catch the unknown ref).
+  return segs;
+}
+
 export async function teamSet(argv: string[]): Promise<number> {
   const [path, value, ...extra] = argv;
   if (!path || path === "--help" || path === "-h" || value === undefined || extra.length)
@@ -176,7 +197,9 @@ export async function teamSet(argv: string[]): Promise<number> {
   // reported before → after line honest about the value actually written.
   const raw = coerce(entry.kind, value, path);
   const coerced = /^(team|projects\.[^.]+)\.autonomy$/.test(path) ? normalizeAutonomy(raw as AutonomyInput) : raw;
-  const segs = path.split(".");
+  let segs = path.split(".");
+  const wsForResolve = resolveWorkspace();
+  segs = resolveRepoSegments(segs, wsForResolve.file);
   // Own-property discipline: a wildcard segment like `__proto__`/`constructor` resolves on the PROTOTYPE
   // chain (truthy, object-typed) and the walk below would silently mutate Object.prototype instead of the
   // file — reject the reserved names outright and use Object.hasOwn everywhere else.
