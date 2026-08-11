@@ -13,7 +13,7 @@
 //     assertion whose two sides share a re-implemented predicate is green with the gate deleted
 //     (LOOP-429).
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, realpathSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -245,6 +245,65 @@ const SELF = fileURLToPath(import.meta.url);
   const selfKeyword = run("set", "workflow.transitions", '{"Todo->In Progress":{"assignTo":"self"}}');
   ok(selfKeyword.status === 0, `transitions: "self" is a directive keyword, not a handle, and is not roster-checked (got ${selfKeyword.status}: ${selfKeyword.stderr.trim()})`);
 
+  // ── LOOP-512 AC1: the PROPERTY, from both sides — the class, not one more spelling ─────────────
+  // Every arm above pins one VALUE the consumer cannot honour. The whole assignTo ladder is guarded on
+  // `assignTo !== undefined`, so a misspelled PROPERTY reaches none of it: real `->`, two real distinct
+  // states, an object — stored, echoed back by `get`, and permanently inert.
+  //
+  // The lead arm deliberately uses a property that is NOT a near-miss of `assignTo`. A validator that
+  // closed only the reported typo (an edit-distance or a `assignTo`-lookalike heuristic) passes an
+  // `assginTo` test and leaves `assignto`, `assign_to` and every future field open; it cannot pass this
+  // one. That is what makes this the class closure the ticket asked for rather than round 9 of the same
+  // fix. The reported instance is asserted right after — the general rule has to cover it, not replace it.
+  const before512 = JSON.stringify(settingsRow());
+  const extraProp = run("set", "workflow.transitions", '{"Todo->In Progress":{"assignTo":"owner","priority":1}}');
+  ok(extraProp.status === 2 && /priority/.test(extraProp.stderr),
+    `transitions: an unknown directive property is refused BY NAME even alongside a valid assignTo (got ${extraProp.status}: ${extraProp.stderr.trim().slice(0, 90)})`);
+  ok(/assignTo/.test(extraProp.stderr),
+    "transitions: …and the refusal prints the supported property set, so the operator can correct it without reading the source");
+  ok(JSON.stringify(settingsRow()) === before512,
+    "transitions: …and the refused write stored NOTHING — the row is byte-identical to before the attempt");
+  const misspelledProp = run("set", "workflow.transitions", '{"Todo->In Progress":{"assginTo":"owner"}}');
+  ok(misspelledProp.status === 2 && /assginTo/.test(misspelledProp.stderr),
+    `transitions: the filed instance — a misspelled assignTo PROPERTY — is refused (got ${misspelledProp.status}: ${misspelledProp.stderr.trim().slice(0, 90)})`);
+  // The omission half of the same defect: a well-formed key over an object with nothing the consumer
+  // reads. `{}` passes the object check and every assignTo check, because they are all conditioned on a
+  // property that is not there.
+  const noAssignTo = run("set", "workflow.transitions", '{"Todo->In Progress":{}}');
+  ok(noAssignTo.status === 2 && /no assignTo/.test(noAssignTo.stderr),
+    `transitions: a directive with no own assignTo is refused — an empty directive object is as inert as a misspelled one (got ${noAssignTo.status})`);
+  ok(JSON.stringify(settingsRow()) === before512,
+    "transitions: …and neither refusal wrote — three rejected attempts, still byte-identical");
+  // The discrimination arm. Without it, a validator that refused EVERY directive object passes all four
+  // assertions above while removing the feature. Mutation-tested.
+  const stillGood = run("set", "workflow.transitions", '{"In Review->Done":{"assignTo":"owner"}}');
+  ok(stillGood.status === 0 && ((settingsRow().workflow as { transitions?: Record<string, { assignTo?: string }> })?.transitions ?? {})["In Review->Done"]?.assignTo === "owner",
+    `transitions: …and the supported property is still accepted and stored — the check narrows the object, it does not close it (got ${stillGood.status}: ${stillGood.stderr.trim()})`);
+
+  // ── LOOP-512 AC4: write-side only — an ALREADY-STORED row keeps its behaviour ──────────────────
+  // The one place this suite writes settings_json directly, and it is the only way to build the subject:
+  // the CLI now refuses this shape, so a row carrying it can only be one that predates the fix. The
+  // claim under test is that the refusal is a WRITER, not a migration — `resolveAssignTo` still reads
+  // `dir.assignTo` and ignores the rest (agentops.ts unchanged), and no unrelated verb is bricked by a
+  // legacy row sitting in the block.
+  {
+    const db = openDb(dbPath);
+    try {
+      db.prepare("UPDATE projects SET settings_json=? WHERE key='p'").run(JSON.stringify({
+        ...settingsRow(),
+        workflow: { transitions: { "In Review->Done": { assignTo: "owner", legacyField: true } } },
+      }));
+    } finally { db.close(); }
+    const readBack = run("get", "workflow.transitions");
+    ok(readBack.status === 0 && /legacyField/.test(readBack.stdout),
+      `AC4: a pre-existing directive with an unknown field still READS back — the fix stops new ones being written, it does not retroactively invalidate a row (got ${readBack.status})`);
+    const unrelated = run("set", "humanWrite.enabled", "true");
+    ok(unrelated.status === 0,
+      `AC4: …and an unrelated key still writes with that row in place — validation is scoped to the value being set, not a whole-row re-validation (got ${unrelated.status}: ${unrelated.stderr.trim()})`);
+    run("unset", "humanWrite.enabled");
+    run("unset", "workflow.transitions");
+  }
+
   // ── The hours ceiling: a stored window the consumer's date arithmetic cannot represent ────────
   // Same class as everything above, one layer further out. `noProgressWindowHours` is multiplied by
   // 3,600,000 and reaches `new Date(nowMs - windowMs).toISOString()`, which THROWS past the ±8.64e15 ms
@@ -321,6 +380,50 @@ const SELF = fileURLToPath(import.meta.url);
   ok(!/restart the daemon/.test(run("set", "humanWrite.enabled", "true").stdout),
     "…and a per-request key prints no restart hint at all — the hint distinguishes the two, it is not boilerplate");
   run("unset", "humanWrite.enabled");
+
+  // ── LOOP-512 AC2: the hint is executable for ANY seeded key ───────────────────────────────────
+  // The key is interpolated raw into a command line and is never charset-validated (ensureProject
+  // checks only the ticket PREFIX), so `dev-loop seed 'my project' …` is a supported seed whose hint
+  // the shell reads as `DEVLOOP_PROJECT=my` followed by the command `project`.
+  //
+  // Asserted as a PROPERTY against the real consumer — the shell — not against a fixed expected string
+  // and not against a re-implemented quoting oracle (a parity assertion whose two sides share one
+  // implementation is green with the gate deleted, LOOP-429). `dev-loop` is shadowed by a stub on PATH
+  // that echoes the environment it was actually handed, so each emitted command is parsed and run by
+  // /bin/sh and the value that arrives is compared with the key that went in.
+  //
+  // The three keys are chosen so that the UNQUOTED form — what a reverted fix emits — mis-parses into a
+  // command that does not exist (`project`, `q`) or an unterminated quote, never into anything that
+  // runs. A key whose mis-parse would execute a real command has no place in a test suite, and is not
+  // needed: `p;q` proves the metacharacter case exactly as well.
+  {
+    const stubDir = realpathSync(mkdtempSync(join(tmpdir(), "dl-512-hintprobe-")));
+    writeFileSync(join(stubDir, "dev-loop"), '#!/bin/sh\nprintf %s "$DEVLOOP_PROJECT"\n');
+    chmodSync(join(stubDir, "dev-loop"), 0o755);
+    // The _team branch ends in a parenthetical annotation, not a command; it is not part of what a
+    // shell is asked to run.
+    const commandsOf = (hint: string): string[] =>
+      hint.replace(/\s{2,}\(.*\)\s*$/, "").split("&&").map((c) => c.trim()).filter(Boolean);
+    for (const key of ["my project", "p;q", "it's", "p", TEAM_INTAKE_PROJECT]) {
+      const hint = restartHint(key);
+      // The _team branch interpolates the constant, so that is the key its commands must carry.
+      const expected = key === TEAM_INTAKE_PROJECT ? TEAM_INTAKE_PROJECT : key;
+      const cmds = commandsOf(hint);
+      const results = cmds.map((cmd) => spawnSync("/bin/sh", ["-c", cmd], {
+        encoding: "utf8", env: { ...scrubFireEnv(), PATH: `${stubDir}:${process.env.PATH ?? ""}` },
+      }));
+      ok(cmds.length === 2 && results.every((r) => r.status === 0),
+        `AC2 restart hint for ${JSON.stringify(key)}: both emitted commands PARSE and run (statuses ${results.map((r) => r.status).join(",")}; hint: ${hint.slice(0, 78)})`);
+      ok(results.every((r) => r.stdout === expected),
+        `AC2 …and each passes DEVLOOP_PROJECT through intact — the shell received ${JSON.stringify(results.map((r) => r.stdout))}, the key is ${JSON.stringify(expected)}`);
+    }
+    // Quoting is applied only where it is needed, so the hint every operator already knows is untouched.
+    // A blanket-quote implementation passes every assertion above and fails these two.
+    ok(restartHint("loop") === "DEVLOOP_PROJECT=loop dev-loop daemon down && DEVLOOP_PROJECT=loop dev-loop daemon up",
+      `AC2: a key needing no quoting renders byte-identically to before the fix (got ${restartHint("loop")})`);
+    ok(restartHint(TEAM_INTAKE_PROJECT) === `DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub stop && DEVLOOP_PROJECT=${TEAM_INTAKE_PROJECT} dev-loop hub start   (there is no 'hub restart' subcommand)`,
+      `AC2: …and so does the _team form, annotation included (got ${restartHint(TEAM_INTAKE_PROJECT)})`);
+  }
 
   // ── The project ladder: --project, else DEVLOOP_PROJECT, else cwd (§11) ───────────────────────
   const fromCwd = spawnSync(process.execPath, [CLI, "settings", "list", "--json"], {
