@@ -30,7 +30,7 @@ import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./brea
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
-import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, DEFAULT_PER_FIRE_USD, type FireUsage } from "./metrics.ts";
+import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, watchdogKindOf, DEFAULT_PER_FIRE_USD, type FireUsage, type WatchdogKind } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 // A2: the scheduler roster IS the seed roster — one source (seed.ts AGENT_HANDLES). A gap between the two
@@ -781,7 +781,7 @@ function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmo
   } catch { /* raced away between the write and the stat — nothing to warn about */ }
 }
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
-  extra?: { suspectError?: boolean; interrupted?: boolean; outputTail?: string; errorClass?: string; bootBytes?: number; usage?: FireUsage; turns?: number | null }): void {
+  extra?: { suspectError?: boolean; interrupted?: boolean; outputTail?: string; errorClass?: string; watchdog?: WatchdogKind | null; bootBytes?: number; usage?: FireUsage; turns?: number | null }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
   breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
@@ -800,6 +800,11 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
         ...(extra?.suspectError ? { suspectError: true } : {}),
         ...(extra?.interrupted ? { interrupted: true } : {}),
         ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}),
+        // LOOP-462: ALWAYS present, null when no watchdog fired — same reasoning as bootBytes/turns below,
+        // and load-bearing here. The rate median reads ABSENT as "row predates the field ⇒ use the old
+        // exit-code proxy", so a conditional spread would make every new non-watchdog fire indistinguishable
+        // from a legacy row and hand the proxy back exactly the rows this ticket removed from it.
+        watchdog: extra?.watchdog ?? null,
         bootBytes: extra?.bootBytes ?? 0, // LOOP-272: ALWAYS numeric — an omitted field cannot be distinguished from a zero
         // usage is numeric-only (FireUsage: tokens + cost + source/currency) — §16-safe for disk, and it's the
         // backend-agnostic soak/cost metric's ONLY source on linear (no fire.completed event there). Mirrors the
@@ -817,7 +822,7 @@ function recordFire(hubDb: string, project: string, agent: Agent, profile: Launc
     const projectId = findProject(fireDb, project);
     if (!projectId) return;                                          // not a hub-seeded project ⇒ no ledger to write
     logEvent(fireDb, { project_id: projectId, actor: agent, kind: "fire.completed",
-      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.interrupted ? { interrupted: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), bootBytes: extra?.bootBytes ?? 0, ...(extra?.usage ? { usage: extra.usage } : {}) } }); // LOOP-272: bootBytes always present
+      data: { codingAgent: profile.codingAgent, provider, model: profile.model ?? null, effort: profile.effort ?? null, durationMs, exitCode, timedOut, fireId, ...(extra?.suspectError ? { suspectError: true } : {}), ...(extra?.interrupted ? { interrupted: true } : {}), ...(extra?.errorClass ? { errorClass: extra.errorClass } : {}), watchdog: extra?.watchdog ?? null, bootBytes: extra?.bootBytes ?? 0, ...(extra?.usage ? { usage: extra.usage } : {}) } }); // LOOP-272: bootBytes always present; LOOP-462: watchdog always present (null ⇒ none fired)
   } catch { /* telemetry is best-effort; a fire's real outcome is its exit code, not this row */ }
 }
 
@@ -1327,6 +1332,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       log.write(`\n===== exit code=${code ?? "null"} signal=${signal ?? "null"}${timedOut ? " (fire timeout)" : ""}${budgetLabel}${stalledLabel} =====\n`);
       console.log(`[${new Date().toISOString()}] ${agent}: exit ${code ?? `signal ${signal}`}${timedOut ? " (fire timeout)" : ""}${budgetLabel}${stalledLabel}`);
       const exitCode = budgetKilled ? 126 : timedOut ? 124 : stalled ? 125 : (code ?? 1); // 126 = budget-per-fire kill, distinct from 124 (timeout) / 125 (stalled)
+      // LOOP-462 — the same precedence as the exit code above, but recorded as the FACT rather than inferred
+      // back out of it. This is the only site that knows: `budgetKilled`/`timedOut`/`stalled`/`retryLoop` are
+      // in-process booleans set by the watchdog timers themselves and they die with this closure, so a reader
+      // downstream could previously only guess from `exitCode` — and on the last arm that code is the CHILD's
+      // own, which is the mis-detection LOOP-462 exists to close. `null` on that arm is a positive statement
+      // that no watchdog fired, not a missing value.
+      const watchdog: WatchdogKind | null = watchdogKindOf(budgetKilled, timedOut, stalled, retryLoop);
       // Suspect-error detection (narrow, tail-anchored to avoid false positives on error text an agent
       // merely echoed mid-run): exit 0 but the LAST line is a known CLI failure marker, or no visible
       // output at all (whitespace-only counts as none). Bare "Error:" is deliberately NOT matched — an
@@ -1382,6 +1394,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         ...(suspectError ? { suspectError: true } : {}),
         ...(interrupted ? { interrupted: true } : {}),   // LOOP-155: excluded from successRate entirely
         ...(errorClass ? { errorClass } : {}),
+        watchdog, // LOOP-462: unconditional — null is the recorded "no watchdog fired", never an omission
         // every failure carries its tail — the breaker keys on it
         ...(suspectError || errorClass || exitCode !== 0 ? { outputTail: outTail.slice(-400) } : {}),
         bootBytes: boot ? boot.bytes : 0, // LOOP-272: ALWAYS present — 0 means never assembled, which is a fact worth recording
