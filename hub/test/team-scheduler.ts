@@ -6,6 +6,7 @@ import { tmpdir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock } from "../src/locks.ts";
+import { EXIT_NO_WORK } from "../src/breaker.ts"; // LOOP-543: the outcome code a fire that produced nothing is ledgered under
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -342,8 +343,14 @@ try {
     writeFileSync(silentBin, "#!/bin/sh\nexit 0\n"); chmodSync(silentBin, 0o755);
     const s = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: silentBin });
     const sLast = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
-    ok(/suspectError/.test(s.out) && sLast.exitCode === 0 && sLast.suspectError === true,
+    ok(/suspectError/.test(s.out) && sLast.exitCode === EXIT_NO_WORK && sLast.suspectError === true,
       "LOOP-83: a SILENT exit-0 claude fire is flagged suspectError (empty-output arm preserved, not replaced by the JSON signal)");
+    // LOOP-543 pins the OTHER half of that same row, on the one fixture in the suite that is this ticket's
+    // subject: the child returned 0, and the LEDGER records EXIT_NO_WORK + errorClass "no-output" so the
+    // breaker (which returns early on a 0) sees a failure and the taxonomy gets a bucket. Asserting both
+    // together is what stops the flag and the class from drifting apart — the pair IS the contract.
+    ok(sLast.errorClass === "no-output",
+      "LOOP-543: …and the same row carries errorClass 'no-output' — the flag and the class agree on one observable");
 
     // (d) TRUNCATED terminal object (killed/timed-out mid-emit) → no usage row, but the operator still sees the
     //     partial output (never nothing) — the deferred echo falls back to the raw buffer when it can't parse.

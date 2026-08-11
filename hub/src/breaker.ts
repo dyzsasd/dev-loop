@@ -55,7 +55,45 @@ function measuredBreach(e?: BudgetKillEvidence): boolean {
   return typeof e?.spentUsd === "number" && typeof e?.ceilingUsd === "number" && e.spentUsd >= e.ceilingUsd;
 }
 
-export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false, evidence?: BudgetKillEvidence): string | null {
+// ─── LOOP-543 — "did this fire do any work?" ─────────────────────────────────────────────────────────
+// The ledger recorded 274 consecutive opencode-lane fires that exited 0 in 4–11 s having produced
+// nothing, every one of them carrying errorClass null. What "any work" means has to be answered from an
+// observable the ledger already carries for EVERY lane, and only one qualifies: whether the process
+// produced visible output. The 274 produced zero bytes; the 32 healthy fires that followed the outage
+// produced real output over 677–1827 s.
+//
+// Three observables were rejected, each for a reason that would have made the fix wrong:
+//   • bootBytes — a LANE CONSTANT, not an outcome. It is 0 on 345/345 opencode fires in the window,
+//     the broken 274 and the healthy 32 alike, so it separates coding agents rather than successes
+//     from failures. The ticket that filed this defect was itself filed on that misreading.
+//   • durationMs — a genuinely fast fire is not a failed one; a threshold here is a guess.
+//   • usage / turns — null on every un-instrumented lane, so absence is "unknown", never "idle".
+//
+// `interrupted` is excluded: the operator's own SIGINT leaves exactly this shape and is not an agent
+// failure (LOOP-155). Exported so the derivation is testable — the run-agents call site cannot be.
+//
+// Querying them (LOOP-543 AC3). Rows written BEFORE this fix cannot be back-filled — they carry the
+// suspectError flag and no class — so one command has to match both shapes:
+//
+//   jq -c 'select(.errorClass == "no-output" or (.suspectError == true and (.errorClass | not)))' \
+//     .dev-loop/team/fires.jsonl
+//
+// Measured on the ledger that filed this ticket: 434 rows over the whole file, 274 inside the
+// 2026-08-09T22:58Z–2026-08-10T18:21Z outage window, and 0 of the 32 healthy opencode fires that
+// followed it — the control that makes the query evidence rather than a filter that matches
+// everything. The second arm is history-only and stops accruing new rows once this ships.
+export function producedNoWork(f: { exitCode: number; timedOut: boolean; interrupted: boolean; outputTail: string }): boolean {
+  return !f.interrupted && f.exitCode === 0 && !f.timedOut && f.outputTail.trim() === "";
+}
+
+// The exit code such a fire is LEDGERED under. The child really did exit 0, so this is the fire's
+// outcome and not the process's status byte — recorded, like "provider-env-missing"'s 4 and
+// "spawn-failed"'s 1, because the ledger's job is to say what the fire achieved. It is load-bearing
+// rather than cosmetic: breaker.record() returns at `exitCode === 0` BEFORE it ever reads errorClass,
+// so the class alone would not arm the breaker. The process exit status is left untouched.
+export const EXIT_NO_WORK = 7;
+
+export function classifyFireError(exitCode: number, timedOut: boolean, tail: string, stalled = false, retryLoop = false, budgetKilled = false, evidence?: BudgetKillEvidence, noWork = false): string | null {
   if (budgetKilled) {
     // A MEASURED breach is a fact about the fire, so it outranks every inference below.
     // LOOP-445 AC1 — ships option (b): the kill still happens on the modeled deadline, but only a
@@ -86,6 +124,19 @@ export function classifyFireError(exitCode: number, timedOut: boolean, tail: str
   if (retryLoop) return "retry-loop"; // liveness watchdog kill — visible retry loop (output arriving but no new content)
   if (stalled) return "stalled"; // liveness watchdog kill — a hung provider call / silent retry loop, NOT a task failure
   if (timedOut) return "timeout";
+  // LOOP-543 — ABOVE the exit-0 bail, BELOW every arm that names a real kill (a watchdog or the budget
+  // arm already knows why the fire ended; "it did nothing" is what is left when nothing else answers).
+  // Returning null here is what let 274 consecutive no-work fires read as successes, and the missing
+  // bucket was the smaller half of it: recordFire hands this class to breaker.record, which treats
+  // exit 0 as a RECOVERY — closing that agent's breaker and every provider breaker on its provider. So
+  // the outage did not merely fail to trip the one mechanism built to cap cadence into an outage; each
+  // of its fires actively re-armed the loop to keep firing at full rate.
+  //
+  // Agent-scoped deliberately — NOT added to PROVIDER_SCOPED_CLASSES. All 274 rows share one provider,
+  // which is suggestive, but the outage's cause is 原因未查明 and provider-scoping would encode a causal
+  // claim the evidence does not support. It costs nothing here: each affected lane ran a streak far past
+  // the threshold on its own (qa 126, junior-dev 126, sweep 22), so every one of them trips regardless.
+  if (noWork) return "no-output";
   if (exitCode === 0) return null;
   return tailErrorClass(tail);
 }
