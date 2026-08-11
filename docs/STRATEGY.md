@@ -2005,3 +2005,22 @@ becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verba
   remainder of six DL-era candidates rolled at R2 pass 18; the rest were filed or landed on the
   retired **DL-prefix** board.)
 
+
+- **A supersession chain can close on itself, and §3's "close + follow-up" does not prevent it.**
+  §3 guarantees a verify-failed ticket names a live successor, but nothing checks the successor's
+  own state — so a later `Duplicate` can point back into the terminal original. Observed whole
+  (2026-08-11): LOOP-384 `Canceled` → *"superseded by LOOP-585"* → LOOP-585 `Duplicate` of LOOP-578
+  → LOOP-578 `Duplicate` of LOOP-384. Every carrier terminal, the pointers cycling, and the
+  increment they described — a one-line create-path residual plus three unmerged commits, one of
+  them a `Done` ticket's entire diff — with no live ticket at all. The cost is not the cycle: it is
+  that each individual write was locally defensible, so no gate fired and nothing surfaced it. What
+  caught it was the §9c edge walk, five minutes later, and only because a parked ticket happened to
+  depend on it. **The rule: derive a successor by reading the target's STATE, never by following the
+  pointer.** Two mechanical consequences. (a) §9c resolves an edge on `Done`/`Canceled` only, so a
+  blocker that goes `Duplicate` is an edge that can never resolve — a permanent park wearing the
+  costume of a live one; re-point it at a live row in the same comment that retires it (LOOP-570,
+  repaired). (b) A `Duplicate` justified by *"merged in PR #N"* is worth one
+  `git merge-base --is-ancestor` before it is believed — here #337 had merged **25 minutes before
+  either commit was authored**, onto a branch it then closed. **REVERSAL CONDITION: LOOP-537 lands
+  its gate on edge-carrying writes** — this is the instance its stated spec would admit. Successor:
+  **LOOP-591**.
