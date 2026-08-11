@@ -249,12 +249,21 @@ export function assembleBootCorpus(
     // missing ⇒ skip silently (the SKILL's pull-mode instruction still covers the fire).
     if (agent === "senior-dev" || agent === "junior-dev") {
       const devSkill = readFileSync(join(root, "skills", "dev-agent", "SKILL.md"), "utf8");
+      // LOOP-553: the tiers are told to run Step 0.5 "exactly as dev-agent spells out" — ship it,
+      // not just the ship sequence, or the instruction references text the corpus never carries.
+      // Each marker pair fails open independently (missing pair ⇒ that slice is skipped silently).
+      const slices: Array<{ label: string; text: string }> = [];
+      const fb = devSkill.indexOf("<!-- fire-start:begin -->");
+      const fe = devSkill.indexOf("<!-- fire-start:end -->");
+      if (fb !== -1 && fe > fb) slices.push({ label: "Step 0.5", text: devSkill.slice(fb + "<!-- fire-start:begin -->".length, fe).trim() });
       const b = devSkill.indexOf("<!-- ship-sequence:begin -->");
       const e = devSkill.indexOf("<!-- ship-sequence:end -->");
-      if (b !== -1 && e > b) {
+      if (b !== -1 && e > b) slices.push({ label: "Steps 4–6.5 + 7 + HARD LIMITS", text: devSkill.slice(b + "<!-- ship-sequence:begin -->".length, e).trim() });
+      if (slices.length > 0) {
+        const what = slices.map((sl) => sl.label).join(" + ");
         parts.push(
-          "### skills/dev-agent/SKILL.md — Steps 4–6.5 + 7 + HARD LIMITS (your inherited ship sequence, §21c, pre-read)",
-          devSkill.slice(b + "<!-- ship-sequence:begin -->".length, e).trim(),
+          `### skills/dev-agent/SKILL.md — ${what} (your inherited fire-start + ship sequence, §21c, pre-read)`,
+          slices.map((sl) => sl.text).join("\n\n"),
         );
       }
     }

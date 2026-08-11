@@ -225,12 +225,15 @@ if (a) {
 
 // ── 4c. the inherited ship sequence rides split-tier corpora (§21c) ───────────────────────────────
 const jrFull = assembleBootCorpus(root, dataDir, "junior-dev", "proj1", "service", {});
-ok(!!jrFull && jrFull.text.includes("your inherited ship sequence, §21c, pre-read")
+ok(!!jrFull && jrFull.text.includes("your inherited fire-start + ship sequence, §21c, pre-read")
   && jrFull.text.includes("### Step 5.5 — Self-review the diff") && jrFull.text.includes("## HARD LIMITS"),
   "junior corpus carries dev's Steps 4–6.5 + 7 + HARD LIMITS (no mid-fire pull)");
+ok(!!jrFull && jrFull.text.includes("### Step 0.5 — Merge eligible loop PRs")
+  && jrFull.text.includes("NEVER re-freshen a PR merge-guard holds"),
+  "junior corpus carries dev's Step 0.5 incl. the re-freshen safety rule (LOOP-553)");
 ok(!!jrFull && !jrFull.text.includes("### Step 0 — Reclaim your orphans (crash recovery)"),
   "the slice excludes dev's Steps 0–3 (junior has its own pick/claim/groom)");
-if (a) ok(!a.text.includes("inherited ship sequence"), "non-dev-tier corpora (pm) carry no ship sequence");
+if (a) ok(!a.text.includes("skills/dev-agent/SKILL.md —"), "non-dev-tier corpora (pm) carry no inherited dev slice");
 
 // ── 4d. LOOP-163 regression: new-path lessons delivery (INDEX + project shard) ───────────────────
 // The legacy dataDir puts a lessons.md at join(dataDir, "proj1", "lessons.md") — that's the v1
