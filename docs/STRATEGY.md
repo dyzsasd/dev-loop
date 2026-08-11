@@ -482,6 +482,38 @@ denominator and filed LOOP-547 for it. The standing inventory line — every doc
 ticket or a named owner — now reads W24→547 (arithmetic) alongside 543/483/466 (the stall and
 no-op classes, which consume these counts but do not compute them).
 
+**The release skew closed and the operator's decision queue reached zero (one-hundred-fifty-eighth
+fire).** The operator built and installed `a6b0a60` at 02:04:41 local on 2026-08-11.
+**LOOP-542** — the second release tracker of the week, Human-Blocked since 22:36Z — is verified
+`Done` on its own AC1–AC3: the three named commits (`4cf6130`, `7ec1d8c`, `67d04e1`) are ancestors
+of the installed build; `doctor` emits no `[W18]`; the installed `dist/` carries the markers the
+filing recorded absent (`DEVLOOP_WORKSPACE` 0→6, `defaultBranch` absent→19, `force-with-lease`
+0→4). The running daemon serves the new build — checked, not assumed: `dist/*` written 02:04:41,
+daemon pid 99389 `lstart` 02:04:42. **LOOP-396** unparked per §9c (`Unblocked-by: LOOP-542`),
+releasing PR #291 and the stalled PR queue behind it. `metrics --json .decisionQueue` is now **0**
+and `[W20]` is clear — the first empty operator queue recorded here. AC4 (the refresh push is
+actually clean) is deliberately left open on LOOP-396: `push-guard` on that branch exits 0 today
+only because it enumerated an empty range, which is the guard-checked-nothing shape, not evidence.
+
+**The §9c edge audit ran clean for a fifth consecutive fire, after retiring one loaded edge.**
+LOOP-483 carried two live `Blocked-by:` markers — LOOP-543 (open) and **LOOP-463 (Done since
+08-10T18:43Z, never retired)**. Held today by 543, so nothing fired; but §9c releases on *"≥1 edge,
+all resolved"*, so the next re-point of the 543 edge would have left a single `Done` edge and
+unparked the ticket onto undone work. Retired (`Unblocked-by: LOOP-463`); LOOP-483 stays `Backlog`
++ `blocked`. Live parks are now LOOP-402/403/404→401 and LOOP-483→543.
+
+**A second, outward-facing release gap was opened where the first one closed.** The npm-published
+artifact — the only one that reaches the adopters `Goals` names — is **55 code commits** behind
+`origin/main` (v1.15.1, published 2026-08-07T00:25Z; measured with W18's own machinery via its
+documented `DEVLOOP_W18_PKG_JSON` injection). This workspace's `doctor` is silent about it: a local
+source build sets `isSourceBuild`, which skips the `v<V>` tag baseline entirely, so
+`publishRemedy()` — LOOP-247's fix, the only code in the product that asks npm what is released —
+is never called here. The local rebuild is itself the remedy the loop applies to clear W18
+(LOOP-525 and LOOP-542 both closed on one), so unblocking the loop is the act that blinds the
+release check. Filed **LOOP-549** (P1, `Improvement`+`pm`, junior) for the missing measurement;
+distinguished from LOOP-442 on that ticket and this one — 442 fixes two remedies disagreeing while
+the alarm is ON, 549 fixes the alarm being OFF.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -515,6 +547,46 @@ no-op classes, which consume these counts but do not compute them).
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-fifty-eighth fire) — the remedy for one release alarm is the thing
+  that silences the other, so the loop cleared its own skew twice this week while the artifact
+  outsiders install fell 55 commits behind, unreported.**
+
+  **What was measured.** The operator installed a local source build at `a6b0a60` (02:04:41 local),
+  which discharged **LOOP-542** and emptied the decision queue. In the same `doctor` run, `[W18]` is
+  now entirely absent — no warning and no `✅ … matches origin/main` line. Using W18's own code
+  through the injection hook the function documents (`DEVLOOP_W18_PKG_JSON`, "no real reinstall
+  needed"), pointed at the *published* package's identity: **`installed @dyzsasd/dev-loop v1.15.1 is
+  55 code commit(s) behind origin/main (63084b4) (+93 doc-only) … npm already has 1.15.1 and this
+  host is on it — the merged commits are NOT released yet`**. npm's latest is 1.15.1 from
+  2026-08-07T00:25:33Z; `hub/package.json` still reads 1.15.1; the newest tag is `v1.15.1` =
+  `41e7bcc` (08-06 15:48Z).
+
+  **The mechanism, and why it is self-inflicted.** `checkInstalledCliSkew()` reads the installed
+  tree's `build-commit.json` first (`doctor.ts:1685`). A stamp sets `isSourceBuild` and makes that
+  commit the baseline — the `v<V>` tag lookup at `:1691-1699` is the `else` branch and never runs.
+  So the only distance computed is source-build→main, and `publishRemedy()` (`:725`, LOOP-247's fix,
+  the sole `npm view` call in `hub/src/`) sits in the ternary arm a source-build host never takes.
+  After the rebuild that distance is 0, W18 returns before line 1730, and the surface goes quiet.
+  The trap is that the rebuild is the *prescribed remedy*: LOOP-525 and LOOP-542 were both release
+  trackers and **both closed on a local install**. Every time the loop unblocks itself it resets the
+  only alarm that could report the npm gap — which is how that gap reached 55 commits with nothing
+  ever firing. This host has run source builds as steady state since the operator's 2026-08-01
+  direction (LOOP-246 / LOOP-250), so it is not an edge case.
+
+  **What was decided.** Filed **LOOP-549** (P1, `Improvement`+`pm`, junior): resolve the published
+  baseline unconditionally and report it as its own W-code, leaving W18's two existing arms
+  byte-identical (AC4 pins both). Explicitly **not** filed: whether release cadence should be
+  automated. LOOP-542's Notes flagged that as the durable question if the class recurred, and it has
+  — but landing-observability §9.7 kept the human release gate **on purpose** and paid for it with
+  the promise *"make when to pull it a one-look call"*. Reversing that is a `Goals`-level call and
+  rides §9a, not a PM filing. LOOP-549 makes the one-look call actually possible; whether to keep
+  needing it is recorded for the operator under `Candidate ideas`.
+
+  **What I will not repeat.** Two release trackers in one week were each treated as an instance to
+  discharge. The recurrence itself was the finding, and the second close is what exposed it: a
+  remedy that suppresses its own detector will keep the condition invisible for exactly as long as
+  the remedy keeps being applied. When a tracker closes, ask what its closing turned off.
 
 - **2026-08-10 (pm, one-hundred-fifty-seventh fire) — the failure-taxonomy alarm reported the
   taxonomy two-thirds blind on a window in which every failure carries a class, because its
@@ -2011,6 +2083,22 @@ _(The overflow parking lot: strong ideas not yet filed, each with the condition 
 becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verbatim in
 [`docs/strategy-archive/2026-08.md`](strategy-archive/2026-08.md) (§20 R2 pass 41, block J).)_
 
+
+- **Should the release cadence stay a human act? A `Goals`-level question for the operator, named
+  rather than filed (2026-08-11, pass 127).** landing-observability §9.7 kept the human release gate
+  **deliberately** and priced that choice as *"make when to pull it a one-look call"* — W18
+  (LOOP-46), the `NEXT` hint (LOOP-167) and the npm-aware remedy (LOOP-247) are all instalments on
+  that promise. The evidence now says the gate is not being pulled: **two release trackers in seven
+  days** (LOOP-525, LOOP-542), each a Human-Blocked park that stalled the whole PR queue while it
+  stood, and between them the published artifact drifted **55 code commits** behind `origin/main`
+  with the loop's own instruments silent (LOOP-549). A one-look call nobody looks at is a cadence
+  problem, not an observability one — but reversing a recorded design decision is not PM's to make.
+  **REVERSAL CONDITION: the operator rules on whether publishing should be automated** (e.g. a
+  tag-triggered `release-npm.yml` on a green `main`, or a scheduled release PR) — and if the answer
+  is that it stays human, whether an un-cut release should escalate on a **clock** rather than
+  waiting for a fire to notice. **File nothing against this until LOOP-549 has landed**: it makes
+  the gap measurable, and a cadence argument should be made against a real series, not two
+  anecdotes.
 
 - **`kaizen` is a shipped, installed command named in ZERO user-facing surfaces.** **LOOP-181** is
   `Done`, `hub/package.json:32-36` ships `kaizen` + `kaizen-hub`, and `kaizen --version` answers —
