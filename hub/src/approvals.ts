@@ -253,6 +253,21 @@ export type ApprovalState = "requested" | "granted" | "revoked" | "discharged" |
 export const AUTHORISING_STATE: ApprovalState = "granted";
 
 /**
+ * When nothing authorises, WHICH refusing row the reason is about (LOOP-550). Most informative first.
+ *
+ * A key accumulates rows, and picking the highest rowid picks whichever one happened to be filed last
+ * — so a request filed after a grant lapsed reported "requested but not granted" and never mentioned
+ * that a grant had existed at all. The operator's next move differs by which of those is true (re-grant
+ * with a longer window vs. grant for the first time), so the row that carries the most history wins the
+ * reason. A row that ran out (`expired`) or was taken away (`revoked`/`discharged`) is a fact about
+ * something that HAPPENED; `requested` is the absence of one, which is why it sorts last.
+ *
+ * This orders the REASON only. `authorises` is decided before this list is consulted and never reads
+ * it: exactly one state authorises, and none of these four is it.
+ */
+export const REASON_PRECEDENCE: readonly ApprovalState[] = ["expired", "revoked", "discharged", "requested"];
+
+/**
  * The whole of §6, in one function: no sweeper, no stored state, expiry against the caller's `now`.
  *
  * Precedence is a straight line because the writers keep it one: revoke/discharge refuse a row that
@@ -476,7 +491,7 @@ export interface ApprovalVerdict {
   /** The only field a consumer may branch on to proceed. */
   authorises: boolean;
   key: string;
-  /** The row this verdict is about — the authorising one if there is one, else the latest. */
+  /** The row this verdict is about — the authorising one if there is one, else `REASON_PRECEDENCE`'s. */
   approval: ApprovalRow | null;
   /** Its derived state, or `null` when no row exists for the key at all. */
   state: ApprovalState | null;
@@ -561,19 +576,34 @@ export function consultApproval(
     return finish({ authorises: true, key: parsed.parsed.key, approval: row, state: AUTHORISING_STATE, reason: null });
   }
 
-  const latest = candidates.at(-1);
-  if (!latest) {
+  if (!candidates.length) {
     return finish({
       authorises: false, key: parsed.parsed.key, approval: null, state: null,
       reason: `no approval exists for ${JSON.stringify(parsed.parsed.key)}`,
     });
   }
-  const { state, ...row } = latest;
-  const reason =
+  // Within one state the LAST row still wins — rowid order is the right tie-break, it was only the
+  // wrong way to choose BETWEEN states. The `?? at(-1)` keeps this total the way `deriveState` is:
+  // the list covers all four non-authorising states, so it is unreachable today, and a sixth state
+  // added later must not silently produce `undefined` here.
+  const chosen =
+    REASON_PRECEDENCE.map((s) => candidates.filter((c) => c.state === s).at(-1)).find((c) => c !== undefined)
+    ?? candidates.at(-1)!;
+  const { state, ...row } = chosen;
+  const head =
     state === "requested" ? `approval ${row.id} for ${JSON.stringify(row.action_key)} is requested but not granted`
     : state === "revoked" ? `approval ${row.id} for ${JSON.stringify(row.action_key)} was revoked by ${row.revoked_by ?? "?"} at ${row.revoked_at}`
     : state === "discharged" ? `approval ${row.id} for ${JSON.stringify(row.action_key)} was discharged at ${row.discharged_at} — its end state was already reached`
     : `approval ${row.id} for ${JSON.stringify(row.action_key)} expired at ${row.expires_at}`;
+
+  // Both facts or neither: the operator decides whether to re-grant from the history AND from whether
+  // anyone is still asking. Reporting the lapsed grant while dropping the pending request would just
+  // move the omission this fixed, so the request is named whenever it is not itself the chosen row.
+  const pending = state === "requested" ? [] : candidates.filter((c) => c.state === "requested");
+  const reason =
+    pending.length === 0 ? head
+    : pending.length === 1 ? `${head}; a request (${pending[0]!.id}) is pending`
+    : `${head}; ${pending.length} requests are pending (latest ${pending.at(-1)!.id})`;
   return finish({ authorises: false, key: parsed.parsed.key, approval: row, state, reason });
 }
 
