@@ -21,6 +21,7 @@
 //     added to the total) rather than silently omitted.
 // Lessons budgets stay lessons.ts's (INDEX_MAX_* / SHARD_MAX_* — imported, never duplicated).
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { strategyDocRelPath as strategyDocRelPathLeaf } from "./default-branch-push.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -329,19 +330,9 @@ export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat):
 }
 
 // Resolve a DocRef to a repo-relative path string; returns null for hub/Linear forms (unreadable).
-export function strategyDocRelPath(docRef: unknown): string | null {
-  if (typeof docRef === "string") {
-    if (/linear\.app\/.*\/document\//.test(docRef)) return null;
-    return docRef.trim() || null;
-  }
-  if (docRef && typeof docRef === "object") {
-    if ("hubDoc" in (docRef as object)) return null;
-    if ("linearDocument" in (docRef as object)) return null;
-    const p = (docRef as { path?: unknown }).path;
-    if (typeof p === "string" && p.trim()) return p;
-  }
-  return null;
-}
+// Defined in ./default-branch-push.ts (LOOP-567) and re-exported here for this module's consumers —
+// one definition, so the context bill and the push gate cannot disagree about the doc path.
+export { strategyDocRelPath } from "./default-branch-push.ts";
 
 // Extract the hubDoc slug from a docRef like { hubDoc: "design/my-design" }.
 // Returns null when the docRef is not a hubDoc form or the slug is empty.
@@ -402,7 +393,7 @@ export function tryResolveStrategyDocStat(cwd?: string, projectKey?: string, ws?
       if (typeof docRef === "string" && /linear\.app\/.*\/document\//.test(docRef)) {
         return { bytes: 0, lines: 0, label: "absent (linearDoc — readable only in a live session)" };
       }
-      const relPath = strategyDocRelPath(docRef);
+      const relPath = strategyDocRelPathLeaf(docRef);
       if (!relPath) continue;
       // Repo file — stat it from the first (primary) repo of this project
       const repos = reposOfProject(resolved, key);

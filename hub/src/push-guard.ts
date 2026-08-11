@@ -20,8 +20,9 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite"; // R5 — the read-only probe below must NOT create/migrate
 import { openDb } from "./db.ts";
 import { resolveHubDbPath } from "./workspace.ts";
-import { approvalsEnforced, loadWorkspace } from "./team-config.ts";
-import { workspaceRootForRepoDir, workspaceForRepoDir, resolveDefaultBranchForRepoDir } from "./repo-lock-path.ts";
+import { approvalsEnforced, loadWorkspace, inferProjectForRepo } from "./team-config.ts";
+import { workspaceRootForRepoDir, workspaceForRepoDir, resolveDefaultBranchForRepoDir, registeredRepoRefFor } from "./repo-lock-path.ts";
+import { defaultBranchPushVerdict, defaultBranchPushRefusalLine, docLandAllowlist, strategyDocRelPath, type DefaultBranchPushVerdict } from "./default-branch-push.ts";
 import { listApprovals, consultApproval, actionClasses } from "./approvals.ts"; // LOOP-394 — the record this guard consults
 
 export interface PushGuardFinding { sha: string; subject: string; ticket: string; state: string }
@@ -86,7 +87,10 @@ export interface PushGuardApproval {
  */
 export const APPROVALS_UNVERIFIABLE = "unverifiable";
 
-export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; governance: PushGuardGovernance[]; approvals: PushGuardApproval[]; unresolvedDefaultBranch?: string; note?: string }
+export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; governance: PushGuardGovernance[]; approvals: PushGuardApproval[]; unresolvedDefaultBranch?: string; note?: string;
+  // LOOP-567 — set ONLY when this push would put code on the default branch of a `landing:"pr"`
+  // repo. Present ⇒ refuse. Absent is the normal case for every branch push and for `doc-land`.
+  landing?: DefaultBranchPushVerdict }
 
 /** The key grammar for this class, in ONE place — the guard, the refusal, and the tests all read it. */
 export const pushApprovalKey = (branch: string, sha: string): string => `push:${branch}:${sha}`;
@@ -192,6 +196,32 @@ function readTeamBlockFor(repoDir: string) {
     const root = workspaceRootForRepoDir(repoDir);
     return root ? loadWorkspace(root).file.team : undefined;
   } catch { return undefined; }
+}
+
+/**
+ * LOOP-567 — the two config facts the default-branch class needs, read the same read-only way
+ * `readTeamBlockFor` reads the team block: the repo registry's `landing`, and the doc-landing
+ * allowlist of the project that OWNS this repo. Both come from one workspace load.
+ *
+ * Absent/unresolvable workspace ⇒ `{ landing: undefined }` ⇒ the verdict treats it as `direct` and
+ * permits. That is the same degrade every other class here takes for an unregistered repo, and it
+ * is the right direction: a repo this workspace does not know is not a repo whose landing mode this
+ * workspace may assert. `allow: null` is different — it means the repo IS registered under `pr` and
+ * its project has no repo-file strategyDoc, which the verdict fails CLOSED on.
+ */
+function readLandingFactsFor(repoDir: string): { landing: string | undefined; allow: { docRel: string; archivePrefix: string } | null } {
+  try {
+    const ws = workspaceForRepoDir(repoDir);
+    if (!ws) return { landing: undefined, allow: null };
+    const ref = registeredRepoRefFor(ws, repoDir);
+    if (!ref) return { landing: undefined, allow: null };
+    const landing = (ws.file.repos?.[ref] as { landing?: string } | undefined)?.landing;
+    const infer = inferProjectForRepo(ws, ref);
+    // An ambiguous owner is not a licence to guess which project's doc path is permitted — the
+    // carve-out simply does not resolve, and the verdict falls back to refusing code on `pr`.
+    const docRel = infer.kind === "unique" ? strategyDocRelPath(ws.file.projects[infer.key]?.strategyDoc) : null;
+    return { landing, allow: docRel ? docLandAllowlist(docRel) : null };
+  } catch { return { landing: undefined, allow: null }; }
 }
 
 // Extract the ticket id from a dev-loop/<id> branch name. Returns undefined for other branch shapes.
@@ -590,13 +620,36 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     }
   }
 
+  // LOOP-567 — the default-branch class. Measured on `range`, the set this push PUBLISHES, because
+  // the question is what would REACH the branch, not what a rebase dragged through the branch ref.
+  // One `git log --name-only` spawn over the same range the approvals gate used, so the class cannot
+  // disagree with the receipt about which commits were judged.
+  let landingVerdict: DefaultBranchPushVerdict | undefined;
+  if (range && br === defaultBranch) {
+    const facts = readLandingFactsFor(repoDir);
+    // Only pay for the path scan once the cheap config predicate says the mode can trip. A `direct`
+    // repo — the majority — spawns no extra git.
+    if ((facts.landing ?? "direct") === "pr") {
+      let changedPaths: string[] = [];
+      try {
+        changedPaths = [...new Set(git(["log", "--name-only", "--pretty=format:", range]).split("\n").map((f) => f.trim()).filter(Boolean))];
+      } catch {
+        // An unreadable range is NOT an empty one. The gate's own note records the same distinction
+        // for the commit classes; here it decides a push to the default branch, so it fails closed
+        // with a path set that cannot be mistaken for a doc landing.
+        changedPaths = ["<unreadable range>"];
+      }
+      landingVerdict = defaultBranchPushVerdict({ branch: br, defaultBranch, landing: facts.landing, changedPaths, allow: facts.allow }) ?? undefined;
+    }
+  }
+
   // The note still reports a first push, but it no longer says "nothing to compare" — that sentence
   // described the bug. It names the range the three commit-scanning classes actually used, because a
   // reader judging a clean verdict needs to know WHICH commits were clean (LOOP-528 AC1).
   const note = hasUpstream ? undefined
     : range ? `no upstream ${remote}/${br} — first push of this branch; gated over ${range}`
     : `no upstream ${remote}/${br} and no ${remote}/${defaultBranch} or local ${br} — the range could not be resolved, so findings/passengers/governance did NOT run`;
-  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}) };
+  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}), ...(landingVerdict ? { landing: landingVerdict } : {}) };
 }
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
@@ -687,9 +740,12 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     // is safe to print only because C2 made `approve` itself fire-refused (design §2). If a bypass
     // ever appears in this message, the guard has become a suggestion.
     for (const a of r.approvals) console.log(approvalRefusalLine(a));
+    // LOOP-567 — the refusal for code on a `landing:"pr"` default branch. Printed alongside the
+    // other classes rather than short-circuiting, so one run still reports everything it found.
+    if (r.landing) console.log(defaultBranchPushRefusalLine(r.landing));
     if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: origin/${r.unresolvedDefaultBranch} does not exist — passenger detection did NOT run (a safety gate must not pass silently)`);
     if (r.unknownRefs.length) console.log(`note: ${r.unknownRefs.length} ticket ref(s) not verifiable here (${r.unknownRefs.slice(0, 5).join(", ")}${r.unknownRefs.length > 5 ? ", …" : ""}) — no matching row in the local hub`);
-    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, or §17 governing-file edits aboard");
+    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.landing && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, or §17 governing-file edits aboard");
   }
-  process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || r.approvals.length || !!r.unresolvedDefaultBranch) ? 1 : 0);
+  process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || r.approvals.length || !!r.landing || !!r.unresolvedDefaultBranch) ? 1 : 0);
 }

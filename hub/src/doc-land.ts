@@ -11,25 +11,16 @@ import { dirname, join } from "node:path";
 import { resolveWorkspace, wsLockPath, resolveHubDbPath, resolveRepoFromCwd } from "./workspace.ts";
 import { effectiveRepo, inferProjectForRepo } from "./team-config.ts";
 import { pushGuard, approvalRefusalLine } from "./push-guard.ts";
+import { strategyDocRelPath } from "./default-branch-push.ts";
 import { withRepoLockPath } from "./locks.ts";
 
 function die(msg: string, code = 1): never {
   process.stderr.write(`doc-land: ${msg}\n`); process.exit(code);
 }
 
-// Extract a repo-relative path from a project's strategyDoc DocRef.
-// Returns null for non-file forms (hubDoc, linearDocument, Linear URL strings).
-function strategyDocRelPath(strategyDoc: unknown): string | null {
-  if (typeof strategyDoc === "string") {
-    if (/linear\.app\/.*\/document\//.test(strategyDoc)) return null;
-    return strategyDoc.trim() || null;
-  }
-  if (strategyDoc && typeof strategyDoc === "object") {
-    const p = (strategyDoc as { path?: unknown }).path;
-    if (typeof p === "string" && p.trim()) return p;
-  }
-  return null;
-}
+// strategyDocRelPath now lives in ./default-branch-push.ts — LOOP-567. This file's step-1 allowlist
+// and push-guard's default-branch refusal must resolve the SAME doc path or the guard refuses the
+// landing this assertion permits, so they read one definition rather than two agreeing copies.
 
 // Pull git's real diagnostics out of an execFileSync failure. git writes the actual reason
 // (conflict paths, rejection hints) to stderr/stdout; the thrown Error.message is only
