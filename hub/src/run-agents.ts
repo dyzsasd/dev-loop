@@ -1647,7 +1647,10 @@ async function main(): Promise<void> {
   const slots: Slot[] = opts.agents.map((agent, i) => {
     const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
     console.log(d.log);
-    return { agent, nextAt: d.nextAt, running: false };
+    // LOOP-459: a dry-run preview must print the resolved agent set immediately without waiting for
+    // the scheduler's cadence. Reset all slots to fire on the first tick so runAgent prints its dry-run output.
+    const nextAt = opts.dryRun ? bootNow - 1 : d.nextAt;
+    return { agent, nextAt, running: false };
   });
   let stopping = false;
   let fired = 0; // total fires started; --max-fires caps it (0 = unlimited)
@@ -2011,7 +2014,10 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const slots: Slot[] = opts.agents.map((agent, i) => {
     const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
     console.log(d.log);
-    return { agent, nextAt: d.nextAt, running: false };
+    // LOOP-459: a dry-run preview must print the resolved agent set immediately without waiting for
+    // the scheduler's cadence. Reset all slots to fire on the first tick so runAgent prints its dry-run output.
+    const nextAt = opts.dryRun ? bootNow - 1 : d.nextAt;
+    return { agent, nextAt, running: false };
   });
   let stopping = false;
   let fired = 0;
