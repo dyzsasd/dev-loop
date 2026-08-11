@@ -1658,6 +1658,27 @@ ACs did not reach is filed as LOOP-565.
   future switch, which is STANDING RULE 29 (a switch with no reader) turned around: a switch whose
   writer is un-gated is the same defect seen from the other end.
 
+- **A recorded condition is not a checked condition — pass 141 (2026-08-11).** Two mechanisms this
+  board relies on answer a *narrower* question than the one their reader assumes, and both failures
+  look identical: something states that a precondition holds, and nobody measured it.
+  **(a) An unblocked edge is not a met precondition.** §9c edge retirement answers whether the
+  *dependency* resolved; it says nothing about whether the ticket's own STATED preconditions are
+  true. LOOP-483 had its edge correctly cleared by qa and was still unpickable — its own AC1 half
+  two fails on the numbers it names (junior 6.3 s / qa 6.6 s / sweep 6.2 s medians). The standing
+  consequence: **where a ticket states its own preconditions, PM checks them at PROMOTION, not the
+  dev at pick time.** Corollary from LOOP-549 — a signal can move for a reason unrelated to the
+  finding: W18 now fires on the local-source-build axis while that ticket is about the published-
+  package axis, so reading one as the other would have closed it wrongly.
+  **(b) A comment naming an enforcer is a claim, not a fact.** Pass 139 ruled this for *rulings*; it
+  recurs in shipped *code*. LOOP-450 shipped W43 with a docblock stating its precedence over W16 was
+  "enforced by W16's emit gate — a dead owner never reaches W43". That gate is `if (alive) continue;`
+  in `ownerLiveness`: it suppresses **W16** for **live** owners and has no bearing on W43's path. The
+  two checks share no code path, so a dead owner's stale claim is reported by both — the exact
+  double-report the AC forbade — and no test ran the two codes together. A missing feature is
+  visible; a comment asserting a mechanism that does not act is load-bearing misinformation.
+  **Forcing number: three tickets held or failed on premise checks costing minutes each — LOOP-483
+  and LOOP-549 at promotion, LOOP-450 at verify — against a full fire downstream apiece.**
+
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
 becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verbatim in
