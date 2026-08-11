@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { deliveryProjects, effectiveProject, resolveTodoDepthCap, type Workspace, type WsWarning } from "./team-config.ts";
+import { deliveryProjects, decisionQueueProjects, effectiveProject, resolveTodoDepthCap, type Workspace, type WsWarning } from "./team-config.ts";
 import { AGENT_HANDLES } from "./seed.ts";
 import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP-329: the SAME tier predicate the queue uses
 import { BYTES_PER_TOKEN } from "./context-bill.ts"; // LOOP-267: one token model, shared with the bill
@@ -1524,7 +1524,11 @@ export function escapeSignalSourceRan(fires: { byAgent: Record<string, { fires: 
   return (fires.byAgent["ops"]?.fires ?? 0) > 0 || (fires.byAgent["communication"]?.fires ?? 0) > 0;
 }
 
-async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string, escapeSourceConfigured = true, nowMs = Date.now()): Promise<void> {
+// LOOP-534: exported for the regression suite. The decision queue's PROJECT SET is decided here, not
+// inside decisionQueue(db, pid) — which takes one already-resolved id and so cannot observe the scope
+// at all. Testing the scope through the CLI instead would need a spawn, and a spawned dev-loop inherits
+// the fire's env markers (LOOP-193); in-process against a fixture workspace is the honest reach.
+export async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<string, unknown>, boardDb: string, escapeSourceConfigured = true, nowMs = Date.now()): Promise<void> {
   if (ws.file.team.backend === "service" && existsSync(boardDb)) {
     const { openDb } = await import("./db.ts");
     const { findProject } = await import("./seed.ts");
@@ -1559,6 +1563,15 @@ async function collectBoardMetrics(ws: Workspace, windowMs: number, out: Record<
         if (m.historyIncomplete) historyIncompleteAny = true;
         if (m.historyFloor && (historyFloorMin === null || m.historyFloor < historyFloorMin)) historyFloorMin = m.historyFloor;
         sensitiveMistierCount += sensitiveMistier(db, pid).length;
+      }
+      // LOOP-534: the queue is built over its OWN project set, not the board panels' set. `_team`
+      // has no board panel (no config entry, so no KPIs to render and nothing to roll up) but it
+      // does hold operator items — a steward's approval request and a §9b team intake PM parked.
+      // Splitting the loops is what keeps those two facts independent: adding `_team` to the loop
+      // above would have put an empty panel in `out.board` and folded its counts into teamRollup.
+      for (const key of decisionQueueProjects(ws)) {
+        const pid = findProject(db, key);
+        if (!pid) continue;
         // LOOP-108: the wait is measured from the transition INTO the queue state, never from
         // tickets.updated_at — an unrelated later write (Sweep's own hygiene comment did exactly
         // this: 1h10m → 1m on LOOP-101) must not reset the operator's oldest-item age.
