@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline, spendCurvePoints, spendCurveDeadline, ratePerMsFor } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline, spendCurvePoints, spendCurveDeadline, ratePerMsFor, SPEND_CURVE_MIN_SAMPLES } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -1233,6 +1233,71 @@ try {
     const thin = perFireDeadline(CEIL, readFireRows(l461).filter((r) => r.model === "decay").slice(0, 4), "claude", "decay", NOW);
     ok(thin !== null && thin.basis === "linear",
       `LOOP-461: too few rows to shape a curve ⇒ the pre-change linear model, not a no-arm (got ${JSON.stringify(thin)})`);
+  }
+
+  // ── LOOP-565: the sample floor is not a cliff — the horizon FLOORS the deadline, it does not set it ──
+  // The population steps exactly one variable: how many priced fires a cheap profile has. `estimable`
+  // flips the moment one band reaches SPEND_CURVE_MIN_SAMPLES, so before this ticket the 5th priced fire
+  // moved the armed deadline from 800 min to 6.0 min — 133x tighter, with no change in spend. Every
+  // assertion below is BY VALUE and the two sides straddle the floor, so the discontinuity cannot come
+  // back without turning an arm red.
+  {
+    const MIN = 60_000;
+    const CEIL = 20.0;
+    // $0.15 per 6-minute fire = $1.50/hr. The $20 ceiling is 133 fires away; nothing about this profile
+    // is near the constraint the ceiling expresses.
+    let ledgerN = 0;
+    const cheap = (...runs: Array<[n: number, durMin: number]>) => {
+      const path = join(tmp, `l565-${ledgerN++}.jsonl`);
+      writeFileSync(path, runs.flatMap(([n, durMin], g) =>
+        Array.from({ length: n }, (_, i) => row({
+          ts: iso(NOW - DAY + (g * 1000 + i) * 1000), agent: "sd", project: "w", codingAgent: "claude", model: "cheap", exitCode: 0,
+          durationMs: durMin * MIN,
+          usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd: 0.15, currency: "USD" },
+        })),
+      ).join("\n") + "\n");
+      return readFireRows(path);
+    };
+
+    const below = perFireDeadline(CEIL, cheap([SPEND_CURVE_MIN_SAMPLES - 1, 6]), "claude", "cheap", NOW);
+    const at = perFireDeadline(CEIL, cheap([SPEND_CURVE_MIN_SAMPLES, 6]), "claude", "cheap", NOW);
+    ok(below !== null && below.basis === "linear" && Math.abs(below.deadlineMs / MIN - 800) < 1e-6,
+      `LOOP-565 AC3: one priced fire BELOW the sample floor arms 800 min on the linear model (got ${below === null ? "null" : `${below.basis} @ ${(below.deadlineMs / MIN).toFixed(1)}`})`);
+    ok(at !== null && Math.abs(at.deadlineMs / MIN - 800) < 1e-6,
+      `LOOP-565 AC1/AC3: AT the sample floor the deadline is still 800 min — a bound on SPEND, not on the profile's own ramp-up (was 6.0 min: got ${at === null ? "null" : `${at.basis} @ ${(at.deadlineMs / MIN).toFixed(1)}`})`);
+    ok(below !== null && at !== null && below.deadlineMs === at.deadlineMs,
+      `LOOP-565 AC3: crossing the sample floor is CONTINUOUS — the same population one fire apart arms the same deadline (got ${below === null ? "null" : below.deadlineMs} vs ${at === null ? "null" : at.deadlineMs})`);
+    // The horizon is still the floor, and the floor is still load-bearing: a longer support pushes the
+    // deadline out past the linear bound, which is the LOOP-557 behaviour this must not weaken.
+    const longSupport = perFireDeadline(CEIL, cheap([6, 6], [6, 900]), "claude", "cheap", NOW);
+    ok(longSupport !== null && longSupport.basis === "curve-horizon" && Math.abs(longSupport.deadlineMs / MIN - 900) < 1e-6,
+      `LOOP-565: where the horizon EXCEEDS the linear bound it still wins — the deadline never arms inside a region the curve measured under the ceiling (got ${longSupport === null ? "null" : `${longSupport.basis} @ ${(longSupport.deadlineMs / MIN).toFixed(1)}`})`);
+
+    // AC4 — the support's own provenance reaches the line the operator reads. `fires` counts every fire
+    // in the window, so it could never answer "how many observations stand behind this horizon".
+    const atRows = cheap([SPEND_CURVE_MIN_SAMPLES, 6]);
+    const pdCheap = profileDeadlines(atRows, CEIL, 7 * DAY, NOW).find((d) => d.model === "cheap");
+    ok(pdCheap?.curveSamples === SPEND_CURVE_MIN_SAMPLES && pdCheap.curveSupportMinMinutes === 6 && pdCheap.curveSupportMinutes === 6 && pdCheap.curveSupportThin === true,
+      `LOOP-565 AC4: the reporting surface carries the priced count, the span it covers, and that the span is one band wide (got ${JSON.stringify(pdCheap)})`);
+    const costLines565: string[] = [];
+    const origLog565 = console.log;
+    console.log = (...args: unknown[]) => costLines565.push(String(args[0] ?? ""));
+    try {
+      renderCost(
+        { windowMs: 7 * DAY, totalFires: SPEND_CURVE_MIN_SAMPLES, meteredFires: SPEND_CURVE_MIN_SAMPLES, overall: usageReport(atRows, 7 * DAY, { nowMs: NOW }).overall, byDimension: undefined },
+        undefined, undefined,
+        { ceilingUsd: CEIL, wallMinutes: 60, rows: profileDeadlines(atRows, CEIL, 7 * DAY, NOW) },
+      );
+    } finally { console.log = origLog565; }
+    const cheapLine = costLines565.find((l) => l.includes("claude/cheap"));
+    ok(cheapLine !== undefined && /5 priced fires spanning 6\.0–6\.0 min/.test(cheapLine) && /THIN SUPPORT/.test(cheapLine),
+      `LOOP-565 AC4: the cost line states the fires priced, the span they cover, and that the support is thin (got ${cheapLine ?? "NO LINE"})`);
+    // The control that keeps `curveSupportThin` from degenerating to always-true: the LOOP-557 fixture's
+    // own population spans 12–48 min, four band-widths apart, and must read NOT thin. Without this arm a
+    // predicate that flagged every profile would satisfy the assertion above.
+    const pdWide = profileDeadlines(readFireRows(join(tmp, "l461.jsonl")), CEIL, 7 * DAY, NOW).find((d) => d.model === "decay");
+    ok(pdWide?.curveSupportThin === false && pdWide.curveSamples === 24 && pdWide.curveSupportMinMinutes === 12,
+      `LOOP-565 AC4 control: a support spanning 12–48 min over 24 priced fires is NOT thin (got ${JSON.stringify(pdWide)})`);
   }
 
   // ── LOOP-102: W16's owned set matches what the routers actually serve ───────────────────────
