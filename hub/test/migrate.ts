@@ -89,7 +89,7 @@ const TICKETS_BEFORE = 4, COMMENTS_BEFORE = 2;
 
 // ── run the REAL migration via openDb() ──────────────────────────────────────
 const db = openDb(PATH);
-ok(uv(db) === 5, "DL-27/DL-52/DL-split/D5/D6: openDb migrated the v0 DB → user_version=5 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design' + v4 mirror_map.hub_kind+='doc' + v5 documents.archived)");
+ok(uv(db) === 6, "DL-27/DL-52/DL-split/D5/D6/LOOP-384: openDb migrated the v0 DB → user_version=6 (v1 state-widen + v2 channels.transport + v3 documents.kind+='design' + v4 mirror_map.hub_kind+='doc' + v5 documents.archived + v6 tickets.waiting_on)");
 ok(count(db, "tickets") === TICKETS_BEFORE && count(db, "comments") === COMMENTS_BEFORE, "DL-27: migration is lossless (ticket + comment row counts preserved)");
 // FK children kept: the DROP+RENAME (with foreign_keys OFF) left no dangling comment→ticket references.
 ok((db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length === 0, "DL-27: FK children kept — foreign_key_check finds no violations after the rebuild");
@@ -145,11 +145,40 @@ ok((db.prepare("SELECT archived FROM documents WHERE id='d0'").get() as { archiv
   "D6: the pre-v5 doc row backfilled to archived=0 (existing docs byte-for-byte visible)");
 ok((db.prepare("SELECT archived FROM documents WHERE id='dA'").get() as { archived: number }).archived === 0,
   "D6: a post-migration insert without the column defaults to archived=0");
+// LOOP-384 v6: tickets.waiting_on, DEFAULT 'human-decision' + a CHECK on the discriminator set.
+// WHICH PATH THIS COVERS, precisely — a v0 DB does NOT take the v6 ALTER. The v1 migration rebuilds
+// `tickets` (SQLite cannot ALTER a CHECK) and that rebuild already emits the waiting_on column, so by the
+// time v6 runs its `!columnExists(tickets, waiting_on)` guard is false and the ALTER is skipped. Mutation-
+// checked both ways: dropping the CHECK from the v6 ALTER leaves these green, dropping it from the v1
+// rebuild turns them red. So the arm asserted here is the REBUILD path.
+// The v6 ALTER path (a v5 DB widened in place) is therefore still uncovered by this fixture and needs a v5
+// one — recorded on LOOP-587 as remaining work rather than implied by a green run here.
+ok((db.prepare("PRAGMA table_info(tickets)").all() as { name: string }[]).some((c) => c.name === "waiting_on"),
+  "LOOP-384: the migrated tickets table carries waiting_on (v1 rebuild emits it; the v6 ALTER is guard-skipped for a v0 DB)");
+// Every migrated row reads 'human-decision' regardless of state — the rebuild copies the 14 v0 columns by
+// name and the new column takes its DEFAULT. Pinned deliberately: it means a Done row also reads
+// 'human-decision', so the column is state-dependent rather than self-describing. Noted on LOOP-384.
+ok((db.prepare("SELECT waiting_on FROM tickets WHERE id='T0'").get() as { waiting_on: string | null }).waiting_on === "human-decision",
+  "LOOP-384: a migrated pre-v6 ticket row reads waiting_on='human-decision' (the DEFAULT, applied to every row whatever its state)");
+{
+  // a post-migration insert that omits the column takes the DEFAULT (distinct from the NULL above).
+  db.prepare("INSERT INTO tickets(id,project_id,title,state,labels,related_to,created_by,created_at,updated_at) VALUES('WD','p','x','Todo','[]','[]','pm','t','t')").run();
+  ok((db.prepare("SELECT waiting_on FROM tickets WHERE id='WD'").get() as { waiting_on: string }).waiting_on === "human-decision",
+    "LOOP-384: a post-migration insert without the column defaults to waiting_on='human-decision'");
+  const insWaiting = (id: string, w: string): boolean => {
+    try { db.prepare("INSERT INTO tickets(id,project_id,title,state,labels,related_to,waiting_on,created_by,created_at,updated_at) VALUES(?,'p','x','Todo','[]','[]',?,'pm','t','t')").run(id, w); return true; }
+    catch { return false; }
+  };
+  ok(insWaiting("WA", "human-action") && insWaiting("WE", "external"),
+    "LOOP-384: the waiting_on CHECK accepts the whole discriminator set (human-action, external)");
+  ok(!insWaiting("WX", "nonsense"),
+    "LOOP-384: the waiting_on CHECK rejects a value outside the discriminator set ('nonsense') — widened, not open");
+}
 db.close();
 
-// ── idempotent re-open: a second openDb on the now-v5 DB is the fast-path no-op (no re-migrate, data intact) ──
+// ── idempotent re-open: a second openDb on the now-v6 DB is the fast-path no-op (no re-migrate, data intact) ──
 const db2 = openDb(PATH);
-ok(uv(db2) === 5 && count(db2, "tickets") === TICKETS_BEFORE + 1, "DL-27/DL-52/DL-split/D5/D6: re-opening a v5 DB is idempotent (still v5; the prior HB row persists, no double-migrate)");
+ok(uv(db2) === 6 && count(db2, "tickets") === TICKETS_BEFORE + 4, "DL-27/DL-52/DL-split/D5/D6/LOOP-384: re-opening a v6 DB is idempotent (still v6; the prior HB + waiting_on rows persist, no double-migrate)");
 ok((db2.prepare("SELECT hub_kind FROM mirror_map WHERE id='mD'").get() as { hub_kind: string }).hub_kind === "doc", "D5: the doc mapping row persists across the idempotent re-open");
 db2.close();
 
