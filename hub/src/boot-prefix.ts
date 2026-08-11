@@ -16,7 +16,7 @@ import { selfDriftLine, installedRootOf } from "./self-drift.ts"; // LOOP-249: d
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { parseConventions, parseSectionsLine, splitSkill, splitLines } from "./context-bill.ts";
+import { devInheritedSlices, parseConventions, parseSectionsLine, splitSkill, splitLines } from "./context-bill.ts";
 
 export interface BootCorpus {
   text: string;        // the full marker-wrapped block to append to the prompt
@@ -249,12 +249,19 @@ export function assembleBootCorpus(
     // missing ⇒ skip silently (the SKILL's pull-mode instruction still covers the fire).
     if (agent === "senior-dev" || agent === "junior-dev") {
       const devSkill = readFileSync(join(root, "skills", "dev-agent", "SKILL.md"), "utf8");
-      const b = devSkill.indexOf("<!-- ship-sequence:begin -->");
-      const e = devSkill.indexOf("<!-- ship-sequence:end -->");
-      if (b !== -1 && e > b) {
+      // LOOP-553: the tiers are told to run Step 0.5 "exactly as dev-agent spells out" — ship it,
+      // not just the ship sequence, or the instruction references text the corpus never carries.
+      // The extractor is shared with the bill (context-bill.ts) so shipped and billed cannot drift.
+      // The fire-start slice rides the SAME predicate that keeps §12c: a project with neither
+      // autoMerge nor release-pr prunes the pass from conventions, so it must not pay for the
+      // slice either (codex review, PR #313).
+      const fireStartActive = CONDITIONAL_SECTIONS["12c"].active(projectCfg, backend, repos, maxPerProject);
+      const slices = devInheritedSlices(devSkill).filter((sl) => sl.label !== "Step 0.5" || fireStartActive);
+      if (slices.length > 0) {
+        const what = slices.map((sl) => sl.label).join(" + ");
         parts.push(
-          "### skills/dev-agent/SKILL.md — Steps 4–6.5 + 7 + HARD LIMITS (your inherited ship sequence, §21c, pre-read)",
-          devSkill.slice(b + "<!-- ship-sequence:begin -->".length, e).trim(),
+          `### skills/dev-agent/SKILL.md — ${what} (your inherited fire-start + ship sequence, §21c, pre-read)`,
+          slices.map((sl) => sl.text).join("\n\n"),
         );
       }
     }
