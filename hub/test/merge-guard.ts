@@ -47,6 +47,11 @@ try {
   tk("MG-14", "In Progress", "junior-dev"); // LOOP-518 AC1/AC3: forge trip on In Progress (comment-only, stays In Progress)
   tk("MG-15", "In Progress", "junior-dev"); // LOOP-518 AC3: second forge trip on same In Progress (idempotency)
   tk("MG-16", "In Review", "senior-dev");   // Cross-check: In Review still demotes to Todo (baseline from LOOP-216)
+  // LOOP-587 fixture: In Review AND carrying a NON-DEFAULT waiting_on. The forge trip rewrites this row,
+  // so the column has to survive a round-trip it never explicitly mentions. Seeded with an explicit value
+  // (not the 'human-decision' DEFAULT) so that a write which drops the column is distinguishable from one
+  // that preserves it — against the DEFAULT the two are byte-identical and the assertion proves nothing.
+  conn.prepare("INSERT INTO tickets(id,project_id,title,state,assignee,priority,labels,related_to,waiting_on,created_by,created_at,updated_at) VALUES('MG-17','p','t-MG-17','In Review','senior-dev',0,'[]','[]','external','pm','t','t')").run();
 
   conn.close();
 
@@ -338,13 +343,13 @@ try {
   // ── LOOP-65: --apply path (§5.1 / Child 2) ───────────────────────────────────
 
   // Helper: read current ticket row from the hub DB
-  const readTicket = (id: string): { state: string; assignee: string | null; labels: string[] } | undefined => {
+  const readTicket = (id: string): { state: string; assignee: string | null; labels: string[]; waiting_on: string | null } | undefined => {
     const db = openDb(dbPath);
     try {
-      const row = db.prepare("SELECT state,assignee,labels FROM tickets WHERE id=?").get(id) as
-        { state: string; assignee: string | null; labels: string } | undefined;
+      const row = db.prepare("SELECT state,assignee,labels,waiting_on FROM tickets WHERE id=?").get(id) as
+        { state: string; assignee: string | null; labels: string; waiting_on: string | null } | undefined;
       if (!row) return undefined;
-      return { state: row.state, assignee: row.assignee, labels: JSON.parse(row.labels) as string[] };
+      return { state: row.state, assignee: row.assignee, labels: JSON.parse(row.labels) as string[], waiting_on: row.waiting_on };
     } finally { db.close(); }
   };
   const readComments = (id: string): string[] => {
@@ -628,6 +633,29 @@ try {
   });
   const mg16Row = readTicket("MG-16");
   ok(mg16Row?.state === "Todo", `LOOP-518 AC1 cross-check: In Review still demoted to Todo (got: ${mg16Row?.state}) — LOOP-216 AC3 unchanged`);
+
+  // ── LOOP-587: the forge trip's route-to-Todo write must round-trip EVERY stored column ──────────
+  //
+  // The defect this pins: applyTrip read the row with a hand-written 9-column SELECT and spread it into
+  // updateTicketRow, whose UPDATE writes 10. After LOOP-384 added tickets.waiting_on the tenth bind was
+  // `undefined` and node:sqlite threw "Provided value cannot be bound to SQLite parameter 10" — main was
+  // red on this suite. Two assertions, because the two failure modes are different and a fix for one can
+  // introduce the other: the write must HAPPEN (no throw), and it must not silently blank the column.
+  const mg17Trip = mergeGuard(repoDir, {
+    ticketId: "MG-17", dbPath, pr: 42, ghRepo: GHREPO, agentReviewers: [],
+    exec: makePrExec(prChangesRequested, gqlNoThreads),
+    apply: true,
+  });
+  ok(mg17Trip.applied?.action === "wrote",
+    `LOOP-587: a forge trip on a ticket carrying waiting_on completes the write (got: ${mg17Trip.applied?.action}) — pre-fix this threw at the parameter-10 bind`);
+  const mg17Row = readTicket("MG-17");
+  ok(mg17Row?.state === "Todo",
+    `LOOP-587: …and the routing actually landed — In Review → Todo (got: ${mg17Row?.state})`);
+  // The load-bearing one. Coercing the missing bind to null at the write site would satisfy the two above
+  // while quietly erasing the operator's park reason on every forge trip; this is the assertion that
+  // separates "read the column" from "default the column away".
+  ok(mg17Row?.waiting_on === "external",
+    `LOOP-587: …and waiting_on survives the rewrite unchanged (got: ${String(mg17Row?.waiting_on)}, expected 'external') — the row is carried forward, not defaulted`);
 
   // ── LOOP-123 regression: agentReviewers read from workspace config (not just injected opts) ─────
   // Verify the full path: `team set team.agentReviewers` writes config → merge-guard reads it without
