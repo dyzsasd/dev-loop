@@ -149,6 +149,16 @@ db.close();
     ins.run("i2", "already", "Already", "ALR", JSON.stringify({ hub: { transport: "daemon" } }), now);
     ins.run("i3", "partial", "Partial", "PRT", JSON.stringify({ hub: { note: "keep" } }), now);
     ins.run("i4", "bad", "Bad", "BAD", MALFORMED, now);
+    // Codex review, PR #321: valid JSON that json_set CANNOT traverse. Each returns the row unchanged
+    // while SQLite still counts it in `changes` — so a json_valid-only predicate reports the gate live
+    // over rows whose hub.transport was never set.
+    ins.run("i5", "arrayroot", "ArrayRoot", "ARR", "[1,2]", now);
+    ins.run("i6", "scalarroot", "ScalarRoot", "SCL", '"hello"', now);
+    ins.run("i7", "hubarray", "HubArray", "HBA", '{"keep":1,"hub":[]}', now);
+    ins.run("i8", "hubscalar", "HubScalar", "HBS", '{"keep":1,"hub":5}', now);
+    // ...and the one untraversable shape that is NOT a refusal: JSON null is absence, and the JS loop
+    // this replaced read it as absent, so refusing it would regress a row that used to seed.
+    ins.run("i9", "hubnull", "HubNull", "HBN", '{"keep":1,"hub":null}', now);
     db.close();
   }
   // The SHIPPED statement, called directly — not a copy of the SQL pasted into the test. A test that
@@ -157,7 +167,8 @@ db.close();
   const { changed, refused: bad } = seedOpApiGate(db);
   db.close();
 
-  ok(bad.length === 1 && bad[0] === "bad", `AC2: the unreadable row is NAMED for the operator, not parsed into {} (${JSON.stringify(bad)})`);
+  ok(bad.includes("bad") && [...bad].sort().join(",") === "arrayroot,bad,hubarray,hubscalar,scalarroot",
+    `AC2: every row this pass cannot safely merge is NAMED for the operator, not parsed into {} (${JSON.stringify([...bad].sort())})`);
   ok(rawSettings(dbPath, "bad") === MALFORMED,
     "AC2: bundle leaves the unreadable row BYTE-IDENTICAL — the old `catch { s = {} }` rewrote it as {\"hub\":{\"transport\":\"daemon\"}}, costing every other key in it");
   const sib = JSON.parse(rawSettings(dbPath, "sib") ?? "{}") as Record<string, unknown>;
@@ -166,7 +177,25 @@ db.close();
   const partial = JSON.parse(rawSettings(dbPath, "partial") ?? "{}") as { hub?: Record<string, unknown> };
   ok(partial.hub?.note === "keep" && partial.hub?.transport === "daemon",
     "AC1: an existing $.hub object is merged into, not replaced");
-  ok(changed === 2, `AC1: a row already on transport=daemon is not rewritten (changes=${changed}, expected 2)`);
+  ok(changed === 3, `AC1: a row already on transport=daemon is not rewritten (changes=${changed}, expected 3: sib, partial, hubnull)`);
+
+  // ── the false-success class (Codex review, PR #321) ─────────────────────────────────────────────
+  // The assertion that matters is that transport is SET, not that a row was counted: json_set returns
+  // an untraversable row unchanged AND SQLite counts it as changed, so counting alone reports success.
+  for (const k of ["arrayroot", "scalarroot", "hubarray", "hubscalar"]) {
+    ok(bad.includes(k), `AC2: '${k}' is valid JSON that json_set cannot traverse — REFUSED and named, never counted as seeded`);
+  }
+  ok(rawSettings(dbPath, "arrayroot") === "[1,2]" && rawSettings(dbPath, "scalarroot") === '"hello"',
+    "AC2: a non-object root is left byte-identical — parseSettingsJson refuses the same shape, so the two writers keep ONE policy");
+  ok(JSON.parse(rawSettings(dbPath, "hubarray") ?? "{}").keep === 1 && JSON.parse(rawSettings(dbPath, "hubscalar") ?? "{}").keep === 1,
+    "AC2: a row whose $.hub is a scalar/array keeps its other keys — refused, not flattened");
+  const hubNull = JSON.parse(rawSettings(dbPath, "hubnull") ?? "{}") as { keep?: number; hub?: Record<string, unknown> };
+  ok(hubNull.hub?.transport === "daemon" && hubNull.keep === 1,
+    "AC1: $.hub null is ABSENCE, not a refusal — normalized away and seeded, matching the JS loop's `s.hub ?? {}`");
+  for (const [k, r] of Object.entries({ sib: "sib", partial: "partial", hubnull: "hubnull" })) {
+    const t = (JSON.parse(rawSettings(dbPath, r) ?? "{}") as { hub?: { transport?: string } }).hub?.transport;
+    ok(t === "daemon", `AC1: every row counted in changes actually carries hub.transport=daemon ('${k}' → ${JSON.stringify(t)})`);
+  }
 }
 
 rmSync(tmp, { recursive: true, force: true });

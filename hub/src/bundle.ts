@@ -365,20 +365,34 @@ function gateForceReseed(
 // SQLite — there is no window to lose an update in, and no second JSON policy in JS. It creates the
 // intermediate `$.hub` object when absent and leaves every sibling key untouched.
 //
-// `json_valid` is the refusal (LOOP-368: a fire may not destroy operator data through any verb). The
-// old `catch { s = {} }` failed OPEN — one unparseable row was rewritten as
-// `{"hub":{"transport":"daemon"}}`, silently costing the operator every other key in it. Now a row
-// SQLite cannot read is left byte-identical and returned as `refused` for the caller to name. NULL is
-// not malformed ("absent" — COALESCE gives it `{}`); the empty string IS, matching readSettings.
+// The refusal is `MERGEABLE_SQL`, and `json_valid` alone is NOT enough (Codex review, PR #321).
+// LOOP-368: a fire may not destroy operator data through any verb — the old `catch { s = {} }` failed
+// OPEN, rewriting one unparseable row as `{"hub":{"transport":"daemon"}}` and costing the operator
+// every other key in it. But a row can be perfectly valid JSON and still be untraversable by this
+// path: a non-object root (`[1,2]`, `"str"`, `null`) or a `$.hub` that is already a scalar/array.
+// json_set returns those UNCHANGED — and SQLite still counts them in `changes`, so a `json_valid`-only
+// predicate reports "gate seeded, attach writes live" over rows where `hub.transport` was never set.
+// A false success is worse than the refusal it replaced, so those shapes are refused and NAMED too.
+//
+// `$.hub: null` is the one shape that is untraversable but NOT a refusal: JSON null is the absence of
+// a value, and the JS loop this replaced read it as absent (`s.hub ?? {}`). Refusing it would regress
+// a row that used to seed, so it is normalized away with json_remove before the set. This keeps ONE
+// policy for the column: `parseSettingsJson` refuses a non-object root in exactly the same way.
 //
 // Exported so its regression test drives THIS statement rather than a copy of it pasted into the
 // test: a test that re-declares the SQL it is checking cannot fail when the shipped SQL changes.
+const SETTINGS_SQL = "COALESCE(settings_json,'{}')";
+const MERGEABLE_SQL = `json_valid(${SETTINGS_SQL})
+  AND json_type(${SETTINGS_SQL}) = 'object'
+  AND (json_type(${SETTINGS_SQL}, '$.hub') IS NULL OR json_type(${SETTINGS_SQL}, '$.hub') IN ('object','null'))`;
 export function seedOpApiGate(db: DatabaseSync): { changed: number; refused: string[] } {
-  const refused = (db.prepare("SELECT key FROM projects WHERE json_valid(COALESCE(settings_json,'{}'))=0").all() as Array<{ key: string }>).map((r) => r.key);
+  const refused = (db.prepare(`SELECT key FROM projects WHERE NOT (${MERGEABLE_SQL})`).all() as Array<{ key: string }>).map((r) => r.key);
   const res = db.prepare(
-    `UPDATE projects SET settings_json = json_set(COALESCE(settings_json,'{}'), '$.hub.transport', 'daemon')
-       WHERE json_valid(COALESCE(settings_json,'{}'))
-         AND json_extract(COALESCE(settings_json,'{}'), '$.hub.transport') IS NOT 'daemon'`,
+    `UPDATE projects SET settings_json = json_set(
+         CASE WHEN json_type(${SETTINGS_SQL}, '$.hub') = 'null' THEN json_remove(${SETTINGS_SQL}, '$.hub') ELSE ${SETTINGS_SQL} END,
+         '$.hub.transport', 'daemon')
+       WHERE ${MERGEABLE_SQL}
+         AND json_extract(${SETTINGS_SQL}, '$.hub.transport') IS NOT 'daemon'`,
   ).run();
   return { changed: Number(res.changes), refused };
 }
