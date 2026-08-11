@@ -2,11 +2,17 @@
 // `dev-loop pause` and `dev-loop resume` — manage scheduler pause state.
 import { existsSync } from "node:fs";
 import { openDb } from "./db.ts";
-import { logEvent } from "./event-log.ts";
 import { tryResolveWorkspace } from "./workspace.ts";
+import { wsHubDb } from "./workspace.ts";
 import { readPause, writePause, clearPause, formatPause } from "./scheduler-pause.ts";
 
-function parseArgs(args: string[]): { action: string; reason?: string; until?: string } {
+interface ParsedArgs {
+  action: "pause" | "resume";
+  reason?: string;
+  until?: string;
+}
+
+function parseArgs(args: string[]): ParsedArgs {
   const action = args[0];
   if (action !== "pause" && action !== "resume") {
     console.error("usage: dev-loop pause --reason <text> [--until <iso>]");
@@ -14,7 +20,7 @@ function parseArgs(args: string[]): { action: string; reason?: string; until?: s
     process.exit(2);
   }
 
-  const result = { action };
+  const result: ParsedArgs = { action: action as "pause" | "resume" };
   if (action === "pause") {
     const reasonIdx = args.indexOf("--reason");
     if (reasonIdx === -1) {
@@ -45,7 +51,7 @@ function parseArgs(args: string[]): { action: string; reason?: string; until?: s
     }
   }
 
-  return result as any;
+  return result;
 }
 
 async function main(): Promise<void> {
@@ -55,7 +61,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const hubDbPath = ws.paths.hubDb;
+  const hubDbPath = wsHubDb(ws);
   if (!existsSync(hubDbPath)) {
     console.error(`dev-loop pause/resume: no hub.db at ${hubDbPath}`);
     process.exit(5);
@@ -70,13 +76,11 @@ async function main(): Promise<void> {
 
     if (parsed.action === "pause") {
       const state = writePause(db, actor, parsed.reason!, parsed.until || null);
-      logEvent(db, ws.file.team.key, "scheduler.pause", { actor, reason: parsed.reason });
       console.log(`dev-loop pause: ${formatPause(state)}`);
     } else {
       // resume
       const cleared = clearPause(db);
       if (cleared) {
-        logEvent(db, ws.file.team.key, "scheduler.resume", { actor });
         console.log("dev-loop resume: scheduler pause cleared");
       } else {
         console.log("dev-loop resume: no pause was active (idempotent)");
