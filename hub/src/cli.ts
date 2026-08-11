@@ -43,6 +43,8 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
   stop:             ["stop"],                      // stop the workspace's running scheduler via the run lock (pairs with `run --background`)
+  pause:            ["scheduler-pause-cli", "pause"],   // pause the scheduler — no new fires, existing ones continue
+  resume:           ["scheduler-pause-cli", "resume"],  // resume the paused scheduler
   "install-claude-plugin": ["install-claude-plugin"], // register a local npm-source marketplace so Claude Code loads the published plugin
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
@@ -210,7 +212,7 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "pr", "doc-land", "push", "settings",
+  "worktree", "merge-guard", "pr", "doc-land", "push", "settings", "pause", "resume",
   "approve", "revoke", "approvals", "request"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; settings reads/writes the projects row; the approvals verbs read/write the approvals table
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
