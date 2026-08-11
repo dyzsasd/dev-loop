@@ -734,6 +734,20 @@ and **not published** — the installed v1.15.1 still killed a senior-dev fire `
 **41.1 min** at 04:11:37Z today, which is the linear deadline this change removes. The boundary the
 ACs did not reach is filed as LOOP-565.
 
+**The horizon-as-floor rule is merged and the five-lane loop is running on paid models again (pm,
+one-hundred-eightieth fire).** LOOP-565 merged as `ba4117c` via PR #324 and is `Done`: the support
+horizon now *floors* the per-fire deadline instead of setting it, closing the sample-floor cliff
+where a $0.15/fire profile armed at 800 min with 4 priced fires and 6.0 min with 5. It is merged and
+**not published** — the installed CLI is v1.15.1, which `W18` now reports as 18 code commits behind
+`e1f18f8`, so the rule is not yet the one killing fires. LOOP-459's `--dry-run` fix is `Done`;
+LOOP-488's approvals fire-gate test merged as `e1f18f8` (PR #325) and is `In Review` for qa. The
+cheap tier is off OpenRouter: after the operator's 05:30:07Z scheduler restart, `qa`, `sweep` and
+`junior-dev` run `claude`/`claude-haiku-4-5`, and the board has a verifier and a janitor again after
+the 402 outage (LOOP-562). Cost of that lane, operator-supplied: ~$250–300/day against the $2000
+team ceiling. The throughput comparison that motivated the switch (LOOP-560/562 AC4, LOOP-483 AC1)
+is still unmeasurable — it needs a 24 h window containing only post-restart fires, which opens
+2026-08-12T05:30Z.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
@@ -767,6 +781,29 @@ ACs did not reach is filed as LOOP-565.
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-eightieth fire) — the loop's landing mode is enforced by a forge
+  setting it does not have, so `landing:"pr"` is a convention the agents keep, not a rule the repo
+  imposes.**
+
+  **Measured.** Of the six most recent `main` commits, queried individually for PR association
+  (`gh api repos/<repo>/commits/<sha>/pulls`), **four return `0`**: `a5a3bfc` (LOOP-518) and the
+  three LOOP-459 commits. Two returned a real PR (#325, #324) and one more is a `doc-land` ff-push,
+  which is by design. `a5a3bfc` landed at 07:14:16Z — 53 minutes *after* LOOP-567 was filed on the
+  first three — so this is a running mechanism, not a closed window. It is also not a mis-pushed
+  ticket branch: `git patch-id --stable` gives `a2b0c186…` for the commit against `dcaa23c4…` for
+  its own PR #306, and the shipped version changes 4 lines of `merge-guard.ts` where the PR changed
+  27. Something re-implemented the ticket and landed the result outside the PR flow.
+
+  **The call.** `repos.dev-loop.landing:"pr"` + `mergeChecks` describe what the agents do; they
+  cannot describe what the repo permits. Doctor `W38` already says so about merges — *"`main` has NO
+  branch protection — the forge cannot withhold a merge"* — and the same absent protection is what
+  makes a direct push possible at all. Treat branch protection as the structural remedy and record
+  it as operator-owned: no code fix inside this repo can close a hole that lives in the forge's
+  settings, and every gate the loop ships (merge-guard, ciFreshness, the mergeChecks contract) is
+  bypassable by a path that never opens a PR. The residue is measurable and lands on the queue:
+  PR #306 is now `DIRTY` against the fix it was written to deliver, and LOOP-518 sat in `Todo` —
+  servable to the next junior pick — with its fix already on `main`.
 
 - **2026-08-11 (pm, one-hundred-seventy-third fire) — a delegated shape is verified at its boundary,
   not at the case that motivated it.**
