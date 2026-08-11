@@ -146,6 +146,43 @@ try {
         `AC2 revoke under ${marker} left the approval GRANTED (state=${byKey(liveKey)?.state})`);
     }
 
+    // The shape the two loops above CANNOT reach — and the one where this gate is load-bearing.
+    //
+    // `run` defaults DEVLOOP_ACTOR to `senior-dev` whenever a marker is set, so on every input above
+    // the G2 human-grantor guard refuses the same call one check later. The two guards are redundant
+    // there: delete the fire gate and G2 still refuses, the store still does not change, and the only
+    // assertions that go red are the two about the refusal's WORDING — whose obvious repair is to
+    // edit the message. Here `operator` is a human (G2 passes) and a known actor (G1 passes), so the
+    // fire marker is the ONLY thing between this caller and a write, and the store can say so.
+    // Each sha below is this block's alone — every single-letter repeat a–f is a fixture elsewhere in
+    // the file, and a shared key would let one block's grant answer another block's revoke.
+    for (const [marker, pair] of [["DEVLOOP_DEV_SPLIT", "c0"], ["DEVLOOP_TEAM_SCOPE", "c1"]] as const) {
+      const humanKey = `push:main:${pair.repeat(20)}`;
+      const n = rows().length;
+
+      const granted = run(["approve", humanKey], marker, "operator");
+      ok(granted.code === 4,
+        `AC2 approve refuses a HUMAN identity under ${marker} with exit 4 (got ${granted.code}; ${granted.err.trim().slice(0, 160)})`);
+      ok(rows().length === n && !byKey(humanKey),
+        `AC2 approve as operator under ${marker} wrote NOTHING (${rows().length} rows, expected ${n}; row=${byKey(humanKey)?.state ?? "none"})`);
+
+      const ended = run(["revoke", liveKey], marker, "operator");
+      ok(ended.code === 4,
+        `AC2 revoke refuses a HUMAN identity under ${marker} with exit 4 (got ${ended.code}; ${ended.err.trim().slice(0, 160)})`);
+      ok(byKey(liveKey)?.state === "granted",
+        `AC2 revoke as operator under ${marker} left the approval GRANTED (state=${byKey(liveKey)?.state})`);
+    }
+
+    // The control those four arms require. Without it, "a human is refused inside a fire" is equally
+    // satisfied by refusing the operator EVERYWHERE — which would leave the surface unable to
+    // authorise anything at all, the same failure AC3 guards for `request`.
+    const controlKey = `push:main:${"c2".repeat(20)}`;
+    const control = run(["approve", controlKey], undefined, "operator");
+    ok(control.code === 0,
+      `AC2 control: the same operator identity with NO marker still grants (got ${control.code}; ${control.err.trim().slice(0, 160)})`);
+    ok(byKey(controlKey)?.state === "granted",
+      `AC2 control: and that grant actually landed (state=${byKey(controlKey)?.state})`);
+
     // The set the code gates on is the set this suite names — not two lists that can drift apart.
     ok([...FIRE_REFUSED_VERBS].sort().join(",") === "approve,revoke",
       `AC2 the fire-refused set is exactly {approve, revoke} (got {${[...FIRE_REFUSED_VERBS].sort().join(", ")}})`);
