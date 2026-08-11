@@ -44,7 +44,7 @@ export const BUDGETS: Record<string, Budget> = {
   "senior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "junior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "sweep-agent":         { lines: 220, bytes: 16 * 1024 },
-  "dev-agent":           { lines: 268, bytes: 19_968 }, // canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a); raised 260/18K → 266/19.5K for LOOP-277, then 266 → 268 lines for LOOP-553's fire-start marker pair (operator-applied §17, 2026-08-11) — headroom deliberately thin so regrowth trips here
+  "dev-agent":           { lines: 271, bytes: 20_224 }, // canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a); raised 260/18K → 266/19.5K for LOOP-277, then 266 → 268 lines for LOOP-553's fire-start marker pair, then 19_968 → 20_224 B for LOOP-580's Step 0 pr-arm clause (operator-applied §17, 2026-08-11) — headroom deliberately thin so regrowth trips here
   "reflect-agent":       { lines: 200, bytes: 14 * 1024 },
   "ops-agent":           { lines: 200, bytes: 14 * 1024 },
   "architect-agent":     { lines: 200, bytes: 14 * 1024 },

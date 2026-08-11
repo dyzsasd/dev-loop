@@ -50,7 +50,10 @@ On `service`, `dev-loop queue` returns your `inProgress` list; on `linear` query
 resolved `defaultBranch` (§19) for a shipped artifact: a commit referencing the ticket id, or a
 local commit when `autoPush:false`; in `git.landing:"pr"` (§12b) the artifact is instead an open
 or merged PR referencing the id (`gh pr list --search "<id>" --state all`) or the
-`dev-loop/<id>` branch on origin — not a defaultBranch commit. Artifact ⇒ the prior fire got
+`dev-loop/<id>` branch on origin — not a defaultBranch commit. **An unmerged `dev-loop/<id>`
+branch is finished HERE by pushing it and opening a PR (`dev-loop push` + `gh pr create`), never
+by the §7 merge-back — that sequence belongs to `landing:"direct"` only, and the shared
+checkout's `defaultBranch` is not a place work lands.** Artifact ⇒ the prior fire got
 far: verify and finish/hand it off rather than redoing it. None ⇒ orphan: unassign, reset to
 `Todo` (full label set, §10), comment `Orphaned — state cleared from a prior aborted run;
 re-queued.`, verify the move (§10). Unresolvable repo target in a multi-repo project ⇒ don't
