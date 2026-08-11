@@ -5,6 +5,9 @@
 // .mcp.json / daemon runfile / autostart/hook presence + a localhost /api/health GET) — still READ-ONLY (no writes,
 // no auto-create); daemon version skew (W28) is gating, the rest is non-fatal. See serviceReconcile. Library callers (init-service) skip it.
 import { NOT_SCRATCH_SQL } from "./sql-predicates.ts";
+// LOOP-481: the human-write gate, from the lean leaf — NEVER from daemon.ts, whose graph reaches zod
+// and which doctor (a boot-path verb) must not pay for. See project-settings.ts for why it lives there.
+import { humanWriteEnabled } from "./project-settings.ts";
 import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -350,7 +353,23 @@ export function nextStep(ws: Workspace | null, errors: WsError[], unseeded: stri
 // exists because an approval's `id` is a row uuid: `/ticket/<uuid>` would prescribe a 404, and the
 // operator rules on a request with a verb, not on the board. (WHICH surface can rule on a TICKET
 // while humanWrite is off is LOOP-481's subject, deliberately untouched here.)
-export function describeDecisionOldest(oldest: DecisionItem): { named: string; stateLabel: string; ruleOn: string } {
+/**
+ * LOOP-481 — `board` is REQUIRED, and deliberately so.
+ *
+ * `ruleOn` is the one action W20 and the NEXT line both prescribe (LOOP-393). For a ticket item that
+ * action used to be the board URL unconditionally — but the board's write forms are behind the
+ * per-project `humanWrite.enabled` gate, which is unset by default and unset on every project in this
+ * workspace. With it off the page renders zero `<form>`: doctor was telling the operator to go and
+ * rule somewhere that cannot rule.
+ *
+ * An optional parameter defaulting to the URL arm would have let any future caller silently keep that
+ * dead end, so the caller must state which board it is describing. The approval arm is untouched — it
+ * already prescribes a verb (`dev-loop approve`), which works either way.
+ */
+export function describeDecisionOldest(
+  oldest: DecisionItem,
+  board: { humanWrite: boolean; projectKey: string },
+): { named: string; stateLabel: string; ruleOn: string } {
   if (oldest.kind === "approval") {
     const on = oldest.ticketId ? `  (asked on ${oldest.ticketId})` : "";
     return {
@@ -360,10 +379,17 @@ export function describeDecisionOldest(oldest: DecisionItem): { named: string; s
     };
   }
   const title60 = oldest.title.length > 60 ? oldest.title.slice(0, 57) + "…" : oldest.title;
+  const url = `http://127.0.0.1:8787/ticket/${oldest.id}`;
   return {
     named: `${oldest.id} "${title60}"`,
     stateLabel: oldest.state === "In Review" ? "approve" : "blocked",
-    ruleOn: `http://127.0.0.1:8787/ticket/${oldest.id}`,
+    // Flag ON ⇒ byte-identical to what this has always emitted: the page can perform the action.
+    // Flag OFF ⇒ name a surface that can. The URL survives as an explicitly-labelled READ link, so
+    // the operator keeps the cheapest way to LOOK at the item without being sent there to ACT.
+    ruleOn: board.humanWrite
+      ? url
+      : `dev-loop comment add ${oldest.id} --body '<your ruling>' then dev-loop ticket update ${oldest.id} --state <state>`
+        + ` (read-only board: ${url} — to rule there instead: dev-loop settings set humanWrite.enabled true --project ${board.projectKey})`,
   };
 }
 
@@ -382,21 +408,27 @@ export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string;
       // LOOP-393: the queue now holds two arms (tickets ∪ pending approval requests), so an item's
       // wait comes from decisionItemEnteredAt — the ledger read for a ticket, requested_at for a
       // request — and both are counted here. A queue holding ONLY requests is not an empty queue.
-      const allItems: Array<{ item: DecisionItem; enteredAt: string }> = [];
+      // LOOP-481: each item carries the project it came from. `humanWrite.enabled` is PER-PROJECT, so
+      // the arm W20 prescribes has to be decided from the OLDEST item's own project — a workspace can
+      // hold one project with the board writable and another without.
+      const allItems: Array<{ item: DecisionItem; enteredAt: string; pid: string; key: string }> = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findHubProject(db, key);
         if (!pid) continue;
         for (const t of decisionQueue(db, pid) as DecisionItem[]) {
-          allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t) });
+          allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t), pid, key });
         }
       }
       if (allItems.length > 0) {
         allItems.sort((a, b) => a.enteredAt < b.enteredAt ? -1 : a.enteredAt > b.enteredAt ? 1 : 0);
-        const { item: oldest, enteredAt: oldestEnteredAt } = allItems[0];
+        const { item: oldest, enteredAt: oldestEnteredAt, pid: oldestPid, key: oldestKey } = allItems[0];
         const ageMs = Date.now() - Date.parse(oldestEnteredAt);
         const h = Math.floor(ageMs / 3_600_000);
         const ageStr = h >= 48 ? `${Math.floor(h / 24)}d` : h >= 1 ? `${h}h` : `${Math.max(1, Math.floor(ageMs / 60_000))}m`;
-        const { named, stateLabel, ruleOn } = describeDecisionOldest(oldest);
+        const { named, stateLabel, ruleOn } = describeDecisionOldest(oldest, {
+          humanWrite: humanWriteEnabled(db, oldestPid),
+          projectKey: oldestKey,
+        });
         const noCommsNote = !ws.file.team.comms?.webhookEnv
           ? " — no out-of-band escalation path (no team.comms): these surface only here and in `dev-loop metrics`, never as a reminder."
           : "";
