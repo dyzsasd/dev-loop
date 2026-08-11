@@ -334,6 +334,22 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   came back and drained it) and promoted LOOP-547 + LOOP-388 into the two slots, restoring 10/10. The
   single P1 now in `Todo` is that promotion, not a preemption: the mechanism is unchanged, only its
   input was.
+  **Pass 133 (2026-08-11T02:55Z) measures the half pass 123 did not.** "The executor tier is live
+  again" was established on execution and never tested against delivery, and the two are separate
+  facts. Over the 24 h to 02:55Z both tiers ran the same board: **senior-dev closed 27 tickets to
+  `Done`, junior-dev 1** (LOOP-365), on 50 vs 110 fires at median durations **873 s vs 6 s**.
+  junior-dev holds **10** tickets `In Progress` — LOOP-359/384/388/447/459/502/517/518/519/547, ages
+  40–372 min — which equals its entire unblocked `Todo` depth, so the tier carries 20 tickets at a
+  delivered rate of one per day. **207 of 215** logged junior fires exit 0. One mechanism is observed
+  at rung 3 in `runner-logs/junior-dev.log`: working LOOP-447 the fire staged 275 insertions,
+  confirmed them with `git diff --cached --stat`, then emitted its model's native tool-call markup as
+  assistant text in place of a tool call, ended the step `reason: "stop"`, and exited 0 — the work
+  remains uncommitted in the worktree and the ticket remains claimed (16 such events in the current
+  rotation, 6 in `qa.log`). That is one mechanism; the full 1-vs-27 gap is not attributed to it
+  (原因未查明). The lever is `team.agents.junior-dev.model`, a config and spend decision outside PM's
+  authority, so **LOOP-560** carries it to the operator (`Human-Blocked`, P1) with the options and a
+  re-measurement AC. Consequence for this board: ~60 of 72 `Backlog` tickets are junior-tier, and
+  their promotion gate opens only as junior delivers.
 - **The board's write surface has a supported switch (LOOP-479, `6b451ed`, verified Done
   2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
