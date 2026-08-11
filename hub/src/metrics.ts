@@ -126,6 +126,19 @@ const median = (xs: number[]): number | null => {
   return s[Math.floor(s.length / 2)];
 };
 
+// Linear-interpolated quantile (LOOP-461). `median` above takes the upper of two middles rather than
+// interpolating, so it is NOT quantile(xs, 0.5); both are kept because the rate median is a shipped,
+// tested derivation and changing its tie-break would move every deadline for a reason unrelated to
+// this ticket.
+const quantile = (xs: number[], q: number): number | null => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const i = (s.length - 1) * Math.min(1, Math.max(0, q));
+  const lo = Math.floor(i);
+  const hi = Math.min(lo + 1, s.length - 1);
+  return s[lo] + (s[hi] - s[lo]) * (i - lo);
+};
+
 export function fireMetrics(
   ledgerPath: string, windowMs: number, nowMs = Date.now(),
   // LOOP-267 — the modeled per-fire context per agent, for `amplification`. Injected rather than
@@ -517,22 +530,125 @@ export function fireRowsFromEvents(db: any, projectId: string, sinceIso: string)
 export const DEFAULT_PER_FIRE_USD = 12.00;
 export const RATE_WINDOW_MS = 7 * 86_400_000; // window for the per-profile $/ms median
 
+// ─── the spend curve (LOOP-461) — what replaced `ceiling / medianRate` ────────
+// `ceiling / ratePerMs` is a LINE THROUGH THE ORIGIN whose slope is one median $/ms taken across every
+// duration. That assumes a fire bills at a constant rate for its whole life. It does not — spend is
+// front-loaded (boot corpus, the opening reads) and the marginal rate decays, so the line over-predicts a
+// long fire's spend and arms the kill far earlier than the ceiling warrants.
+//
+// MEASURED, this workspace's ledger, 7d to 2026-08-10, profile claude/claude-opus-5, 220 priced rows —
+// median $/hr by duration band (the decay, and the reason one median cannot stand in for all of them):
+//
+//   0-10 min  n= 11  $31.3/hr      30-45 min  n= 27  $19.9/hr
+//   10-20 min n=123  $30.1/hr      45-90 min  n=  6  $ 5.7/hr
+//   20-30 min n= 53  $27.7/hr
+//
+// THE MODEL. Each finished fire contributes ONE observation of the cumulative-spend curve: it ran D and
+// billed C, so `S(D) = C`. The cloud of (D, C) points therefore estimates S directly, with no rate
+// assumption at all. So: at candidate elapsed time t, take the q-quantile of C over same-profile rows whose
+// duration is NEAR t (a multiplicative band), make the result non-decreasing in t by running maximum
+// (cumulative spend cannot fall as a fire keeps running — this is also what stops a sparse late band from
+// dragging the curve down), and arm at the FIRST t whose estimate reaches the ceiling.
+//
+// WHICH QUANTILE, AND WHY IT IS STATED RATHER THAN TUNED. The deadline bounds a p90-expensive fire, not the
+// most expensive one imaginable. On the measured ledger the ceiling ($20) sits at the 99.5th percentile of
+// spend — ONE row in 220 — and a rule fitted to that single point arms at 28 min for the 219 fires that
+// never approach it. Above ~p95 the estimate is 1-2 observations, i.e. noise. p90 is the highest quantile
+// this sample size actually estimates.
+//
+// WHAT THE MODEL CANNOT DO, measured rather than assumed: duration explains only R²=0.30 of spend variance
+// (corr 0.548, n=220), and within the single 30-45 min band observed cost runs $5.39 → $12.21 → $26.03.
+// Two fires with identical elapsed time differ 2.1x in spend, so NO wall-clock deadline separates them. A
+// deadline is a distributional bet on the profile, never a measurement of the running fire; the honest
+// bound on one fire's spend is the daily ceiling plus the wall.
+export const SPEND_CURVE_QUANTILE = 0.90;      // the fire this deadline bounds: p90-expensive, stated not tuned
+export const SPEND_CURVE_BAND = 1.5;           // "near t" = t/1.5 .. t*1.5 (multiplicative — bands scale with t)
+export const SPEND_CURVE_MIN_SAMPLES = 5;      // under this a band is an anecdote, not a quantile
+export const SPEND_CURVE_STEP_MS = 60_000;     // 1-minute scan grid
+export const SPEND_CURVE_HORIZON_MS = 4 * 3_600_000; // scan out to 4h — well past any fire wall
+
+// The population the curve is built from, and the defence AC2 asks for.
+// INCLUDED: watchdog-killed rows whose cost was actually metered. LOOP-445 excluded every killed row from
+// the RATE median, correctly: its quotient reads as "$/ms of completed work", and a killed fire completed
+// none. But this curve asks a different question — "what had a fire of this profile billed by elapsed time
+// t?" — and for THAT a killed fire's (duration, cost) pair is an exact observation, not a truncated one.
+// The fire really did run 42.8 min and really was billed $17.21. Excluding those rows is precisely the
+// selection bias this ticket names: it leaves the sample made only of fires SHORT enough never to be
+// killed, and then extrapolates it over the long fires it kills.
+// EXCLUDED: rows with cost <= 0. On this ledger all 33 zero-cost claude/claude-opus-5 rows are truncations
+// where the provider never billed (28 exit-126, 5 exit-1), so a 0 there is MISSING DATA, not a $0 fire;
+// admitting them would pull every band's quantile toward zero and push the deadline out for a reason with
+// no billing content.
+export function spendCurvePoints(
+  rows: FireRow[], codingAgent: string | null | undefined, model: string | null | undefined,
+  windowMs: number, nowMs: number,
+): Array<{ durationMs: number; costUsd: number }> {
+  const cutoff = nowMs - windowMs;
+  const key = `${codingAgent ?? ""}/${model ?? ""}`;
+  const out: Array<{ durationMs: number; costUsd: number }> = [];
+  for (const r of rows) {
+    const t = Date.parse(r.ts);
+    if (!Number.isFinite(t) || t < cutoff || t > nowMs) continue;   // LOOP-314: closed era, both bounds
+    if (`${r.codingAgent ?? ""}/${r.model ?? ""}` !== key) continue;
+    const c = r.usage?.costUsd;
+    if (typeof c !== "number" || !(c > 0)) continue;
+    if (typeof r.durationMs !== "number" || !(r.durationMs > 0)) continue;
+    out.push({ durationMs: r.durationMs, costUsd: c });
+  }
+  return out;
+}
+
+// Scan the curve for the ceiling crossing. `estimable` is the load-bearing field: it separates "this
+// profile's observed spend never reaches the ceiling inside 4h" (estimable, deadlineMs null — the ceiling
+// is not binding and the wall owns the fire) from "there is not enough history to say" (not estimable —
+// the caller falls back to the linear model rather than silently arming nothing). Without that split the
+// two collapse into one silent no-arm, which is the failure mode this ticket's AC3 exists to forbid.
+export function spendCurveDeadline(
+  ceilingUsd: number, points: Array<{ durationMs: number; costUsd: number }>,
+): { deadlineMs: number | null; estimable: boolean; peakUsd: number } {
+  let running = 0;
+  let estimable = false;
+  let deadlineMs: number | null = null;
+  for (let t = SPEND_CURVE_STEP_MS; t <= SPEND_CURVE_HORIZON_MS; t += SPEND_CURVE_STEP_MS) {
+    const band: number[] = [];
+    for (const p of points)
+      if (p.durationMs >= t / SPEND_CURVE_BAND && p.durationMs <= t * SPEND_CURVE_BAND) band.push(p.costUsd);
+    if (band.length >= SPEND_CURVE_MIN_SAMPLES) {
+      estimable = true;
+      const q = quantile(band, SPEND_CURVE_QUANTILE);
+      if (q != null && q > running) running = q;               // non-decreasing: spend cannot fall with time
+    }
+    if (deadlineMs === null && running >= ceilingUsd) deadlineMs = t;
+  }
+  return { deadlineMs, estimable, peakUsd: running };
+}
+
 export function perFireDeadline(
   ceilingUsd: number | null,
   rows: FireRow[] | null,
   codingAgent: string | null | undefined,
   model: string | null | undefined,
   nowMs: number,
-): { deadlineMs: number; ratePerMs: number } | null {
+): { deadlineMs: number; ratePerMs: number; basis: "spend-curve" | "linear" } | null {
   if (ceilingUsd == null || !(ceilingUsd > 0)) return null;   // unset/invalid => no watchdog
   try {
+    // `ratePerMs` stays the MEASURED $/ms either way: the kill message and `dev-loop cost` report the rate
+    // that was observed, which is a fact about the profile, not an artifact of whichever model set the
+    // deadline. Only the deadline itself changes model.
     const ratePerMs = ratePerMsFor(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs);
+    const curve = spendCurveDeadline(ceilingUsd, spendCurvePoints(rows ?? [], codingAgent, model, RATE_WINDOW_MS, nowMs));
+    if (curve.estimable) {
+      if (curve.deadlineMs === null) return null;              // ceiling not reached inside 4h ⇒ the wall owns it
+      return { deadlineMs: Math.max(1, curve.deadlineMs), ratePerMs, basis: "spend-curve" };
+    }
+    // Too little history to shape a curve ⇒ the pre-LOOP-461 linear model, unchanged. It is the conservative
+    // one (it over-predicts long-fire spend, so it arms EARLY), which is the right default while unknown.
     const budgetMs = ceilingUsd / ratePerMs;                  // ms of runtime whose estimated spend == the ceiling
     // Bounds are deliberately ASYMMETRIC. Past the 32-bit setTimeout limit (LOOP-260) the ceiling is
     // unreachable inside any real fire, so nothing arms and the wall timeout owns it. Below 1ms it
     // CLAMPS rather than disarming: that ceiling is crossed instantly, so killing at once IS its meaning.
     if (!Number.isFinite(budgetMs) || budgetMs > 2_147_483_647) return null;
-    return { deadlineMs: Math.max(1, budgetMs), ratePerMs };
+    return { deadlineMs: Math.max(1, budgetMs), ratePerMs, basis: "linear" };
   } catch { return null; }                                    // any read error => fail open, never break a launch
 }
 
@@ -542,7 +658,11 @@ export function perFireDeadline(
 // here from rows that merely looked priced, using a predicate the rate derivation did not share: a profile
 // whose only priced rows were watchdog-killed contributed zero samples to the median (they are truncated, not
 // rates) yet still satisfied this count, so a hardcoded fallback deadline was displayed as data-derived.
-export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number }
+// LOOP-461 — `basis` names WHICH model set deadlineMinutes, and `curvePeakUsd` is the spend curve's plateau.
+// Together they answer the question a bare "never" cannot: a null deadline under basis "spend-curve" with a
+// peak below the ceiling means the ceiling is NOT BINDING for this profile (its p90 fire never reaches it),
+// which is a different fact from a rate too small to arm inside the timer limit.
+export interface ProfileDeadline { codingAgent: string; model: string; usdPerHour: number; deadlineMinutes: number | null; rateMeasured: boolean; fires: number; basis: "spend-curve" | "linear"; curvePeakUsd: number | null }
 export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, windowMs: number, nowMs: number): ProfileDeadline[] {
   const cutoff = nowMs - windowMs;
   const seen = new Map<string, { codingAgent: string; model: string; fires: number }>();
@@ -563,6 +683,11 @@ export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, win
     // so the label can never describe a different number than the one printed beside it.
     const basis = ratePerMsBasis(rows, e.codingAgent, e.model, RATE_WINDOW_MS, nowMs);
     const ratePerMs = d?.ratePerMs ?? basis.ratePerMs;
+    // The curve is re-derived rather than read off `d` because `d` is null in exactly the case worth
+    // reporting — the ceiling the curve never reaches — and a null cannot carry its own peak.
+    const curve = ceilingUsd != null && ceilingUsd > 0
+      ? spendCurveDeadline(ceilingUsd, spendCurvePoints(rows, e.codingAgent, e.model, RATE_WINDOW_MS, nowMs))
+      : null;
     out.push({
       codingAgent: e.codingAgent || "(unset)",
       model: e.model || "(cli default)",
@@ -570,6 +695,8 @@ export function profileDeadlines(rows: FireRow[], ceilingUsd: number | null, win
       deadlineMinutes: d ? d.deadlineMs / 60_000 : null,
       rateMeasured: basis.measured,
       fires: e.fires,
+      basis: d?.basis ?? (curve?.estimable ? "spend-curve" : "linear"),
+      curvePeakUsd: curve?.estimable ? curve.peakUsd : null,
     });
   }
   return out.sort((a, b) => b.fires - a.fires);
@@ -1455,8 +1582,15 @@ export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?:
   if (deadlines && deadlines.rows.length) {
     console.log(`  per-fire ceiling: $${deadlines.ceilingUsd.toFixed(2)} — the deadline it ARMS, by profile:`);
     for (const d of deadlines.rows) {
-      const mins = d.deadlineMinutes === null ? "never (beyond the timer limit)" : `${d.deadlineMinutes.toFixed(1)} min`;
-      const basis = d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile";
+      // LOOP-461 — "never" had ONE wording for two different facts. Under the spend curve a null deadline
+      // means the profile's p90 fire never reaches the ceiling (the ceiling is not binding; the wall owns
+      // the fire) — that must not print as the timer-limit case, which is what "beyond the timer limit"
+      // names. The peak is quoted so the operator can see how far under the ceiling the curve plateaus.
+      const mins = d.deadlineMinutes !== null ? `${d.deadlineMinutes.toFixed(1)} min`
+        : d.basis === "spend-curve" && d.curvePeakUsd !== null
+          ? `never — p90 spend plateaus at $${d.curvePeakUsd.toFixed(2)}, under the ceiling (not binding; the wall bounds this profile)`
+          : "never (beyond the timer limit)";
+      const basis = `${d.basis === "spend-curve" ? "spend curve p90" : "linear rate"}, ${d.rateMeasured ? "measured" : "FALLBACK rate — no usable rate sample for this profile"}`;
       // AC3: when the budget deadline lands inside the wall timeout, the ceiling — not fireTimeout —
       // is what actually bounds the fire. Legitimate, but it must be legible.
       const undercuts = d.deadlineMinutes !== null && deadlines.wallMinutes > 0 && d.deadlineMinutes < deadlines.wallMinutes

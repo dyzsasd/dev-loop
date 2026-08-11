@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline, spendCurvePoints, spendCurveDeadline, ratePerMsFor } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -1098,6 +1098,97 @@ try {
     const enforced = perFireDeadline(12.0, rows297, "claude", "slow", NOW);
     ok(enforced !== null && Math.abs(enforced.deadlineMs / 60_000 - slow!.deadlineMinutes!) < 1e-9,
       "LOOP-297 AC2: the printed deadline equals perFireDeadline()'s own output");
+    ok(enforced !== null && enforced.basis === "linear",
+      "LOOP-461: one row per profile cannot shape a curve, so the linear model still owns this fixture");
+  }
+
+  // ── LOOP-461: the deadline follows the observed spend CURVE, not one median rate ────────────
+  // The fixture carries BOTH populations the ticket names, in one ledger, so every assertion below is
+  // a comparison rather than a single number: short/dense fires (the sample the shipped model was built
+  // from) and long/sparse ones (the population it actually kills).
+  {
+    const MIN = 60_000;
+    const l461 = join(tmp, "l461.jsonl");
+    const fire = (model: string, costUsd: number, durMin: number, exitCode = 0, n = 1) =>
+      Array.from({ length: n }, (_, i) => row({
+        ts: iso(NOW - DAY + i * 1000), agent: "sd", project: "w", codingAgent: "claude", model, exitCode,
+        durationMs: durMin * MIN,
+        usage: { source: "p", inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null, costUsd, currency: "USD" },
+      }));
+    writeFileSync(l461, [
+      // "decay": 12 fires bill $8 in 12 min ($40/hr); 12 more bill $12 in 48 min ($15/hr). Nothing
+      // reaches the $20 ceiling at ANY duration — which is the whole point.
+      ...fire("decay", 8.0, 12, 0, 12),
+      ...fire("decay", 12.0, 48, 0, 12),
+      // "runaway": 8 fires bill $22 in 10 min. The ceiling IS reached, early.
+      ...fire("runaway", 22.0, 10, 0, 8),
+      // "killedonly": the ONLY long rows are watchdog-killed with a REAL metered cost, plus one
+      // unmetered $0 kill. AC2's population question, isolated.
+      ...fire("killedonly", 3.0, 8, 0, 6),
+      ...fire("killedonly", 17.0, 40, 126, 6),
+      ...fire("killedonly", 0, 40, 126, 6),
+    ].join("\n") + "\n");
+    const rows461 = readFireRows(l461);
+    const CEIL = 20.0;
+
+    // AC1 — the shipped linear model arms this profile at 30 min; the curve does not arm at all, because
+    // no fire of this profile has EVER billed $20 at any observed duration. Both numbers are asserted, so
+    // the test states the change rather than only the new value.
+    const rate = ratePerMsFor(rows461, "claude", "decay", 7 * DAY, NOW);
+    ok(Math.abs(CEIL / rate / MIN - 30) < 1e-6,
+      `LOOP-461 AC1 control: the pre-change linear model arms "decay" at 30 min (got ${(CEIL / rate / MIN).toFixed(2)})`);
+    const decay = perFireDeadline(CEIL, rows461, "claude", "decay", NOW);
+    ok(decay === null,
+      `LOOP-461 AC1: the spend curve does not arm a profile whose p90 spend never reaches the ceiling (got ${JSON.stringify(decay)})`);
+    const decayCurve = spendCurveDeadline(CEIL, spendCurvePoints(rows461, "claude", "decay", 7 * DAY, NOW));
+    ok(decayCurve.estimable && decayCurve.deadlineMs === null && Math.abs(decayCurve.peakUsd - 12) < 1e-9,
+      `LOOP-461 AC4: the no-arm is REPORTED as an estimable curve plateauing at $12, never as a silent disarm (got ${JSON.stringify(decayCurve)})`);
+    const pd461 = profileDeadlines(rows461, CEIL, 7 * DAY, NOW);
+    const pdDecay = pd461.find((d) => d.model === "decay");
+    ok(pdDecay?.basis === "spend-curve" && pdDecay.deadlineMinutes === null && Math.abs((pdDecay.curvePeakUsd ?? -1) - 12) < 1e-9,
+      "LOOP-461 AC4: the reporting surface carries the model that set the deadline and the curve's plateau");
+
+    // AC3 — the negative control, and the assertion that makes AC1 mean something: a population that
+    // GENUINELY runs away is still killed, and killed early. Without this arm, "no more false kills" and
+    // "the watchdog is off" are the same observation.
+    const runaway = perFireDeadline(CEIL, rows461, "claude", "runaway", NOW);
+    ok(runaway !== null && runaway.basis === "spend-curve" && runaway.deadlineMs / MIN === 7,
+      `LOOP-461 AC3: a runaway population arms at 7 min — the first grid minute whose band reaches the 10-min rows (got ${runaway === null ? "null" : runaway.deadlineMs / MIN})`);
+    ok(runaway !== null && runaway.deadlineMs < 60 * MIN,
+      "LOOP-461 AC3: the runaway deadline is well inside the 60-min wall");
+
+    // AC2 — the population. A metered watchdog kill is an EXACT observation of spend-at-elapsed-time, so
+    // it belongs in the curve (LOOP-445 excluded it from the RATE, a different question). An unmetered
+    // $0 kill is missing data and must not be admitted.
+    const pts = spendCurvePoints(rows461, "claude", "killedonly", 7 * DAY, NOW);
+    ok(pts.filter((p) => p.costUsd === 17 && p.durationMs === 40 * MIN).length === 6,
+      "LOOP-461 AC2: metered watchdog-killed rows ARE in the curve's population");
+    ok(pts.every((p) => p.costUsd > 0),
+      "LOOP-461 AC2: unmetered $0 rows are NOT — a 0 there is missing data, not a $0 fire");
+    const killedCurve = spendCurveDeadline(CEIL, pts);
+    ok(Math.abs(killedCurve.peakUsd - 17) < 1e-9,
+      `LOOP-461 AC2: excluding the killed rows would cap this profile's curve at $3 — it reaches $17 (got ${killedCurve.peakUsd})`);
+    // The bias, stated as a comparison: the shipped rate derivation drops every killed row, so this
+    // profile's long half is invisible to it.
+    const ptsNoKill = spendCurvePoints(
+      rows461.filter((r) => r.exitCode !== 126), "claude", "killedonly", 7 * DAY, NOW);
+    ok(ptsNoKill.length === 6 && ptsNoKill.every((p) => p.durationMs === 8 * MIN),
+      "LOOP-461 AC2: without killed rows the sample IS the short-fire population — the selection bias, shown");
+
+    // Monotonicity: cumulative spend cannot fall as a fire keeps running, so a sparse cheap late band
+    // must never pull the curve back under a ceiling an earlier band already crossed.
+    const mono = spendCurveDeadline(CEIL, [
+      ...Array.from({ length: 6 }, () => ({ durationMs: 10 * MIN, costUsd: 25 })),
+      ...Array.from({ length: 6 }, () => ({ durationMs: 60 * MIN, costUsd: 1 })),
+    ]);
+    ok(mono.deadlineMs !== null && mono.deadlineMs / MIN === 7 && Math.abs(mono.peakUsd - 25) < 1e-9,
+      `LOOP-461: the curve is non-decreasing — a cheap late band cannot un-arm an earlier crossing (got ${JSON.stringify(mono)})`);
+
+    // A band under the sample floor is an anecdote, not a quantile: fall back to the linear model rather
+    // than silently arming nothing off four rows.
+    const thin = perFireDeadline(CEIL, readFireRows(l461).filter((r) => r.model === "decay").slice(0, 4), "claude", "decay", NOW);
+    ok(thin !== null && thin.basis === "linear",
+      `LOOP-461: too few rows to shape a curve ⇒ the pre-change linear model, not a no-arm (got ${JSON.stringify(thin)})`);
   }
 
   // ── LOOP-102: W16's owned set matches what the routers actually serve ───────────────────────
