@@ -735,7 +735,7 @@ function publishRemedy(pkgName: string, installedVersion: string): string {
 }
 
 
-// ── W24 (LOOP-204) — the failure taxonomy is blind ──────────────────────────────────────────────
+// ── W24 (LOOP-204/LOOP-547) — the failure taxonomy is blind ────────────────────────────────────
 // The taxonomy's whole failure mode is SILENT: an unmatched provider string yields errorClass=null,
 // the row lands in no bucket, and every downstream consumer behaves as if the failure had no cause.
 // The `top errors:` line then NAMES the few it knows and says nothing about the rest, so it reads as
@@ -745,17 +745,22 @@ function publishRemedy(pkgName: string, installedVersion: string): string {
 // wording and the lag is otherwise undetectable.
 // Threshold rationale: below half, a few exotic tails are ordinary noise; at or above half the
 // taxonomy is no longer describing the failure population and the breaker is more off than on.
+// LOOP-547: denominator was summing three non-disjoint counters (failures + timeouts + suspectErrors),
+// double-counting timed-out fires and including exit-0 suspectErrors that can never carry an errorClass.
+// Now the population is fires that failed (exitCode != 0), and the numerator is the subset of failures
+// carrying no errorClass. Exit-0 suspectErrors are excluded because an exit-0 fire has no error to
+// classify — the no-op class is a different detector's subject.
 const W24_BLIND_SHARE = 0.5;
 const W24_MIN_FAILURES = 4; // below this, one odd tail swings the share — not enough signal to warn on
 export function checkFailureTaxonomyBlind(fires: { failures: number; timeouts: number; suspectErrors: number; byErrorClass: Record<string, number> }, warn: (m: string) => void): void {
   try {
-    const failureish = fires.failures + fires.timeouts + fires.suspectErrors;
-    if (failureish < W24_MIN_FAILURES) return;                       // zero rows ⇒ silent, never 0%/NaN
+    const failedFires = fires.failures; // LOOP-547: only failures — timeouts are a subset, suspectErrors are exit-0 rows that can never carry an errorClass
+    if (failedFires < W24_MIN_FAILURES) return;                        // zero failures ⇒ silent, never 0%/NaN
     const classified = Object.values(fires.byErrorClass).reduce((a, b) => a + b, 0);
-    const unclassified = Math.max(0, failureish - classified);
-    const share = unclassified / failureish;
-    if (share < W24_BLIND_SHARE) return;                             // healthy ⇒ nothing at all, not an info line
-    warn(`[W24] ${unclassified} of ${failureish} failure-ish fires (${Math.round(share * 100)}%) carry no errorClass — the taxonomy is blind here, so the 'top errors' line above is NOT a complete breakdown and the provider breaker (which keys on errorClass) cannot engage on them. Read a few tails: grep '"exitCode":1' .dev-loop/team/fires.jsonl | tail`);
+    const unclassified = Math.max(0, failedFires - classified);
+    const share = unclassified / failedFires;
+    if (share < W24_BLIND_SHARE) return;                              // healthy ⇒ nothing at all, not an info line
+    warn(`[W24] ${unclassified} of ${failedFires} failed fires (${Math.round(share * 100)}%) carry no errorClass — the taxonomy is blind here, so the 'top errors' line above is NOT a complete breakdown. ${/** LOOP-547: dropped the breaker-engagement claim — it was false: the breaker keys on errorClass over failures, and every failure has one; suspectError fires never reach it */""}Read a few tails: grep '"exitCode":1' .dev-loop/team/fires.jsonl | tail`);
   } catch { /* best-effort — never fails doctor */ }
 }
 
