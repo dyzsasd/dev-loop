@@ -27,6 +27,7 @@ export interface Ticket {
   labels: string[];        // REPLACE-style label set (mirrors Linear save_issue semantics, §10#1)
   duplicateOf: string | null; // §8 dedupe canonical pointer (scalar set)
   relatedTo: string[];     // §4 splits / §15 coverage sibling links (append-only merge, §18)
+  waiting_on: string | null; // LOOP-384 AC1: Human-Blocked discriminator (human-decision | human-action | external)
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -52,6 +53,10 @@ const DOC_KIND_CHECK = DOC_KINDS.map((k) => `'${k}'`).join(", ");
 // 'doc' = the D5 one-way doc mirror (published strategy/roadmap/decisions + latest design → Linear Documents).
 const HUB_KINDS = ["ticket", "doc"] as const;
 const HUB_KIND_CHECK = HUB_KINDS.map((k) => `'${k}'`).join(", ");
+// LOOP-384 (v6): Human-Blocked discriminator — same no-drift discipline. Three kinds: human-decision (default),
+// human-action, external (with optional probe hint). Guarded by user_version, not stored separately.
+const WAITING_ON = ["human-decision", "human-action", "external"] as const;
+const WAITING_ON_CHECK = WAITING_ON.map((w) => `'${w}'`).join(", ");
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -93,6 +98,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   labels TEXT NOT NULL DEFAULT '[]',   -- JSON array; REPLACE-style on save_issue (mirrors Linear)
   duplicate_of TEXT,                   -- §8 dedupe canonical pointer (scalar; pairs with state Duplicate)
   related_to TEXT NOT NULL DEFAULT '[]', -- §4 splits / §15 coverage siblings (JSON array; append-only merge, §18 line 965)
+  waiting_on TEXT DEFAULT 'human-decision' CHECK(waiting_on IN (${WAITING_ON_CHECK})), -- LOOP-384 AC1: Human-Blocked discriminator (set on Human-Blocked tickets)
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -296,7 +302,7 @@ const mirrorMapHasTicketOnlyCheck = (db: DatabaseSync): boolean => {
 const userVersion = (db: DatabaseSync): number =>
   (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 
-const SCHEMA_VERSION = 5; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3; D5 mirror_map.hub_kind+='doc' → v4; D6 documents.archived → v5)
+const SCHEMA_VERSION = 6; // bump when adding a migration below (DL-25 → v1; DL-52 channels.transport → v2; DL split documents.kind+='design' → v3; D5 mirror_map.hub_kind+='doc' → v4; D6 documents.archived → v5; LOOP-384 tickets.waiting_on → v6)
 function migrate(db: DatabaseSync): void {
   if (userVersion(db) >= SCHEMA_VERSION) return; // fast path: already current, no txn
   db.exec("PRAGMA foreign_keys=OFF");
@@ -319,12 +325,13 @@ function migrate(db: DatabaseSync): void {
           labels TEXT NOT NULL DEFAULT '[]',
           duplicate_of TEXT,
           related_to TEXT NOT NULL DEFAULT '[]',
+          waiting_on TEXT DEFAULT 'human-decision' CHECK(waiting_on IN (${WAITING_ON_CHECK})),
           created_by TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
-        INSERT INTO tickets_new (id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
-          SELECT id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at FROM tickets;
+        INSERT INTO tickets_new (id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,waiting_on,created_by,created_at,updated_at)
+          SELECT id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,'human-decision',created_by,created_at,updated_at FROM tickets;
         DROP TABLE tickets;
         ALTER TABLE tickets_new RENAME TO tickets;
         CREATE INDEX IF NOT EXISTS idx_tickets_project_state ON tickets(project_id, state);
@@ -422,6 +429,16 @@ function migrate(db: DatabaseSync): void {
       if (tableExists(db, "documents") && !columnExists(db, "documents", "archived"))
         db.exec("ALTER TABLE documents ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
       db.exec("PRAGMA user_version=5");
+    }
+    if (userVersion(db) < 6) {
+      // LOOP-384 (v6): add tickets.waiting_on (TEXT DEFAULT 'human-decision') — Human-Blocked tickets gain a
+      // discriminator (human-decision | human-action | external) so W20 can group by kind. Additive ALTER with a
+      // default (like v2/v5 — no table rebuild needed; existing rows backfill to 'human-decision', byte-for-byte
+      // otherwise). Guarded on column presence: a fresh/SCHEMA-created tickets table already carries `waiting_on`
+      // ⇒ skip the ALTER (no "duplicate column" error).
+      if (tableExists(db, "tickets") && !columnExists(db, "tickets", "waiting_on"))
+        db.exec(`ALTER TABLE tickets ADD COLUMN waiting_on TEXT DEFAULT 'human-decision' CHECK(waiting_on IN (${WAITING_ON_CHECK}))`);
+      db.exec("PRAGMA user_version=6");
     }
     db.exec("COMMIT");
   } catch (e) {
