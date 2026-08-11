@@ -72,10 +72,26 @@ export function boardCmd(argv = process.argv.slice(2)): number {
   const snapDir = dir ?? join(wsStateRoot(ws), "snapshots");
 
   if (sub === "snapshot") {
+    // LOOP-477: a FIRE may not prune. TAKING a copy is additive and a fire doing so is not the
+    // problem, so unlike `restore` below this verb is not refused — but `takeBoardSnapshot` prunes
+    // after it writes, and `--keep 1` therefore deletes every OTHER generation. That is the exact
+    // loss `restore`'s own gate exists to keep recoverable: a restore is only undoable while older
+    // generations survive, so leaving the prune reachable from inside a fire gates the recovery verb
+    // and leaves the thing it recovers FROM unguarded.
+    //
+    // The suppressor is the ABSENCE of a marker, which a fire cannot arrange for itself (LOOP-367).
+    // `keep` is overridden AFTER argv is fully parsed, so no flag, token or value re-enables pruning.
+    const marker = activeFireMarker();
+    const effectiveKeep = marker ? 0 : keep; // 0 ⇒ pruneSnapshots is a no-op (documented in --keep)
+    // The notice is printed BEFORE the path: this verb's contract is "prints the path it wrote", and
+    // callers read that off the LAST line of stdout (hub/test/destructive-fire-gate.ts does exactly
+    // that). A trailing notice would silently become the "path" for every one of them.
+    if (marker)
+      console.log(`retention skipped: ${marker} is set, so every existing generation was kept${keep === DEFAULT_KEEP ? "" : ` (--keep ${keep} ignored)`}. Pruning board snapshots is an operator action — the older generations are what make \`dev-loop board restore\` undoable. There is no flag that re-enables it inside a fire.`);
     // A failure throws and exits NON-ZERO with the real error. Never a swallowed warning: silently
     // producing a corrupt backup is worse than failing to produce one, and that exact degradation
     // is the defect LOOP-337 removed from the bundle path.
-    console.log(takeBoardSnapshot({ dbPath: wsHubDb(ws), dir: snapDir, keep, reason }));
+    console.log(takeBoardSnapshot({ dbPath: wsHubDb(ws), dir: snapDir, keep: effectiveKeep, reason }));
     return 0;
   }
   if (sub === "snapshots") {
