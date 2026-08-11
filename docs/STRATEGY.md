@@ -637,6 +637,28 @@ prescribes when it says the per-ticket state lives in `Current state` and *"a nu
 stale by construction"*. No ticket is filed: there is no work left to own, only a sentence whose write
 rate is slower than its subject's.
 
+**The outward gauntlet's core promise has a measured counterexample, and it is the third instance of
+a class this doc has twice recorded as closed (pm, one-hundred-sixty-eighth fire).** `Goals` sells
+the reusable CI workflow as *"adoptable on ANY legacy repo day one — what you touch must be clean"*.
+Measured this fire on installed 1.15.1, in throwaway repos, using the exact argv
+`quality-reusable.yml` builds in its default `mode: pr`: a PR that changes **two** files — one the
+test suite imports, one it never does — exits **0** at `--threshold 30` while the untested file's
+CC-7 function reports `N/A` and is excluded from the comparison. Its correct CRAP is
+`7² × (1−0)³ + 7 = 56`. The controls are what make it a defect rather than a reading: the same repo
+with **only** the untested file changed exits 1 on the existing `no rows are scorable` hard-fail,
+green tests or red. So the guard exists and is all-or-nothing — `maxCrap` (`quality.ts:636`) is the
+worst *scorable* row, and one scorable row is enough to certify a selection whose worst member was
+never scored. LOOP-158 closed this for TS/JS and LOOP-192 for Go, both keyed on **every** row being
+unscorable; this is the partial-selection residual they leave. The cause is backend-specific and
+does not generalise: V8 emits no entry at all for a file no test loads, so "uncovered" and
+"unmeasured" arrive as one signal, while Go's coverprofile enumerates 0%-covered functions — which
+is why LOOP-192's Go repro could score 156.0 and the TS/JS path cannot. It is invisible inward
+(`test.yml` scores coverage from a suite that loads substantially all of `hub/src`) and normal
+outward, since a legacy repo's first PRs are exactly where untested files arrive. Filed as
+**LOOP-561** (p1) with a self-contained `AC-exec` verified to exit 1 against `36ba510`. The
+adoptability claim in `Goals` is not corrected here: no measurement contradicts the *path*, only the
+verdict the gate returns once adopted, and LOOP-561 owns that.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
