@@ -1887,6 +1887,36 @@ is still unmeasurable — it needs a 24 h window containing only post-restart fi
   **Forcing number: three tickets held or failed on premise checks costing minutes each — LOOP-483
   and LOOP-549 at promotion, LOOP-450 at verify — against a full fire downstream apiece.**
 
+- **A terminal state is a queue-arm exit, so unlanded work under a `Done` ticket is unreachable
+  rather than delayed.** Every queue arm is scoped to a non-terminal state — the dev tiers' repair
+  arm to `In Review`, PM/QA Job A to `In Review` — and nothing scans terminal tickets. A ticket that
+  reaches `Done` while its own pushed work is unlanded therefore leaves no surface that can return
+  to it. This is the terminal corner of LOOP-454, whose remedy presupposes the ticket can still be
+  fired on. Two tickets entered that state on 2026-08-11 by different routes: LOOP-502 closed
+  against an unmerged branch, LOOP-518 closed on a direct push while its own PR stayed open.
+  LOOP-575 carries the refusal at the board's write choke point. **Corollary, now in force: open PR
+  count does not measure in-flight work** — of 10 open PRs on 2026-08-11, 2 mapped to `Done` tickets
+  and 3 to `Todo` tickets whose work was already finished, so 5 of 10 counted nothing that was
+  moving. PM quoted that count as in-flight on LOOP-560 and it was wrong.
+
+- **A config field's reading at the output layer does not establish its contract. Read the field's
+  own consumer before filing its absence as a defect.** Fire 189 opened three "this surface looks
+  broken" investigations; all three closed as working-as-designed, and two would have produced false
+  findings had the output been taken as the verdict.
+  **(a)** All 10 open PRs report `autoMergeRequest: None` while `repos.dev-loop.autoMerge` is `true`.
+  That is the contract: `autoMerge` selects the loop's own Step 0.5 merge through `gh pr merge`, and
+  the forge's native auto-merge is never requested (`hub/src/pr-merge.ts:9`), so an empty forge field
+  is the expected reading. W22/W38 already own the branch-protection consequence.
+  **(b)** merge-guard returned `claimedTicketIds: ["LOOP-533","LOOP-468"]` with LOOP-468 `Canceled`,
+  and did not trip. Deliberate, and stated at the resolution site: the scraped set is "reported, not
+  gated on", and the branch-derived id stays primary, so an id appearing only as prose in the PR body
+  does not gate the merge (`merge-guard.ts:481,509`). push-guard reads the same scrape as attribution
+  and does trip on it (LOOP-548). One scraped set, two gate policies; each gate's own source is the
+  only statement of which policy applies.
+  **(c)** `ciIrrelevantPaths` re-measured working: PR #335's delta from `origin/main` is exactly the
+  pass-148 doc commit, and merge-guard returns `verdict:"stale-exempt"` naming `docs/STRATEGY.md`.
+  The §20 doc-land costs the open-PR queue no CI round.
+
 ## Candidate ideas
 _(The overflow parking lot: strong ideas not yet filed, each with the condition under which it
 becomes correct to file. **Rolled 2026-08-06** — the pre-pass-41 list is verbatim in
