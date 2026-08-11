@@ -169,9 +169,69 @@ try {
     "AC6: a stall with no ruleOn keeps the original ticket-URL NEXT line");
 
   // describeDecisionOldest, both arms, directly — the ticket arm must stay byte-identical.
-  const t = describeDecisionOldest({ id: "T-1", title: "x".repeat(70), state: "Human-Blocked", updatedAt: "t" });
+  // LOOP-481: "today's wording" is now the humanWrite:TRUE arm — the board CAN rule, so the URL is
+  // the right prescription and must not have moved a byte.
+  const t = describeDecisionOldest({ id: "T-1", title: "x".repeat(70), state: "Human-Blocked", updatedAt: "t" }, { humanWrite: true, projectKey: "loop" });
   ok(t.stateLabel === "blocked" && t.ruleOn === "http://127.0.0.1:8787/ticket/T-1" && t.named === `T-1 "${"x".repeat(57)}…"`,
     `ticket arm of the W20 renderer is unchanged (truncated at 60, board URL, blocked label) — got ${JSON.stringify(t)}`);
+
+  // ── LOOP-481 AC3/AC4/AC5 — doctor must not prescribe a page that cannot perform the action ────
+  //
+  // The board's write forms sit behind the per-project `humanWrite.enabled` gate. Unset (the default,
+  // and the state of every project in this workspace) that page renders zero `<form>`, so linking it
+  // as the way to RULE is a dead end. Asserted on the RENDERED lines, per AC5: a test that read the
+  // branch condition would pass with the emitted string still wrong.
+  //
+  // The assertion is not "the URL is absent" — AC4 keeps it as a READ link. It is "the URL is not the
+  // PRESCRIBED action", so both arms are measured by extracting exactly the span each line offers as
+  // the thing to do. That span is what a mutation swapping the arms would change.
+  {
+    const prescribedInW20 = (line: string) => line.split("— rule on it: ")[1]?.split("; full queue:")[0] ?? "";
+    const prescribedInNext = (line: string) => line.split(/\): /)[1] ?? "";
+    const URL_T5 = "http://127.0.0.1:8787/ticket/T-5";
+
+    const mkStall = (dbName: string, humanWrite: boolean) => {
+      const d = openDb(join(tmp, dbName));
+      d.prepare("INSERT INTO projects(id,key,name,created_at,settings_json) VALUES('p','loop','loop','t',?)")
+        // '{}' is the column's own DEFAULT — i.e. exactly what a real project row holds while the
+        // operator has never touched the flag. Not NULL: the column is NOT NULL, and a fixture that
+        // cannot exist on a live board proves nothing about one.
+        .run(humanWrite ? JSON.stringify({ humanWrite: { enabled: true } }) : "{}");
+      d.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,related_to,created_by,created_at,updated_at) VALUES('T-5','p','parked on the operator','d','Feature','Human-Blocked',NULL,0,'[]','[]','pm',?,?)")
+        .run(iso(NOW - 2 * DAY), iso(NOW - 2 * DAY));
+      const lines: string[] = [];
+      const c = {
+        ws: { file: { team: { key: "loop", comms: { webhookEnv: "X" } }, repos: {}, projects: { loop: {} } }, root: tmp },
+        opts: {}, boardDb: "", out: { pass: () => {}, fail: () => {}, warn: (m: string) => lines.push(m), info: () => {} },
+        openBoardDb: () => d,
+      } as never;
+      const s = checkDecisionQueueStall(c);
+      return { stall: s, w20: lines.find((l) => l.startsWith("[W20]")) ?? "", next: nextStep(nextWs, [], [], undefined, s ?? undefined) };
+    };
+
+    // AC4/AC5 — flag unset. This FAILS on main, where both spans are the bare URL.
+    const off = mkStall("hw-off.db", false);
+    ok(off.stall !== null && off.w20 !== "", `AC5 precondition: the fixture produces a W20 line (got ${JSON.stringify(off.w20)})`);
+    const offW20 = prescribedInW20(off.w20);
+    ok(offW20.startsWith("dev-loop ") && !offW20.startsWith("http"),
+      `AC4/AC5: with humanWrite off, W20 prescribes a CLI surface that can act — not the read-only page (prescribed: ${JSON.stringify(offW20)})`);
+    ok(offW20.includes(`dev-loop ticket update T-5 --state`) && offW20.includes(`dev-loop comment add T-5`),
+      `AC4: …and it names both halves of the ruling — the comment and the state move (got ${JSON.stringify(offW20)})`);
+    ok(off.w20.includes("dev-loop settings set humanWrite.enabled true --project loop"),
+      `AC4: …and how to make the board itself able to rule, naming this project (got ${JSON.stringify(off.w20)})`);
+    ok(off.w20.includes(URL_T5),
+      "AC4: the URL survives as a read link — the operator keeps the cheap way to LOOK, it just is not the prescribed action");
+    const offNext = prescribedInNext(off.next);
+    ok(offNext.startsWith("dev-loop ") && !offNext.startsWith("http"),
+      `AC4/AC5: the NEXT line prescribes the same CLI surface — the two lines cannot disagree (got: ${JSON.stringify(off.next)})`);
+
+    // AC3 — flag ON: the page can rule, so both lines keep today's URL wording, byte-identical.
+    const on = mkStall("hw-on.db", true);
+    ok(prescribedInW20(on.w20) === URL_T5,
+      `AC3: with humanWrite ON, W20 prescribes exactly the board URL as before (got ${JSON.stringify(prescribedInW20(on.w20))})`);
+    ok(prescribedInNext(on.next) === URL_T5,
+      `AC3: …and so does the NEXT line (got ${JSON.stringify(on.next)})`);
+  }
 
   // ── AC4 (daemon) — the reminder counts requests, once per cadence ─────────────────────────────
   const dbN = seed("notify.db");

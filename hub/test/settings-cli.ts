@@ -8,7 +8,7 @@
 //   · Every write goes through the REAL CLI (spawned argv), never `main()` and never a direct
 //     `UPDATE projects SET settings_json`. The defect WAS "no command can do this" — a test that
 //     writes the row itself would pass on the unfixed tree (AC6 says so explicitly).
-//   · Every read-back runs the SHIPPED consumer predicate (`humanWriteEnabled` from daemon.ts,
+//   · Every read-back runs the SHIPPED consumer predicate (`humanWriteEnabled` from project-settings.ts,
 //     `resolveBlockedReminderHours` from daemon-notifiers.ts), never a local copy of it. A parity
 //     assertion whose two sides share a re-implemented predicate is green with the gate deleted
 //     (LOOP-429).
@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { openDb, actorExists } from "../src/db.ts"; // actorExists: the SHIPPED handle predicate resolveAssignTo uses — the roster arms assert against it, never a local list
 import { ensureSeed, findProject } from "../src/seed.ts";
-import { humanWriteEnabled } from "../src/daemon.ts";
+import { humanWriteEnabled } from "../src/project-settings.ts"; // LOOP-481: relocated out of daemon.ts to a lean leaf; still the SHIPPED gate, still imported not copied
 import { resolveBlockedReminderHours, noProgressNotifyTick } from "../src/daemon-notifiers.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 import { restartHint } from "../src/settings-cli.ts"; // the SHIPPED hint builder, never a local copy (LOOP-429)
@@ -83,7 +83,7 @@ const SELF = fileURLToPath(import.meta.url);
 
   const on = run("set", "humanWrite.enabled", "true");
   ok(on.status === 0, `AC1: \`settings set humanWrite.enabled true\` exits 0 (got ${on.status}: ${on.stderr.trim()})`);
-  ok(gateSaysEnabled(), "AC1/AC6: …and daemon.ts's own humanWriteEnabled() now returns TRUE — the gate the web forms are behind");
+  ok(gateSaysEnabled(), "AC1/AC6: …and the shipped humanWriteEnabled() now returns TRUE — the gate the web forms are behind");
 
   // Additive, not a replacement — the syncScratchProjectRow discipline, on a row that already had keys.
   const after = settingsRow();
