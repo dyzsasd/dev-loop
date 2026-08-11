@@ -306,15 +306,29 @@ or recover. **Shipped count and per-ticket state: `Current state`.**
   to date: senior implements, pm verifies, and that pair closed 18 increments while dark. What it
   cannot do is drain the half of the board that is junior-tier, or verify anything `qa`-owned — 5
   rows now sit `In Review`, all `qa`-owned, 0 Done since the anchor.
-  First program: **4 of 5 shipped** (re-derived pass 122) — LOOP-382 · LOOP-383 · LOOP-385 Done, and
-  **LOOP-386 shipped through its successor**: it was verify-failed and `Canceled` (it re-introduced the
-  failure it closes), superseded by **LOOP-532**, which merged as `7d9c7cf` and is Done. **LOOP-384 is
-  `In Progress`** (junior-dev, PR #292 open and mergeable), not Todo. The pass-94 note that
+  First program: **3 of 5 shipped · 1 designed-but-unbuilt · 1 in flight** (re-derived pass 129 —
+  this SUPERSEDES pass 122's "4 of 5", which counted a design gate as a delivery). LOOP-383 ·
+  LOOP-385 Done, and **LOOP-386 shipped through its successor**: it was verify-failed and `Canceled`
+  (it re-introduced the failure it closes), superseded by **LOOP-532**, which merged as `7d9c7cf` and
+  is Done. **LOOP-384 is `In Progress`** (junior-dev, PR #292 open and mergeable), not Todo.
+  **LOOP-382 is `Done` and none of it exists.** It is a §21a design parent, so its `Done` states that
+  the design was verified and its children promoted — never that pause/resume was built. Rung-3
+  checked this pass: `pause`/`resume` appears in no installed `dev-loop --help`, no file under the
+  installed `dist/`, and no file under `hub/src/`, while its four children LOOP-401/402/403/404 have
+  all sat in `Todo` since 2026-08-08 (three of them `blocked` behind LOOP-401, which is PICK_RANK 5
+  and eighth in junior's slice). The wrong line was not a reading error but a surface one:
+  `throughput` counts a design parent's `Done` as a delivered increment — **7 of 200 `→ Done`
+  transitions in the 7d window**, and that 7 is a floor — and no surface reports how much of a design
+  has landed, so re-deriving program state from ticket states reproduces this error every pass.
+  **LOOP-555** owns the split. The pass-94 note that
   `PICK_RANK` rank 4.5 is "the only lever that reaches a picker" **is now inoperative, measured**:
-  `Todo` holds **0** P1 tickets while `Backlog` holds **18** (17 junior-tier), because P1 is assigned
+  `Todo` holds **1** P1 ticket while `Backlog` holds **17** (16 junior-tier), because P1 is assigned
   in `Backlog` and §5a promotes only while depth is under the cap — with no preemption, a P1 filed
-  after the cap saturated can never displace a promoted P3. The junior slice has been at its cap since
-  the executor stalled, so the promotion list has not been consulted at all, ranked (LOOP-507) or not.
+  after the cap saturated can never displace a promoted P3. The junior slice had been at its cap for
+  twelve consecutive fires; **pass 129 is the first to find it UNDER cap** (8/10 — the executor tier
+  came back and drained it) and promoted LOOP-547 + LOOP-388 into the two slots, restoring 10/10. The
+  single P1 now in `Todo` is that promotion, not a preemption: the mechanism is unchanged, only its
+  input was.
 - **The board's write surface has a supported switch (LOOP-479, `6b451ed`, verified Done
   2026-08-10)** — `dev-loop settings <path>`: allow-listed, off by default, refused inside a fire
   (exit 4). Merged, not published (`0cac647`/v1.15.1 runs the fires). `humanWrite.enabled` stays
@@ -570,6 +584,43 @@ only its evidence question. Not yet live on this host — the installed build is
   shipped the bin, and the rename was withdrawn (`Vision`). `dev-loop` is the CLI command.
 
 ## Decisions (running log)
+
+- **2026-08-11 (pm, one-hundred-sixtieth fire) — a design gate and a shipped increment are the
+  same event to every delivery surface, so the north star recorded a control as shipped while none
+  of it existed.**
+
+  **What was measured.** `boardMetrics` (`hub/src/metrics.ts:658`) increments `throughput` on every
+  `→ Done` transition in the window and discriminates nothing about the ticket. Over this
+  workspace's own `events` table: 7d = **200 `→ Done`, 7 of them design parents**; 24h = **32, 1 of
+  them** (LOOP-499). The 7 is a floor — it was counted from the `Mode: design` body marker alone (23
+  such tickets on the board), while `isDesignParent` also admits parents derived through
+  `designParentIds`. The same edge lands in `inReviewExits["Done"]`, so `acceptRate` carries it too.
+
+  **Why it matters here rather than in general.** Under §21a a design parent's `Done` is a
+  DIFFERENT contract: the design is the verified increment, PM promotes the staged children, and
+  nothing has been built at that moment — correctly. `throughput` is also the figure the §22a
+  director digest is instructed to quote verbatim. So the one delivery number the operator reads
+  mixes two populations, which is the error LOOP-98 already corrected once in this same function for
+  `throughput` vs `acceptRate`.
+
+  **The observed instance.** LOOP-382 — "First-class pause/resume", control 1 of the operator's five
+  — went `Done` and entered that 7d count. Three days later `pause`/`resume` exists in no installed
+  `--help`, no installed `dist/` file and no `hub/src/` file (rung 3, not inferred), and all four
+  children LOOP-401/402/403/404 are still `Todo`. Pass 122 re-derived program state from ticket
+  states and wrote **"First program: 4 of 5 shipped"** into `Current state`. That line is corrected
+  in this pass to **3 shipped · 1 designed-but-unbuilt · 1 in flight**. The correction is not the
+  fix: any future re-derivation from ticket states reproduces it, because no surface answers "how
+  much of this design has landed" — a Done parent's children are reachable only by walking
+  `relatedTo` by hand.
+
+  **The call.** Filed **LOOP-555** (Improvement, P2, junior-dev): split the `→ Done` count into
+  delivered increments and design-gate closes across `--json`, the human render and `teamRollup`,
+  and give a Done design parent a children-landed figure. Binding constraint on the build: it must
+  call the EXISTING exported `isDesignParent` / `designParentIds` rather than add a fourth arm —
+  LOOP-515 reports the three current consumers already disagree, and a private copy here would make
+  this the fourth thing that fix has to reconcile. Sweep's §21a stranded-child rule is deliberately
+  NOT extended: children promoted to `Todo` are the correct post-gate state, and calling that a
+  strand would fire on every healthy design.
 
 - **2026-08-11 (pm, one-hundred-fifty-ninth fire) — the authorization system is enforcing nothing
   here, and each of the three checks built to report that takes a precondition which empty
