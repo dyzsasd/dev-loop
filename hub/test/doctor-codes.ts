@@ -13,6 +13,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DOCTOR_CODES, DOCTOR_CODE_SET, nextFreeDoctorCode } from "../src/doctor-codes.ts";
+import { DOCTOR_CHECKS } from "../src/doctor-registry.ts";
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 let fails = 0;
@@ -60,6 +61,52 @@ ok(!DOCTOR_CODE_SET.has(next), `LOOP-88: nextFreeDoctorCode() returns an unclaim
 
 ok(DOCTOR_CODES.every((r) => r.name.trim().length > 0 && r.source.trim().length > 0),
   "LOOP-88: every registry row carries a name and a source file");
+
+// LOOP-359 (Child D, design §9): bind the dispatch to the W-code registry so the two inventories
+// cannot drift. Every code registered with source:"doctor.ts" must appear in a DOCTOR_CHECKS row's
+// codes[], or be EXPLICITLY exempted in REGISTRY_EXEMPT.
+const REGISTRY_EXEMPT: Record<string, string> = {
+  // W08-W11, W28, W29, W42 — still inline in doctorWorkspace, not yet migrated to the
+  // DOCTOR_CHECKS table (post-Child-C residue). Migrate them as follow-up work.
+  W08: "still inline in doctorWorkspace — not yet migrated to the registry table",
+  W09: "still inline in doctorWorkspace — not yet migrated to the registry table",
+  W10: "still inline in doctorWorkspace — not yet migrated to the registry table",
+  W11: "still inline in doctorWorkspace — not yet migrated to the registry table",
+  W28: "still inline in doctorWorkspace — not yet migrated to the registry table",
+  W29: "still inline in doctorWorkspace — not yet migrated to the registry table",
+  W42: "still inline in doctorWorkspace — not yet migrated to the registry table",
+};
+// Row ids must be unique and non-empty, and every row needs a run.
+
+
+const doctorTsCodes = new Set(DOCTOR_CODES.filter((r) => r.source === "doctor.ts").map((r) => r.code));
+const checkCodes = new Set(DOCTOR_CHECKS.flatMap((r) => r.codes));
+
+// 1. Every DOCTOR_CODES row with source:"doctor.ts" appears in a DOCTOR_CHECKS row's codes[],
+//    or is in REGISTRY_EXEMPT.
+const unregisteredChecks = [...doctorTsCodes].filter((c) => !checkCodes.has(c) && !REGISTRY_EXEMPT[c]);
+ok(unregisteredChecks.length === 0,
+  `LOOP-359: every doctor.ts code appears in DOCTOR_CHECKS (or is exempt)${unregisteredChecks.length ? ` — missing: ${unregisteredChecks.join(", ")}` : ""}`);
+
+// 2. Every code in DOCTOR_CHECKS is registered in DOCTOR_CODES.
+const unregisteredCodes = [...checkCodes].filter((c) => !DOCTOR_CODE_SET.has(c));
+ok(unregisteredCodes.length === 0,
+  `LOOP-359: every DOCTOR_CHECKS code is registered in DOCTOR_CODES${unregisteredCodes.length ? ` — unregistered: ${unregisteredCodes.join(", ")}` : ""}`);
+
+// 3. Row ids are unique, non-empty, and every row has a run.
+const idSet = new Set<string>();
+const idDups: string[] = [];
+const idEmpty: string[] = [];
+const noRun: string[] = [];
+for (const row of DOCTOR_CHECKS) {
+  if (!row.id || !row.id.trim()) idEmpty.push(row.id ?? "");
+  else if (idSet.has(row.id)) idDups.push(row.id);
+  else idSet.add(row.id);
+  if (!row.run) noRun.push(row.id || "(no id)");
+}
+ok(idEmpty.length === 0, `LOOP-359: every DOCTOR_CHECKS row has a non-empty id${idEmpty.length ? ` — empty ids: ${idEmpty.length}` : ""}`);
+ok(idDups.length === 0, `LOOP-359: DOCTOR_CHECKS row ids are unique${idDups.length ? ` — duplicates: ${idDups.join(", ")}` : ""}`);
+ok(noRun.length === 0, `LOOP-359: every DOCTOR_CHECKS row has a run function${noRun.length ? ` — missing run: ${noRun.join(", ")}` : ""}`);
 
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nDOCTOR_CODES_OK");
 process.exit(fails ? 1 : 0);
