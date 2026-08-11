@@ -25,14 +25,14 @@ export type WriteResult = { ok: true; id: string } | { ok: false; status: number
 export interface NewTicketFields {
   title: string; description: string; type: string; state: string;
   assignee: string | null; priority: number; labels: string[];
-  duplicateOf: string | null; relatedTo: string[];
+  duplicateOf: string | null; relatedTo: string[]; waiting_on?: string | null;
 }
 // Fully-merged next-row values for an update. labels/related_to are the PRE-SERIALIZED JSON strings exactly as
 // stored (the caller owns REPLACE-vs-append policy); duplicate_of is the scalar column value.
 export interface TicketUpdateFields {
   title: string; description: string; type: string; state: string;
   assignee: string | null; priority: number;
-  labels: string; duplicate_of: string | null; related_to: string;
+  labels: string; duplicate_of: string | null; related_to: string; waiting_on: string | null;
 }
 // A stored row, narrowed to the columns an update copies (moveTicket/assignTicket read the row to rewrite it).
 type StoredRow = TicketUpdateFields;
@@ -40,7 +40,7 @@ type StoredRow = TicketUpdateFields;
 const exists = (db: DatabaseSync, projectId: string, id: string): boolean =>
   !!db.prepare("SELECT 1 FROM tickets WHERE id=? AND project_id=?").get(id, projectId);
 const rowFor = (db: DatabaseSync, projectId: string, id: string): StoredRow | undefined =>
-  db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to FROM tickets WHERE id=? AND project_id=?")
+  db.prepare("SELECT title,description,type,state,assignee,priority,labels,duplicate_of,related_to,waiting_on FROM tickets WHERE id=? AND project_id=?")
     .get(id, projectId) as StoredRow | undefined;
 
 // ─── release/env config + the staging-deploy gate (DL-32 / DL-38, design §7) ──
@@ -410,9 +410,9 @@ export function insertTicket(
   const labels = retier.labels;
   const id = nextTicketId(db, projectId);
   const t = nowIso();
-  db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,created_by,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(labels), f.duplicateOf, JSON.stringify(f.relatedTo), actor, t, t);
+  db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,waiting_on,created_by,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(labels), f.duplicateOf, JSON.stringify(f.relatedTo), f.waiting_on ?? null, actor, t, t);
   logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.create", data: createEventData });
   if (retier.retiered) {
     logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
@@ -458,8 +458,8 @@ export function updateTicketRow(
   // ownership gate must not also refuse pm for the qa label the ticket carries from its type.
   if (gate && gate !== DESIGN_PARENT_DECIDED) return { ok: false, status: 400, error: gate };
   const t = nowIso();
-  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,updated_at=? WHERE id=? AND project_id=?`)
-    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, t, id, projectId);
+  db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,waiting_on=?,updated_at=? WHERE id=? AND project_id=?`)
+    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, resolved.waiting_on, t, id, projectId);
   logEvent(db, resolved.state !== fromState
     ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: resolved.state, assignee: resolved.assignee } }
     : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
@@ -496,7 +496,7 @@ export function createTicket(
   if (!title) return { ok: false, status: 400, error: "title required" };
   const type = a.type ?? "Feature";
   const id = insertTicket(db, projectId, actor,
-    { title, description: a.description ?? "", type, state: "Todo", assignee: null, priority: 0, labels: [], duplicateOf: null, relatedTo: [] },
+    { title, description: a.description ?? "", type, state: "Todo", assignee: null, priority: 0, labels: [], duplicateOf: null, relatedTo: [], waiting_on: null },
     { title, type });
   return { ok: true, id };
 }
