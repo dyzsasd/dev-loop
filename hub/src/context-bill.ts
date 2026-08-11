@@ -69,19 +69,21 @@ export const BUDGETS: Record<string, Budget> = {
  * slack does not ratchet, it just records a number nobody trips. A compression win LOWERS its row in
  * the same commit that lands it — that is what makes the win permanent rather than a moment.
  *
- * Measured 2026-08-06 via `dev-loop conventions --agent <a> --json` (LOOP-237's verb, which shares
+ * Re-seeded 2026-08-11 (LOOP-576's §22 due-check clause grew every slice; raised deliberately in
+ * the same change, the mirror of the LOOP-238 lowering rule). Measured via `dev-loop conventions
+ * --agent <a>` (LOOP-237's verb, which shares
  * the prune with the boot corpus, so this bounds what a fire actually receives).
  */
 export const CONVENTIONS_BUDGETS: Record<string, number> = {
-  "pm":            127 * 1024,  // actual 129,134 —   914 B headroom (re-measured 2026-08-10, LOOP-465)
-  "qa":            119 * 1024,  // actual 121,350 —   506 B
-  "senior-dev":    107 * 1024,  // actual 109,178 —   390 B
-  "junior-dev":    105 * 1024,  // actual 107,375 —   145 B
-  "sweep":         114 * 1024,  // actual 116,118 —   618 B
-  "reflect":        79 * 1024,  // actual  80,510 —   386 B
-  "ops":            99 * 1024,  // actual 100,720 —   656 B
-  "architect":      77 * 1024,  // actual  77,904 —   944 B
-  "communication":  63 * 1024,  // actual  63,992 —   520 B
+  "pm":             127 * 1024,  // actual 129,665 — 383 B headroom
+  "qa":             120 * 1024,  // actual 121,881 — 999 B headroom
+  "senior-dev":     108 * 1024,  // actual 109,709 — 883 B headroom
+  "junior-dev":     106 * 1024,  // actual 107,906 — 638 B headroom
+  "sweep":          114 * 1024,  // actual 116,649 — 87 B headroom
+  "reflect":         80 * 1024,  // actual 81,041 — 879 B headroom
+  "ops":             99 * 1024,  // actual 101,251 — 125 B headroom
+  "architect":       77 * 1024,  // actual 78,435 — 413 B headroom
+  "communication":   64 * 1024,  // actual 64,523 — 1,013 B headroom
 };
 
 // Cheat-sheet blocks are generator-owned (gen-cheatsheets.ts); growth past this = trim the

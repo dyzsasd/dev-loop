@@ -2065,6 +2065,9 @@ not `2026-W53`):
 TODAY=$(date -u +%F)       # 2026-06-19   — daily key
 WEEK=$(date -u +%G-W%V)    # 2026-W25     — ISO week-YEAR + ISO week (boundary-safe)
 MONTH=$(date -u +%Y-%m)    # 2026-06      — month key
+# the roll-up periods are the JUST-COMPLETED ones (GNU date -d | BSD date -v):
+PREV_WEEK=$(date -u -d 'last week' +%G-W%V 2>/dev/null || date -u -v-1w +%G-W%V)
+PREV_MONTH=$(date -u -d 'last month' +%Y-%m 2>/dev/null || date -u -v-1m +%Y-%m)
 ```
 
 **`-u` is load-bearing, not a style choice.** Every artifact these keys FILE is stamped in
@@ -2101,8 +2104,12 @@ The daily report is an **append-only running log**, written at the agent's **clo
 
 ### Weekly & monthly roll up from DAILIES (the one durable level)
 At run-start, after computing the markers — and after finalizing any just-completed
-daily — a **new ISO week** (`WEEK` > the newest `weekly/` file) or a **new month**
-(`MONTH` > the newest `monthly/` file) means a roll-up is DUE. Before writing one, read
+daily — a roll-up is DUE **iff the file for the just-completed period is ABSENT**:
+`weekly/$PREV_WEEK.md` or `monthly/$PREV_MONTH.md`. Never "the marker moved": the daily
+marker names the CURRENT day and self-clears on first append, but the weekly/monthly markers
+name the COMPLETED period, so `WEEK > newest` stays true for every fire of the current period
+and a fire that answers it by writing `$MONTH` truncates that month permanently (D6 keeps
+monthlies forever and nothing re-derives them). Before writing one, read
 **`references/report-rollups.md`** (roll up from DAILIES — never weeklies into monthlies —
 catch-up across idle spans, the atomic write, the D6 retention tails). No due marker ⇒
 nothing to roll up this fire.
