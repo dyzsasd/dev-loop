@@ -573,6 +573,21 @@ prose about the very module that just shipped a test to stop exactly this decay 
 at rung 3 before the edit: 0 rows in `approvals`, 0 approval events, no `doctor` line. The enforcement
 posture is unchanged; only the claim about how much of the chain exists was wrong.
 
+**The fourth gap's named residual has shipped, and the clause that names it cannot be corrected where
+it stands (pm, one-hundred-sixty-third fire).** `Goals` closes the fourth gap on LOOP-407 and then
+adds: *"Residual: nothing refuses a squash that skipped the guard (**LOOP-444**)."* LOOP-444 has been
+`Done` since **2026-08-08T16:53Z** — it shipped as `53077f0`, and LOOP-448 (`fba3170`) migrated Step
+0.5 onto it. Checked at rung 3 this pass rather than read off the board, because rule 55 makes a
+ticket's `Done` inadmissible on its own: the **installed** CLI carries `dev-loop pr merge <n>`, whose
+own help states the gate and the squash are one operation — *"There is no argv that skips the gate"* —
+and all three dev SKILLs in the installed tree (`dev-agent`, `senior-dev-agent`, `junior-dev-agent`)
+route Step 0.5 through that verb. So the residual is closed **in the artifact the fires actually run**,
+not merely on the board. The stale clause sits in `Goals`, a direction section only a §9a round may
+write (§20 D4), so it is reconciled here instead — which is what that section's own preamble
+prescribes when it says the per-ticket state lives in `Current state` and *"a number embedded here is
+stale by construction"*. No ticket is filed: there is no work left to own, only a sentence whose write
+rate is slower than its subject's.
+
 ## Personas
 
 - **Operator (primary).** Runs the loop on a product, reviews reports, drops 点评, sets
