@@ -31,6 +31,7 @@ const SUITE_ENV: Record<string, Record<string, string>> = {
 const NON_SUITES: Record<string, string> = {
   "daemon-harness.ts": "shared helper — exports startTestDaemon/registerDaemonPid/runDaemonCli/launchDaemonCli; no assertions, not a standalone suite (LOOP-138)",
   "env-scrub.ts": "shared helper — exports FIRE_MARKER_VARS/scrubFireEnv, the ONE fire-marker union (LOOP-156); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by env-scrub-guard.ts, which is a real suite and stays discovered.",
+  "code-only.ts": "shared helper — exports codeOnly, the ONE source-to-executable-text reduction (LOOP-396, extracted from destructive-guard.ts); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by destructive-guard.ts's probe arms, which are a real suite and stay discovered.",
 };
 
 const suites = readdirSync(here)

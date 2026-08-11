@@ -681,3 +681,93 @@ export function coverageQuery(
 
   return { covered: false, verdict: "not-covered", key: v.key, approval: v.approval, state: v.state, reason, nearest };
 }
+
+// ─── The consumer inventory (design §7 + §10) ─────────────────────────────────────────────────────
+//
+// STANDING RULE 28: "A module's claim about itself — coverage of a set, or a property like
+// 'read-only' — is enforced by a test that derives the set from the source, or by nothing."
+//
+// Design §7 names six ENFORCING consumers — verbs the hub itself executes, so the hub can refuse
+// them. That is a claim about a SET, and `destructive-guard.ts` is the standing evidence for what
+// happens to such a claim when only prose holds it: it claimed every destructive verb called in, and
+// incident falsified the claim twice (LOOP-305, LOOP-367), each repair adding exactly one call site.
+// This list is therefore checked by `hub/test/approvals-inventory.ts`, which derives the real
+// `consultApproval` call sites from the source tree and fails on a mismatch in EITHER direction — a
+// new call site with no entry, and an entry with no call site.
+//
+// The list lives here rather than in the test because it is a statement the MODULE makes about its
+// own reach; the test is what stops the statement from decaying. Adding a consult call site means
+// adding its entry in the same change, which is the whole point.
+export interface ConsumerInventoryEntry {
+  /** The verb as an operator names it — what they would have to be asked to approve. */
+  consumer: string;
+  /**
+   * The action class whose key this consumer consults, or `null` when NO class in `ACTION_CLASSES`
+   * yet denotes its end state. `null` is a real finding, not a placeholder: such a consumer cannot
+   * be migrated by wiring alone — the key grammar has to name its end state first (design §4).
+   * A `migrated` entry can never be `null`; the test enforces that.
+   */
+  actionClass: ActionClass | null;
+  /** Source file, relative to `hub/src/`. The test asserts it exists. */
+  file: string;
+  /**
+   * `migrated` — it calls `consultApproval` today. `residual` — design §7 names it, and it does not
+   * call `consultApproval` yet. Both directions are derived from the source, so neither can go stale.
+   */
+  status: "migrated" | "residual";
+  /** What end state the approval would authorise, and anything the next migrator needs. */
+  note: string;
+}
+
+export const CONSUMER_INVENTORY: readonly ConsumerInventoryEntry[] = Object.freeze([
+  {
+    consumer: "push-guard",
+    actionClass: "push",
+    file: "push-guard.ts",
+    status: "migrated",
+    note:
+      "LOOP-394 (C4), the first enforcing consumer. Consults `push:<branch>:<sha>` for the sha it " +
+      "audited. Reached programmatically by `doc-land` and by `dev-loop push` (C7); on `landing:\"pr\"` " +
+      "a bare feature-branch push reaches no reader at all, which is LOOP-499/C8-C9, not this list.",
+  },
+  {
+    consumer: "reopen (terminal-state guard)",
+    actionClass: "reopen",
+    file: "ticketwrite.ts",
+    status: "residual",
+    note: "`reopen:<ticket>` — that ticket has left its terminal state. The class exists; only the wiring is missing.",
+  },
+  {
+    consumer: "board restore",
+    actionClass: "board-restore",
+    file: "board.ts",
+    status: "residual",
+    note: "`board-restore:<project>:<snapshot>` — the board equals that snapshot. The class exists; only the wiring is missing.",
+  },
+  {
+    consumer: "team remove-project",
+    actionClass: "remove-project",
+    file: "team-edit.ts",
+    status: "residual",
+    note: "`remove-project:<project>` — that project is gone. The class exists; only the wiring is missing.",
+  },
+  {
+    consumer: "team repair --reap",
+    actionClass: null,
+    file: "team-repair.ts",
+    status: "residual",
+    note:
+      "Removes terminal worktrees and DELETES their branches. No class in ACTION_CLASSES denotes that " +
+      "end state, so migrating it needs a new class first — naming the branches, not the verb, since " +
+      "§4 refuses a key that denotes a capability rather than an end state.",
+  },
+  {
+    consumer: "up --bundle --force-reseed",
+    actionClass: null,
+    file: "bundle.ts",
+    status: "residual",
+    note:
+      "Replaces live workspace state from a bundle. No class denotes that end state either; `board-restore` " +
+      "is the near neighbour but names a snapshot of ONE project's board, not a whole workspace materialisation.",
+  },
+] as const satisfies readonly ConsumerInventoryEntry[]);
