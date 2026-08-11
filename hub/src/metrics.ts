@@ -1182,6 +1182,61 @@ export function ownerLiveness(
   return out;
 }
 
+// LOOP-450: stale claim findings — In Progress tickets whose most recent events-ledger row
+// is older than a threshold, regardless of owner fire recency. Complementary to ownerLiveness
+// (W16), which reports owners that NEVER fire; this one reports claims that are stalled while
+// the owner is still firing.
+export interface StaleClaimFinding {
+  ticketId: string;
+  owner: string | null;
+  lastEventAt: string;
+  lastEventAgeHours: number;
+  state: string;
+}
+
+/**
+ * Every non-blocked In Progress ticket whose most recent events-ledger row is older than `windowMs`.
+ * Does NOT consult the owner's fire recency — a stale claim is a finding even when the owner
+ * fired 1 minute ago.
+ *
+ * Age comes from the events ledger (MAX(events.created_at)), NOT tickets.updated_at, following the
+ * precedent decisionEnteredAt (line 940) sets and states.
+ */
+export function staleClaimFindings(
+  db: import("node:sqlite").DatabaseSync,
+  projectId: string,
+  opts: { windowMs?: number; nowMs?: number } = {},
+): StaleClaimFinding[] {
+  const windowMs = opts.windowMs ?? 24 * 3_600_000;
+  const nowMs = opts.nowMs ?? Date.now();
+  const since = new Date(nowMs - windowMs).toISOString();
+  const out: StaleClaimFinding[] = [];
+  // In Progress tickets, non-blocked, with assignee (a claim is held by an actor)
+  const tickets = db.prepare(
+    "SELECT id, assignee, labels, state, updated_at FROM tickets WHERE project_id=? AND state='In Progress' ORDER BY updated_at",
+  ).all(projectId) as { id: string; assignee: string | null; labels: string; state: string; updated_at: string }[];
+  for (const t of tickets) {
+    let labels: string[] = [];
+    try { labels = JSON.parse(t.labels) as string[]; } catch { labels = []; }
+    if (labels.includes("blocked")) continue;
+    // Age from the events ledger, not tickets.updated_at
+    const lastEvent = db.prepare(
+      "SELECT MAX(created_at) as last_at FROM events WHERE ticket_id=?",
+    ).get(t.id) as { last_at: string | null } | undefined;
+    const lastAt = lastEvent?.last_at ?? t.updated_at;
+    if (lastAt >= since) continue;
+    const ageHours = (nowMs - Date.parse(lastAt)) / 3_600_000;
+    out.push({
+      ticketId: t.id,
+      owner: t.assignee,
+      lastEventAt: lastAt,
+      lastEventAgeHours: ageHours,
+      state: t.state,
+    });
+  }
+  return out;
+}
+
 // P4: sensitive mis-tier backstop — non-terminal tickets carrying `sensitive` AND assigned to the
 // junior-dev tier (by assignee or label). Surfaced as doctor W21 and in the board-health rollup
 // (design sensitive-routing §§3-4). Silent in single-dev projects (no senior-dev actor present).
