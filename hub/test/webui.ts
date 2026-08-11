@@ -604,5 +604,58 @@ ok(/\.diff \.da,\.diff \.dd,\.diff \.dc\{display:block\}/.test(STYLE), "docs: di
   tdb.close();
 }
 
+// ── LOOP-388: Reports root resolution — workspace-derived dir before machine-global fallback ────
+import { reportsRoot, reportsIndexPage, reportPage } from "../src/daemonviews.ts";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+
+{
+  // AC1: workspace-derived dir (from DEVLOOP_HUB_DB) is used when set
+  const tmpWs = join(tmpdir(), "loop-test-ws-" + Date.now());
+  const wsDataDir = join(tmpWs, ".dev-loop");
+  const wsReportsDir = join(wsDataDir, "loop", "reports");
+  const machineDataDir = join(tmpdir(), "loop-test-machine-" + Date.now());
+  const machineReportsDir = join(machineDataDir, "loop", "reports");
+
+  mkdirSync(wsReportsDir, { recursive: true });
+  mkdirSync(machineReportsDir, { recursive: true });
+  mkdirSync(join(wsReportsDir, "qa-agent", "daily"), { recursive: true });
+  mkdirSync(join(machineReportsDir, "pm-agent", "daily"), { recursive: true });
+
+  // Create dummy report files
+  writeFileSync(join(wsReportsDir, "qa-agent", "daily", "2026-08-10.md"), "# QA Report");
+  writeFileSync(join(machineReportsDir, "pm-agent", "daily", "2026-08-09.md"), "# PM Report");
+
+  const oldDevloopHome = process.env.DEVLOOP_HOME;
+  const oldHubDb = process.env.DEVLOOP_HUB_DB;
+  const oldDataDir = process.env.DEVLOOP_DATA_DIR;
+
+  try {
+    // Test: with workspace-derived dir, should prefer it over machine-global
+    process.env.DEVLOOP_HOME = join(machineDataDir);
+    process.env.DEVLOOP_HUB_DB = join(wsDataDir, "hub.db");
+    delete process.env.DEVLOOP_DATA_DIR;
+
+    const root = reportsRoot("loop");
+    ok(root.includes(".dev-loop"), "AC1: reportsRoot resolves to a path containing .dev-loop (workspace structure)");
+
+    // AC3: reportsIndexPage always shows the root
+    const indexPage = reportsIndexPage(root, "loop");
+    ok(indexPage.includes("Reading reports from:"), "AC3: reportsIndexPage always renders the root path");
+    ok(indexPage.includes(root), "AC3: the rendered root matches the actual resolved root");
+
+    // AC2: index lists qa-agent (in workspace tree, not pm-agent from machine-global)
+    ok(indexPage.includes("qa-agent"), "AC2: the index finds qa-agent in the workspace tree");
+
+    rmSync(tmpWs, { recursive: true, force: true });
+    rmSync(join(machineDataDir), { recursive: true, force: true });
+  } finally {
+    if (oldDevloopHome) process.env.DEVLOOP_HOME = oldDevloopHome; else delete process.env.DEVLOOP_HOME;
+    if (oldHubDb) process.env.DEVLOOP_HUB_DB = oldHubDb; else delete process.env.DEVLOOP_HUB_DB;
+    if (oldDataDir) process.env.DEVLOOP_DATA_DIR = oldDataDir; else delete process.env.DEVLOOP_DATA_DIR;
+  }
+}
+
 console.log(fails === 0 ? "\nWEBUI_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
