@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // `dev-loop pause` and `dev-loop resume` — manage scheduler pause state.
 import { existsSync } from "node:fs";
-import { openDb } from "./db.ts";
+import { openDb, logEvent } from "./db.ts";
 import { tryResolveWorkspace } from "./workspace.ts";
 import { wsHubDb } from "./workspace.ts";
-import { readPause, writePause, clearPause, formatPause } from "./scheduler-pause.ts";
+import { writePause, clearPause, formatPause } from "./scheduler-pause.ts";
+import { TEAM_INTAKE_PROJECT } from "./team-config.ts";
 
 interface ParsedArgs {
   action: "pause" | "resume";
@@ -76,11 +77,22 @@ async function main(): Promise<void> {
 
     if (parsed.action === "pause") {
       const state = writePause(db, actor, parsed.reason!, parsed.until || null);
+      logEvent(db, {
+        project_id: TEAM_INTAKE_PROJECT,
+        actor,
+        kind: "scheduler.pause",
+        data: { reason: parsed.reason, until: parsed.until || null }
+      });
       console.log(`dev-loop pause: ${formatPause(state)}`);
     } else {
       // resume
       const cleared = clearPause(db);
       if (cleared) {
+        logEvent(db, {
+          project_id: TEAM_INTAKE_PROJECT,
+          actor,
+          kind: "scheduler.resume"
+        });
         console.log("dev-loop resume: scheduler pause cleared");
       } else {
         console.log("dev-loop resume: no pause was active (idempotent)");
