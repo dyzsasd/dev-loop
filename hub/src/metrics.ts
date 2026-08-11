@@ -1237,6 +1237,51 @@ export function staleClaimFindings(
   return out;
 }
 
+/**
+ * The W43 emit set: stale claims held by an owner that is still firing (LOOP-566).
+ *
+ * This composer is where W16/W43 exclusivity (LOOP-450 AC5) is enforced — and it is the only
+ * place it CAN be. Neither predicate can do it alone: `staleClaimFindings` is fire-blind by
+ * contract (LOOP-450 AC1) so it cannot tell a dead owner from a live one, and `ownerLiveness`'s
+ * `if (alive) continue;` gate suppresses W16 when the owner IS alive — it has no bearing on
+ * W43's code path. As shipped, a dead owner's stale claim was reported by both codes.
+ *
+ * Direction: a dead owner's stale claim belongs to W16. W16's remedy — "re-owner them, or mark
+ * the role manual" — is the one that can actually move it, while W43's ("release them to Todo")
+ * would hand the ticket back to a queue nobody serves. So every owner `ownerLiveness` reports is
+ * filtered out here. That includes a `manual` owner: `ownerLiveness` reports it too (doctor
+ * renders it as an info line, "awaiting a human"), and releasing a manual owner's claim to Todo
+ * is exactly as wrong.
+ *
+ * The dead set is taken from `ownerLiveness`'s own findings rather than recomputed from the
+ * ledger here, so the two codes can never disagree about who is dead — one definition of
+ * liveness, one owned-set rule, no drift when either changes.
+ *
+ * A claim with no assignee (`owner === null`) is never excluded: no handle owns it, so W16 does
+ * not see it either, and suppressing it would lose the finding entirely.
+ *
+ * `windowMs` is the staleness window (24h default); `livenessWindowMs` is the fire-recency
+ * window (7d default). They are separate knobs because they measure different things.
+ */
+export function liveOwnerStaleClaims(
+  db: import("node:sqlite").DatabaseSync,
+  projectId: string,
+  ledgerPath: string,
+  opts: {
+    windowMs?: number; nowMs?: number; livenessWindowMs?: number;
+    manualHandles?: Set<string>; handles?: readonly string[];
+  } = {},
+): StaleClaimFinding[] {
+  const claims = staleClaimFindings(db, projectId, { windowMs: opts.windowMs, nowMs: opts.nowMs });
+  if (!claims.length) return [];
+  const dead = new Set<string>();
+  for (const f of ownerLiveness(db, projectId, ledgerPath, {
+    windowMs: opts.livenessWindowMs, nowMs: opts.nowMs,
+    manualHandles: opts.manualHandles, handles: opts.handles,
+  })) dead.add(f.owner);
+  return claims.filter((c) => c.owner === null || !dead.has(c.owner));
+}
+
 // P4: sensitive mis-tier backstop — non-terminal tickets carrying `sensitive` AND assigned to the
 // junior-dev tier (by assignee or label). Surfaced as doctor W21 and in the board-health rollup
 // (design sensitive-routing §§3-4). Silent in single-dev projects (no senior-dev actor present).
