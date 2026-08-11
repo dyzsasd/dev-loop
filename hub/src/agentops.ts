@@ -75,13 +75,13 @@ export const isAgentOp = (s: string): s is AgentOp => (AGENT_OPS as readonly str
 interface TicketRow {
   id: string; project_id: string; title: string; description: string; type: string;
   state: State; assignee: string | null; priority: number; labels: string;
-  duplicate_of: string | null; related_to: string; created_by: string; created_at: string; updated_at: string;
+  duplicate_of: string | null; related_to: string; waiting_on: string | null; created_by: string; created_at: string; updated_at: string;
 }
 const toTicket = (r: TicketRow): Ticket => ({
   id: r.id, project_id: r.project_id, title: r.title, description: r.description, type: r.type,
   state: r.state, assignee: r.assignee, priority: r.priority,
   labels: JSON.parse(r.labels) as string[],
-  duplicateOf: r.duplicate_of, relatedTo: JSON.parse(r.related_to) as string[],
+  duplicateOf: r.duplicate_of, relatedTo: JSON.parse(r.related_to) as string[], waiting_on: r.waiting_on,
   created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at,
 });
 const getRow = (db: DatabaseSync, projectId: string, id: string): TicketRow | undefined =>
@@ -296,6 +296,7 @@ function opGetIssue(db: DatabaseSync, projectId: string, projectKey: string, a: 
 export interface SaveIssueArgs {
   id?: string; title?: string; description?: string; type?: string; state?: string;
   assignee?: string | null; priority?: number; labels?: string[]; duplicateOf?: string | null; relatedTo?: string[];
+  waitingOn?: string | null; // LOOP-384 AC1: Human-Blocked discriminator (human-decision | human-action | external)
   allowDuplicate?: boolean; // §8 escape hatch: skip the exact-title non-terminal dedupe on create (deliberate refile)
 }
 // MIRRORS server.ts save_issue exactly: validate → create (insertTicket) OR update (atomic read-merge-write
@@ -310,6 +311,7 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
   if (a.relatedTo !== undefined && !isStrArr(a.relatedTo)) return errR(400, "relatedTo must be an array of strings");
   if (a.priority !== undefined && (typeof a.priority !== "number" || !Number.isInteger(a.priority) || a.priority < 0 || a.priority > 4)) return errR(400, `invalid priority; an integer 0..4`);
   if (a.state && !STATES.includes(a.state as State)) return errR(400, `invalid state '${a.state}'; one of ${STATES.join(", ")}`);
+  if (a.waitingOn !== undefined && a.waitingOn !== null && !["human-decision", "human-action", "external"].includes(a.waitingOn)) return errR(400, `invalid waitingOn '${a.waitingOn}'; one of human-decision, human-action, external`);
   if (a.assignee && a.assignee !== "me" && !actorExists(db, a.assignee)) return errR(400, `unknown assignee '${a.assignee}'; one of ${listActorHandles(db).join(", ")} (or "me"/null)`); // DL-69: the message is byte-identical to server.ts's (the single source) — agent-api.ts asserts only status 400
   if (!a.id) {
     if (!a.title) return errR(400, "title required to create a ticket");
