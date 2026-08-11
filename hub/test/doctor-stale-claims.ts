@@ -1,6 +1,7 @@
-// doctor-stale-claims.ts — W43 regression: stale claim detection (LOOP-450).
-// Tests AC1–AC5: stale claim findings, no double-report with W16, events-ledger age,
-// healthy-lane silence, stale-lane silence, and the metrics.ts predicate.
+// doctor-stale-claims.ts — W43 regression: stale claim detection.
+// Predicate arms (staleClaimFindings): events-ledger age, blocked exclusion, custom window.
+// Rendered arms (doctorWorkspace): W16/W43 exclusivity in both directions, and the W43 line's
+// content — count, oldest ticket id, and the >=48h day/hour formatting (LOOP-566).
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,10 @@ const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w43-")));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const NOW = "2026-08-01T12:00:00.000Z";
+
+// The rendered arms run through the real doctor path, which uses Date.now() for both the stale
+// window and the liveness window — so their fixtures are stamped RELATIVE to now, not at NOW.
+const agoIso = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
 
 const capture = async (fn: () => Promise<unknown>): Promise<string> => {
   const lines: string[] = [];
@@ -30,6 +35,39 @@ function seedWs(root: string, projectKey = "loop"): void {
     repos: {},
     projects: { [projectKey]: { prefix: "LOOP", devSplit: true } },
   }));
+}
+
+/**
+ * A whole workspace the REAL doctor path can be run against: config + fires ledger + hub.db, all
+ * stamped relative to now. `staleHours` is the age of the ticket's most recent events row (what
+ * W43 measures); `fires[].hoursAgo` is how long ago that handle last fired (what W16 measures).
+ * Returns the hub.db path for doctorWorkspace's `boardDb`.
+ */
+function seedRendered(
+  root: string,
+  tickets: Array<{ id: string; assignee: string | null; staleHours: number }>,
+  fires: Array<{ agent: string; hoursAgo: number }>,
+): string {
+  seedWs(root);
+  mkdirSync(join(root, ".dev-loop", "team"), { recursive: true });
+  writeFileSync(
+    join(root, ".dev-loop", "team", "fires.jsonl"),
+    fires.map((f) => JSON.stringify({ agent: f.agent, ts: agoIso(f.hoursAgo) })).join("\n") + "\n",
+  );
+  const dbPath = join(root, ".dev-loop", "hub.db");
+  const db = openDb(dbPath);
+  db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p1','loop','Loop','2026-01-01T00:00:00.000Z')").run();
+  const ins = db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at,assignee) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const evIns = db.prepare("INSERT INTO events(project_id,ticket_id,actor,kind,data,created_at) VALUES(?,?,?,?,?,?)");
+  for (const t of tickets) {
+    const at = agoIso(t.staleHours);
+    // In Progress ownership keys on assignee alone in BOTH checks, so the label set only has to
+    // stay non-blocked; it is deliberately not the carrier here.
+    ins.run(t.id, "p1", "title", "", "Bug", "In Progress", 2, JSON.stringify(["dev-loop", "Bug", "qa"]), "[]", "qa", at, at, t.assignee);
+    evIns.run("p1", t.id, "qa", "issue.create", "{}", at);
+  }
+  db.close();
+  return dbPath;
 }
 
 function seedDb(
@@ -180,8 +218,85 @@ try {
     // With a 12h window, LOOP-7a is not stale (6h < 12h), LOOP-7b is stale (30h > 12h)
     const findings12 = staleClaimFindings(db, "p1", { windowMs: 12 * 3_600_000, nowMs: Date.parse("2026-08-01T12:00:00.000Z") });
     db.close();
-    ok(findings48.length === 0, "AC5b: staleClaimFindings with 48h window returns 0 (neither ticket is 48h+ stale)");
-    ok(findings12.length === 1 && findings12[0].ticketId === "LOOP-7b", "AC5b: staleClaimFindings with 12h window finds only LOOP-7b (30h > 12h)");
+    ok(findings48.length === 0, "predicate: staleClaimFindings with 48h window returns 0 (neither ticket is 48h+ stale)");
+    ok(findings12.length === 1 && findings12[0].ticketId === "LOOP-7b", "predicate: staleClaimFindings with 12h window finds only LOOP-7b (30h > 12h)");
+  }
+
+  // ── AC3 — W16/W43 exclusivity, asserted on the RENDERED doctor output, both directions.
+  // The predicate arms above cannot see this: staleClaimFindings is fire-free by design, so
+  // whether W43 SPEAKS about a given ticket is decided one layer up (liveOwnerStaleClaims) and
+  // is only observable in the lines doctorWorkspace prints.
+  {
+    // AC3a — owner with no fire inside the liveness window: W16 reports it, W43 is silent.
+    const root = join(tmp, "ac3-dead-owner");
+    const dbPath = seedRendered(
+      root,
+      [{ id: "LOOP-10", assignee: "junior-dev", staleHours: 30 }],
+      [{ agent: "junior-dev", hoursAgo: 8 * 24 }],  // last fire 8d ago — outside W16's 7d window
+    );
+    const out = await capture(() => doctorWorkspace(loadWorkspace(root), { boardDb: dbPath }));
+    ok(out.includes("[W16]"), "AC3a: dead owner + stale claim → W16 present");
+    ok(out.includes("owner 'junior-dev'"), "AC3a: W16 names the dead owner");
+    ok(!out.includes("[W43]"), "AC3a: dead owner + stale claim → W43 SILENT (W16 owns the report)");
+  }
+  {
+    // AC3b — the inverse: same board, owner fired 1 minute ago. W43 speaks, W16 does not.
+    const root = join(tmp, "ac3-live-owner");
+    const dbPath = seedRendered(
+      root,
+      [{ id: "LOOP-11", assignee: "junior-dev", staleHours: 30 }],
+      [{ agent: "junior-dev", hoursAgo: 1 / 60 }],  // last fire 1 minute ago — alive
+    );
+    const out = await capture(() => doctorWorkspace(loadWorkspace(root), { boardDb: dbPath }));
+    ok(out.includes("[W43]"), "AC3b: live owner + stale claim → W43 present");
+    ok(out.includes("LOOP-11"), "AC3b: W43 names the stalled ticket");
+    ok(!out.includes("[W16]"), "AC3b: live owner + stale claim → W16 SILENT (W43 owns the report)");
+  }
+
+  // ── AC4 — the W43 renderer's own content: count, oldest ticket id, and the age formatting.
+  {
+    // AC4a — two stale claims, live owner: count is 2, `oldest` is the OLDER one, and >=48h
+    // renders as days.
+    const root = join(tmp, "ac4-days");
+    const dbPath = seedRendered(
+      root,
+      [
+        { id: "LOOP-12a", assignee: "junior-dev", staleHours: 50 },
+        { id: "LOOP-12b", assignee: "junior-dev", staleHours: 30 },
+      ],
+      [{ agent: "junior-dev", hoursAgo: 1 / 60 }],
+    );
+    const out = await capture(() => doctorWorkspace(loadWorkspace(root), { boardDb: dbPath }));
+    ok(out.includes("2 claimed ticket(s)"), "AC4a: W43 line carries the finding count");
+    ok(out.includes("(oldest LOOP-12a, 2d)"), "AC4a: oldest is the 50h ticket and >=48h renders days (2d)");
+    ok(!out.includes("oldest LOOP-12b"), "AC4a: the newer stale claim is not named as oldest");
+  }
+  {
+    // AC4b — below the boundary renders hours.
+    const root = join(tmp, "ac4-hours");
+    const dbPath = seedRendered(
+      root,
+      [{ id: "LOOP-13", assignee: "junior-dev", staleHours: 30 }],
+      [{ agent: "junior-dev", hoursAgo: 1 / 60 }],
+    );
+    const out = await capture(() => doctorWorkspace(loadWorkspace(root), { boardDb: dbPath }));
+    ok(out.includes("1 claimed ticket(s)"), "AC4b: W43 line carries the finding count");
+    ok(out.includes("(oldest LOOP-13, 30h)"), "AC4b: below 48h renders hours (30h), not days");
+  }
+  {
+    // AC4c — the low side of the threshold. Together with AC4a (50h → `2d`) this BRACKETS the
+    // switch between 47h and 50h, which is what a rendered arm can actually establish: the doctor
+    // path reads a real clock, so a fixture stamped "exactly 48h ago" is 48.000…h by the time the
+    // renderer sees it and passes under `>= 48` and `> 48` alike. Do not re-add an
+    // exactly-48h arm claiming to pin `>=` against `>` — it pins nothing (LOOP-566 AC6, M3).
+    const root = join(tmp, "ac4-boundary");
+    const dbPath = seedRendered(
+      root,
+      [{ id: "LOOP-14", assignee: "junior-dev", staleHours: 47 }],
+      [{ agent: "junior-dev", hoursAgo: 1 / 60 }],
+    );
+    const out = await capture(() => doctorWorkspace(loadWorkspace(root), { boardDb: dbPath }));
+    ok(out.includes("(oldest LOOP-14, 47h)"), "AC4c: 47h is still the hours branch — the threshold sits between 47h and 50h");
   }
 
 } catch (e) {
