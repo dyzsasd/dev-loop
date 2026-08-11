@@ -62,8 +62,19 @@ function gitErrText(e: unknown): { summary: string; detail: string } {
  * A temp worktree detached at `refs/heads/<defaultBranch>` does the rebase, and the shared branch
  * ref is moved afterwards with `update-ref`. That call moves the ref only — no working-tree write,
  * no index write — so the unrelated modifications the caller measured stay byte-identical on disk.
- * Their staged/HEAD content is identical either side of the rebase (the rebase did not touch those
- * paths), so `git status` reports exactly what it reported before.
+ *
+ * LOOP-563 — that property is right for the paths the caller measured and WRONG for every other
+ * path the ref move brings in. This docstring used to end "their staged/HEAD content is identical
+ * either side of the rebase (the rebase did not touch those paths), so `git status` reports exactly
+ * what it reported before." That reasoning covers the replayed doc commit; it silently assumes the
+ * rebase pulls in nothing else. When `behind > 0` it pulls in every upstream commit, and those
+ * commits touch paths that are CLEAN here — so index and worktree keep the pre-merge blob while
+ * HEAD carries the post-merge one, and `git status` reports a byte-exact staged REVERSAL of a
+ * commit already on origin and already green. A fire that then runs a bare `git commit` republishes
+ * that reversal as its own increment. Measured on this workspace 2026-08-11 (PM fires 170/171): the
+ * damage was scoped to exactly the paths the incoming commit touched — no file changed, the ref
+ * moved. So the ref move is now followed by `syncSharedCheckout`, which carries index and worktree
+ * to the new value for those paths and only those paths.
  *
  * LOOP-369 — it used to build the worktree from `HEAD`, i.e. from whatever the SHARED CHECKOUT
  * happened to have checked out, while every check around it read `origin/<db>...<db>`. With the
@@ -128,17 +139,161 @@ function isolatedRebase(
           + missing.map((c) => `  ${c.sha.slice(0, 12)} ${c.subject}`).join("\n"),
       };
     }
+    // LOOP-563 — the protected set is measured HERE, while the ref still holds `before`, and not
+    // inside the sync below. Once `update-ref` lands, the very paths the ref move reverted read as
+    // dirty to `git status` (their index no longer matches the new HEAD) — so a set measured after
+    // the move protects exactly the paths that need repairing and the sync becomes a no-op. That
+    // inversion is silent: every count is zero and nothing warns. Measured while fixing this.
+    let protectedPaths: Set<string>;
+    // NOT the `g` helper: it ends in .trim(), and a NUL-separated stream must reach the parser
+    // exactly as git wrote it (the same reason LOOP-326 kept parseDirtyPaths off it).
+    try {
+      protectedPaths = parseProtectedPathsZ(execFileSync(
+        "git", ["-C", repoDir, "status", "--porcelain", "-z", "--untracked-files=all"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ));
+    }
+    catch (e) { return { ok: false, blockedMsg: `could not read the working-tree state before moving the ref: ${gitErrText(e).summary}` }; }
+
     // AC3 — compare-and-swap: pass the value read before the rebase, so a writer that moved the
     // branch in the meantime makes this fail instead of silently overwriting their work.
     try { g(repoDir, ["update-ref", `refs/heads/${defaultBranch}`, rebased, before]); }
     catch (e) {
       return { ok: false, blockedMsg: `rebased cleanly but ${defaultBranch} moved underneath us (expected it at ${before.slice(0, 12)}) — refusing to overwrite the newer value; re-run: ${gitErrText(e).summary}` };
     }
+    // LOOP-563 — the ref has moved; carry the index and the working tree with it for the paths it
+    // brought in. Strictly AFTER the CAS: syncing to a value the ref does not hold would be the
+    // same divergence with the sides swapped. Failures here are reported and do not fail the land —
+    // the doc commit is legitimately rebased and pushed, and the caller must not read a sync
+    // shortfall as "nothing landed" (LOOP-369's lesson about what success is a statement about).
+    const sync = syncSharedCheckout(repoDir, before, rebased, protectedPaths);
+    if (sync.failures.length) {
+      process.stderr.write(
+        `doc-land: WARNING — ${defaultBranch} moved to ${rebased.slice(0, 12)} but ${sync.failures.length} path(s) could not be\n`
+        + `  brought along, so the checkout still holds their pre-merge content while HEAD holds the post-merge one.\n`
+        + `  A bare 'git commit' here would republish that as a reversal — stage by path until this is resolved:\n`
+        + sync.failures.map((f) => `    ${f}\n`).join(""),
+      );
+    }
     return { ok: true, alreadyUpstream };
   } finally {
     try { g(repoDir, ["worktree", "remove", "--force", wt]); } catch { /* best-effort */ }
     try { rmSync(wt, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
+}
+
+/**
+ * LOOP-563 — `git diff --no-renames --name-status -z A B` into records.
+ *
+ * `-z` rather than the plain form because the plain form QUOTES any path with a special character
+ * and this output is matched against `git status`'s, then handed back to git as a pathspec: three
+ * places for a quoting mismatch to turn a protected path into an unprotected one. With `-z` the
+ * stream is `status\0path\0…` and no path is ever quoted or escaped. `--no-renames` is what makes
+ * the record shape uniform — a rename would otherwise carry two paths — and it is also the safer
+ * reading: a rename decomposed into D + A is handled by the two rules below with no third case.
+ */
+export function parseNameStatusZ(buf: string): Array<{ status: string; path: string }> {
+  const parts = buf.split("\0");
+  const out: Array<{ status: string; path: string }> = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const status = parts[i], path = parts[i + 1];
+    if (!status || !path) continue;
+    out.push({ status, path });
+  }
+  return out;
+}
+
+/**
+ * LOOP-563 — every path `syncSharedCheckout` may not write, from `git status --porcelain -z -uall`.
+ *
+ * The set is tracked-dirty ∪ untracked. Untracked is in it because an incoming commit that ADDS a
+ * path someone already has on disk untracked would otherwise be checked out straight over their
+ * file — silent loss of work that was never in git, which is the one loss no later command can
+ * undo. `-uall` (not the default `normal`) is load-bearing: `normal` collapses an untracked
+ * directory to `dir/`, which matches no path in the diff, so every file under it would be
+ * unprotected.
+ *
+ * A rename/copy record carries a SECOND NUL-terminated field with the origin path; both sides are
+ * protected — the target must not be clobbered, the origin must not be resurrected underneath a
+ * staged rename.
+ */
+export function parseProtectedPathsZ(buf: string): Set<string> {
+  const out = new Set<string>();
+  const parts = buf.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const rec = parts[i];
+    if (!rec || rec.length < 4) continue;   // "XY p" is the shortest legal record
+    const xy = rec.slice(0, 2);
+    const path = rec.slice(3);              // XY<space> is exactly 3 columns
+    if (path) out.add(path);
+    if (xy[0] === "R" || xy[0] === "C") { const origin = parts[++i]; if (origin) out.add(origin); }
+  }
+  return out;
+}
+
+/**
+ * LOOP-563 — split the ref move's paths into restore / remove / skipped.
+ *
+ * Pure so the composition is testable without a git fixture. A protected path is SKIPPED, never
+ * refused: a path that is both dirty here and changed upstream is an ordinary concurrent edit, and
+ * the AC that governs it says the worktree bytes survive (they are that fire's work, and this verb
+ * never adjudicates another fire's edit). Refusing the whole land on one such path would re-create
+ * exactly the never-ending wait LOOP-325 removed, on a shared checkout that is dirty by design.
+ */
+export function planCheckoutSync(
+  changed: ReadonlyArray<{ status: string; path: string }>,
+  protectedPaths: ReadonlySet<string>,
+): { restore: string[]; remove: string[]; skipped: string[] } {
+  const restore: string[] = [], remove: string[] = [], skipped: string[] = [];
+  for (const { status, path } of changed) {
+    if (protectedPaths.has(path)) { skipped.push(path); continue; }
+    if (status.startsWith("D")) remove.push(path);
+    else restore.push(path);
+  }
+  return { restore, remove, skipped };
+}
+
+/**
+ * LOOP-563 — carry the shared checkout's index + working tree from `before` to `after`.
+ *
+ * Called only after the `update-ref` CAS has succeeded. Writes exactly the paths the two commits
+ * differ on, minus every protected path, so a caller's unrelated edits are untouched by
+ * construction rather than by care.
+ *
+ * `protectedPaths` is an INPUT, measured by the caller before the ref moved. It cannot be measured
+ * here: after the move the reverted paths themselves read as dirty, so a locally-measured set would
+ * protect precisely the paths that need repairing and silently reduce this to a no-op.
+ */
+function syncSharedCheckout(
+  repoDir: string, before: string, after: string, protectedPaths: ReadonlySet<string>,
+): { restored: number; removed: number; skipped: string[]; failures: string[] } {
+  const failures: string[] = [];
+  const raw = (args: string[], input?: string): string =>
+    execFileSync("git", ["-C", repoDir, ...args],
+      { encoding: "utf8", input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+
+  let plan: { restore: string[]; remove: string[]; skipped: string[] };
+  try {
+    plan = planCheckoutSync(
+      parseNameStatusZ(raw(["diff", "--no-renames", "--name-status", "-z", before, after])),
+      protectedPaths,
+    );
+  } catch (e) {
+    return { restored: 0, removed: 0, skipped: [], failures: [`could not compute the changed set: ${gitErrText(e).summary}`] };
+  }
+
+  // Both writes take the pathspec over stdin, NUL-separated: an argv list is bounded by ARG_MAX and
+  // a merge can legitimately carry more paths than that (this repo has landed 300+ in one commit).
+  if (plan.restore.length) {
+    try { raw(["checkout", after, "--pathspec-from-file=-", "--pathspec-file-nul"], plan.restore.join("\0")); }
+    catch (e) { failures.push(`restore ${plan.restore.length} path(s): ${gitErrText(e).summary}`); }
+  }
+  if (plan.remove.length) {
+    // --ignore-unmatch: a path already gone from the worktree is the end state this wants, not an error.
+    try { raw(["rm", "-q", "--force", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], plan.remove.join("\0")); }
+    catch (e) { failures.push(`remove ${plan.remove.length} path(s): ${gitErrText(e).summary}`); }
+  }
+  return { restored: plan.restore.length, removed: plan.remove.length, skipped: plan.skipped, failures };
 }
 
 export function parseDirtyPaths(porcelain: string): string[] {
