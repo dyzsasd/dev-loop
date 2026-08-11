@@ -1409,6 +1409,51 @@ try {
     ok(dupes.length === 0, `SETTABLE has no duplicate pattern — a shadowed entry is unreachable and edits to it do nothing (dupes: ${dupes.join(", ") || "none"})`);
   }
 
+  // LOOP-517: a repo ref containing a dot is legal config that the mutator can now address.
+  // Both team-config validator (KEY_RE) and team-edit whitelist (SETTABLE) must agree.
+  {
+    const dotRefWs = join(tmp, "dotref-ws");
+    const initD = run("team", ["init", "--dir", dotRefWs, "--key", "dottest", "--backend", "service", "--yes"], { cwd: tmp });
+    ok(initD.code === 0, "LOOP-517: fixture workspace created");
+
+    // Add a project for the repo to belong to
+    const addProj = run("team", ["add-project", "web", "--prefix", "WEB"], { cwd: dotRefWs });
+    ok(addProj.code === 0, "LOOP-517: added project");
+
+    // Add a repo with a dotted ref (this depends on KEY_RE allowing dots)
+    const addDotRef = run("team", ["add-repo", "web.app", "--project", "web", "--path", "web-app-repo"], { cwd: dotRefWs });
+    ok(addDotRef.code === 0, "LOOP-517: add-repo accepts dotted ref (e.g. 'web.app')");
+
+    // Now try to set ciIrrelevantPaths on the dotted ref through the mutator
+    const setCii = run("team", ["set", "repos.web.app.ciIrrelevantPaths", "docs/,build/"], { cwd: dotRefWs });
+    ok(setCii.code === 0 && /repos\.web\.app\.ciIrrelevantPaths = /.test(setCii.out),
+      "LOOP-517: team set repos.<dotted-ref>.ciIrrelevantPaths succeeds");
+
+    // Verify the value was actually written
+    const cfgD = readJson(join(dotRefWs, "dev-loop.json"));
+    ok(Array.isArray(cfgD.repos["web.app"]?.ciIrrelevantPaths) &&
+       cfgD.repos["web.app"].ciIrrelevantPaths.includes("docs/") &&
+       cfgD.repos["web.app"].ciIrrelevantPaths.includes("build/"),
+      "LOOP-517: ciIrrelevantPaths value is persisted correctly");
+
+    // Also test deploy.style on the dotted ref
+    const setDeploy = run("team", ["set", "repos.web.app.deploy.style", "release-pr"], { cwd: dotRefWs });
+    ok(setDeploy.code === 0 && /repos\.web\.app\.deploy\.style = /.test(setDeploy.out),
+      "LOOP-517: team set repos.<dotted-ref>.deploy.style succeeds");
+
+    const cfgD2 = readJson(join(dotRefWs, "dev-loop.json"));
+    ok(cfgD2.repos["web.app"]?.deploy?.style === "release-pr",
+      "LOOP-517: deploy.style value is persisted correctly");
+
+    // Test a multi-dot ref as well (edge case)
+    const addMultiDot = run("team", ["add-repo", "a.b.c", "--project", "web", "--path", "a-b-c-repo"], { cwd: dotRefWs });
+    ok(addMultiDot.code === 0, "LOOP-517: add-repo accepts multi-dot ref (e.g. 'a.b.c')");
+
+    const setMulti = run("team", ["set", "repos.a.b.c.deploy.healthCheck", "http://localhost:3000/health"], { cwd: dotRefWs });
+    ok(setMulti.code === 0 && /repos\.a\.b\.c\.deploy\.healthCheck = /.test(setMulti.out),
+      "LOOP-517: team set on multi-dot ref succeeds");
+  }
+
   console.log(fails === 0 ? "\nTEAM_EDIT_OK" : `\n${fails} CHECK(S) FAILED`);
   process.exit(fails === 0 ? 0 : 1);
 } finally {
