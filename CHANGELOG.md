@@ -5,6 +5,21 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+- **An opencode fire's recorded cost was one turn of it (LOOP-476).** `opencodeAdapter.parse()` took
+  the LAST `step_finish` as the fire's total, which is right only if opencode's per-event numbers are
+  cumulative — a premise the adapter's own comment recorded as unverified. Measured on this
+  workspace's real streams, they are per-turn: cost and `tokens.input` both DECREASE between
+  consecutive turns, which a cumulative counter cannot do. So every multi-turn opencode row
+  understated its fire — a captured 19-turn fire recorded $0.0032 of a real $0.1405 (2.3%), and a
+  198-turn one $0.0076 of $1.1466 (0.67%). The parse now SUMS every `step_finish`, pinned by a
+  captured fixture rather than a hand-written one. **Operator-visible:** opencode `costUsd` in
+  `fires.jsonl` and `dev-loop metrics` steps up from today — the fires did not get more expensive,
+  the meter stopped reading one turn. Rows written before this land keep the old number, and
+  LOOP-461's per-profile deadline re-derives from the corrected rate as they age out. Separately, a
+  stdout buffer that hit its 4 MiB cap kept parsing its surviving prefix and reporting it as the
+  fire's total; a truncated capture now yields no usage at all, which the LOOP-445 precedence
+  already handles as `budget-deadline` — never a false breach.
+
 - **An app reviewer is not a person, and the merge gate now knows it without being told
   (LOOP-491).** On 2026-08-10 every open feature PR — 6 of 6 — was held by `dev-loop pr merge` on
   `forgeReview: unresolved objection from @chatgpt-codex-connector`, and loop landing throughput was

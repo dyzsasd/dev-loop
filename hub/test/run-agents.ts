@@ -821,8 +821,14 @@ try {
   ok(u?.cacheReadTokens === 0 && u?.cacheWriteTokens === 0, "LOOP-85 AC1: cache split read from part.tokens.cache.{read,write}");
   ok(u?.costUsd === 0 && u?.currency === "USD", "LOOP-85 AC1: part.cost → costUsd (0 on a free model is a real measurement) + currency 'USD'");
 }
-// AC (PM constraint from the LOOP-15 verify): opencode emits one step_finish PER model turn — take the LAST,
-// never the first, so a multi-turn fire records the final turn's real numbers, not the opening turn as the total.
+// AC (PM constraint from the LOOP-15 verify): opencode emits one step_finish PER model turn, so a multi-turn
+// fire must never record ONE turn as the total — "no plausible-but-partial wrong row".
+//
+// LOOP-85 met that constraint with last-match, because whether the per-event numbers were cumulative was
+// unmeasured. LOOP-476 measured it on this workspace's own opencode streams — they are PER-TURN (cost and
+// tokens.input both DECREASE between consecutive turns, which a cumulative counter cannot do) — so last-match
+// was itself a partial row: 2.3% of a real 19-turn fire. The constraint is unchanged and is now met by
+// SUMMING; the captured fixture proving it is hub/test/fixtures/opencode-multistep.jsonl (opencode-usage.ts).
 {
   const multiTurn = [
     '{"type":"step_finish","part":{"type":"step-finish","cost":0.001,"tokens":{"input":10,"output":2,"cache":{"read":0,"write":0}}}}',
@@ -830,8 +836,11 @@ try {
     '{"type":"step_finish","part":{"type":"step-finish","cost":0.05,"tokens":{"input":900,"output":80,"cache":{"read":100,"write":50}}}}',
   ].join("\n");
   const u = opencodeAdapter.parse(multiTurn);
-  ok(u?.inputTokens === 900 && u?.outputTokens === 80 && u?.costUsd === 0.05, "LOOP-85: multi-step fire → LAST step_finish wins (900/80/$0.05), NOT the first (10/2) — no plausible-but-partial wrong row");
-  ok(u?.cacheReadTokens === 100 && u?.cacheWriteTokens === 50, "LOOP-85: last-match carries the final turn's cache split too");
+  ok(u?.inputTokens === 910 && u?.outputTokens === 82 && Math.abs((u?.costUsd ?? 0) - 0.051) < 1e-9,
+    "LOOP-85/LOOP-476: multi-step fire → the SUM of every step_finish (910/82/$0.051)");
+  ok(u?.inputTokens !== 10 && u?.inputTokens !== 900,
+    "LOOP-85's constraint still holds: neither the FIRST turn (10) nor the LAST (900) stands as the fire's total");
+  ok(u?.cacheReadTokens === 100 && u?.cacheWriteTokens === 50, "LOOP-476: the cache buckets sum across turns too");
   // Version-drift robustness: a flattened (top-level tokens/cost, no `part`) shape still parses.
   const flat = '{"type":"summary","tokens":{"input":5,"output":1},"cost":0.002}';
   ok(opencodeAdapter.parse(flat)?.inputTokens === 5, "LOOP-85: a top-level tokens/cost shape (no `part`) also parses — resilient to a version that flattens the events");
