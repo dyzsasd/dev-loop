@@ -24,6 +24,7 @@ import { tryResolveWorkspace, wsHubDb, wsLockPath } from "./workspace.ts";
 import type { TeamFile, Workspace } from "./team-config.ts";
 import { doctorWorkspace, isGitWorkTree } from "./doctor.ts";
 import { openDb } from "./db.ts";
+import type { DatabaseSync } from "node:sqlite";
 import { snapshotBoardDb } from "./board-snapshot.ts"; // LOOP-337: the consistent-copy primitive
 import { workspaceIsolationVerdict } from "./destructive-guard.ts"; // LOOP-316: the SHARED gate, workspace-scoped
 import { ensureSeed } from "./seed.ts";
@@ -358,6 +359,30 @@ function gateForceReseed(
   return false;
 }
 
+// LOOP-506: ONE atomic statement, not a SELECT-parse-UPDATE loop. The old shape read every row
+// outside any transaction and wrote each back whole, so a concurrent `settings set` that committed
+// between this pass's read and its write was erased by the stale copy. json_set does the merge inside
+// SQLite — there is no window to lose an update in, and no second JSON policy in JS. It creates the
+// intermediate `$.hub` object when absent and leaves every sibling key untouched.
+//
+// `json_valid` is the refusal (LOOP-368: a fire may not destroy operator data through any verb). The
+// old `catch { s = {} }` failed OPEN — one unparseable row was rewritten as
+// `{"hub":{"transport":"daemon"}}`, silently costing the operator every other key in it. Now a row
+// SQLite cannot read is left byte-identical and returned as `refused` for the caller to name. NULL is
+// not malformed ("absent" — COALESCE gives it `{}`); the empty string IS, matching readSettings.
+//
+// Exported so its regression test drives THIS statement rather than a copy of it pasted into the
+// test: a test that re-declares the SQL it is checking cannot fail when the shipped SQL changes.
+export function seedOpApiGate(db: DatabaseSync): { changed: number; refused: string[] } {
+  const refused = (db.prepare("SELECT key FROM projects WHERE json_valid(COALESCE(settings_json,'{}'))=0").all() as Array<{ key: string }>).map((r) => r.key);
+  const res = db.prepare(
+    `UPDATE projects SET settings_json = json_set(COALESCE(settings_json,'{}'), '$.hub.transport', 'daemon')
+       WHERE json_valid(COALESCE(settings_json,'{}'))
+         AND json_extract(COALESCE(settings_json,'{}'), '$.hub.transport') IS NOT 'daemon'`,
+  ).run();
+  return { changed: Number(res.changes), refused };
+}
+
 export async function bundleLoad(file: string, dir: string, opts: { forceReseed: boolean; noRun?: boolean; argv?: readonly string[] }): Promise<number> {
   const { manifest, payload } = readBundle(file);
 
@@ -485,19 +510,16 @@ export async function bundleLoad(file: string, dir: string, opts: { forceReseed:
     }
   }
 
+
   // Op-API gate for the remote board/attach surface (§4.5 step 3): seed hub.transport="daemon" on
   // every project row — idempotent JSON merge; the daemon reads it fresh per request.
   if (ws.file.team.backend === "service" && existsSync(dbPath)) {
     try {
       const db = openDb(dbPath);
       try {
-        for (const row of db.prepare("SELECT id, settings_json FROM projects").all() as Array<{ id: string; settings_json?: string }>) {
-          let s: Record<string, unknown>; try { s = JSON.parse(row.settings_json ?? "{}"); } catch { s = {}; }
-          const hub = (s.hub ?? {}) as Record<string, unknown>;
-          if (hub.transport === "daemon") continue;
-          s.hub = { ...hub, transport: "daemon" };
-          db.prepare("UPDATE projects SET settings_json=? WHERE id=?").run(JSON.stringify(s), row.id);
-        }
+        const { changed, refused } = seedOpApiGate(db);
+        if (refused.length) console.warn(`•  op-API gate SKIPPED for ${refused.length} project row(s) with an unreadable settings_json (${refused.join(", ")}) — left untouched, not overwritten; inspect with: sqlite3 -readonly ${dbPath} "SELECT key, settings_json FROM projects;"`);
+        if (changed) console.log(`op-API gate: ${changed} project row(s) updated`);
       } finally { db.close(); }
       console.log("op-API gate seeded (settings_json.hub.transport='daemon') — the token-authed board/attach write surface is live");
     } catch (e) { console.warn(`op-API gate seeding failed (${(e as Error).message}) — attach writes stay dormant until seeded`); }

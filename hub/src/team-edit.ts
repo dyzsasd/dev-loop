@@ -19,6 +19,7 @@ import { snapshotBeforeDestructive, resolveBackupConfig } from "./board-snapshot
 import { provisionClaudePermissions } from "./team-init.ts";
 import { syncOpencodeConfig } from "./opencode-sync.ts";
 import { syncProjectRows, syncProjectRowsBestEffort } from "./project-row-sync.ts"; // LOOP-409 — the config → hub-row projection
+import { parseSettingsJson } from "./settings-cli.ts"; // LOOP-506 — ONE refusal policy for settings_json, shared with `settings set`
 
 function die(msg: string, code = 2): never { console.error(`dev-loop team: ${msg}`); process.exit(code); }
 
@@ -255,7 +256,12 @@ export async function teamSet(argv: string[]): Promise<number> {
     try {
       const db = openDb(dbPath);
       try { syncScratchProjectRow(db, key, coerced as boolean); console.log(`projected scratch=${JSON.stringify(coerced)} to hub row '${key}'`); } finally { db.close(); }
-    } catch { /* best-effort — never fail the set command */ }
+    } catch (e) {
+      // Best-effort — never fail the set command (the config write already landed). But a REFUSAL is
+      // not a db hiccup to swallow silently: say why the projection was skipped, or the operator is
+      // left with config and hub row disagreeing and no clue that their row is unparseable (LOOP-506).
+      console.error(`•  hub row projection skipped (${(e as Error).message})`);
+    }
   }
   // LOOP-409 — the "on every subsequent config change" half. Unconditional on a service backend
   // rather than keyed to the mode/autonomy paths: `team set` is the only mutator an operator uses
@@ -402,7 +408,13 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
     const chosen = prefix ?? derivePrefix(db, key);
     try { ensureSeed(db, key, name ?? key, chosen); }
     catch (e) { die(`config written, but the hub row could not be seeded: ${(e as Error).message}\n  fix it by hand: dev-loop seed ${key} "<Project Name>" <UNIQUE_PREFIX>  (doctor reports the gap as W08)`, 1); }
-    if (scratch) syncScratchProjectRow(db, key, true);
+    // Best-effort like the projection below it (LOOP-506): a pre-existing row with an unparseable
+    // settings_json now REFUSES rather than resetting the column to `{}`, and a find-or-create seed
+    // must not turn that refusal into a failed add-project — the config write already landed.
+    if (scratch) {
+      try { syncScratchProjectRow(db, key, true); }
+      catch (e) { console.error(`•  scratch projection skipped (${(e as Error).message}) — the hub row keeps its existing settings_json`); }
+    }
     // LOOP-409 — seed time is the first moment the row exists, so it is the first moment it can
     // disagree with config. Best-effort: the config write already landed and must not be lost to a
     // busy db; `hub start` re-converges and doctor reports a persistent divergence.
@@ -417,17 +429,37 @@ function seedHubRow(ws: Workspace, key: string, name: string | undefined, prefix
 // LOOP-420: shared helper that projects the scratch field from config to the hub db row.
 // Called from seedHubRow (add-project --scratch) and from teamSet (projects.<key>.scratch set).
 // Additive to settings_json — never a replacement (existing keys like hub.transport, workflow, etc. are preserved).
-function syncScratchProjectRow(db: DatabaseSync, key: string, scratch: boolean): void {
-  const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
-  if (!row) return;
-  let settings: Record<string, unknown> = {};
-  try { settings = row.settings_json ? (JSON.parse(row.settings_json) as Record<string, unknown>) : {}; } catch { /* malformed — start fresh */ }
-  if (scratch) {
-    settings.scratch = true;
-  } else {
-    delete settings.scratch;
+// LOOP-506: the read-modify-write is ONE atomic unit. `BEGIN IMMEDIATE` takes the write reservation
+// BEFORE the SELECT, so the row parsed here is the row replaced below. Reading outside it was not
+// merely untidy: under WAL this SELECT is permitted *while* a concurrent `settings set` holds its own
+// reservation, and the UPDATE then waits for that commit and lands the pre-commit copy — erasing the
+// key the sibling verb just wrote. A reservation on one participant does not serialize a race; it has
+// to be on the read of every participant.
+//
+// Malformed input is REFUSED via the shared policy in settings-cli, not replaced with `{}`. The old
+// `catch { /* start fresh */ }` cost the operator every key in the row (humanWrite.enabled,
+// workflow.transitions, the notifier cadences, hub.transport) the moment one row was unparseable —
+// LOOP-368: a fire may not destroy operator data through any verb. It THROWS rather than dying so the
+// best-effort callers can warn and continue; nothing is written on that path.
+export function syncScratchProjectRow(db: DatabaseSync, key: string, scratch: boolean): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = db.prepare("SELECT settings_json FROM projects WHERE key=?").get(key) as { settings_json: string | null } | undefined;
+    if (!row) { db.exec("COMMIT"); return; }
+    const settings = parseSettingsJson(key, row.settings_json);
+    if (scratch) {
+      settings.scratch = true;
+    } else {
+      delete settings.scratch;
+    }
+    db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify(settings), key);
+    db.exec("COMMIT");
+  } catch (e) {
+    // The refusal must leave the row byte-identical, so roll back before re-throwing. A failed
+    // ROLLBACK (no transaction open) must not mask the real error.
+    try { db.exec("ROLLBACK"); } catch { /* already rolled back / never opened */ }
+    throw e;
   }
-  db.prepare("UPDATE projects SET settings_json=? WHERE key=?").run(JSON.stringify(settings), key);
 }
 
 // A unique, derived ticket prefix: the key's alphanumerics uppercased (max 8), de-clashed with a numeric
