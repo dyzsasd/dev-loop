@@ -1626,6 +1626,12 @@ export function renderHuman(
   console.log(`fires: ${fires.fires} (success ${pct(fires.successRate)}, ${fires.failures} failed, ${fires.timeouts} timeout, ${fires.suspectErrors} suspect${interruptedNote})`);
   if (Object.keys(fires.byErrorClass).length) // P0-1b: infra failure classes split from task failures
     console.log(`errors: ${Object.entries(fires.byErrorClass).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
+
+  // AC7: detect consecutive failures to flag dead lanes in the per-agent output
+  const fireRows = readFireRows(wsFireLedger(ws));
+  const consecutiveFailures = findConsecutiveFailures(fireRows, 5, 24 * 60 * 60 * 1000, nowMs);
+  const failedAgents = new Map(consecutiveFailures.map((f) => [f.agent, f]));
+
   for (const [agent, a] of Object.entries(fires.byAgent)) {
     // LOOP-267 — cacheRead per fire, and the DRIFT flag. Modeled context correlates 0.14 with a
     // fire's bill while duration correlates 0.78, so the modeled number never was the thing driving
@@ -1634,7 +1640,12 @@ export function renderHuman(
     const cr = a.cacheReadPerFire === null ? "" : `  cacheRead/fire ${(a.cacheReadPerFire / 1e6).toFixed(2)}M`;
     const amp = a.amplification === null ? "" : `  ×${a.amplification.toFixed(1)} ctx`;
     const drift = cacheReadDrift(a.cacheReadPerFire, baselines?.[agent]);
-    console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}${cr}${amp}${drift}`);
+
+    // AC7: append recency signal for detected consecutive failures
+    const cf = failedAgents.get(agent);
+    const failureFlag = cf ? `  ⚠ ${cf.count} consecutive (${cf.errorClass}) last success ${cf.durationMs > 0 ? Math.round(cf.durationMs / (60 * 60 * 1000)) + "h" : "now"}` : "";
+
+    console.log(`  ${agent.padEnd(14)} ${String(a.fires).padStart(4)} fires  ${String(a.failures).padStart(3)} failed  median ${a.medianMs === null ? "—" : Math.round(a.medianMs / 1000) + "s"}${cr}${amp}${drift}${failureFlag}`);
   }
   if (out.teamRollup) {
     const r = out.teamRollup as { throughput: number; verifyFails: number; acceptRate: number | null; blockedNow: number; sequencedNow: number; bugsFiled: number; escaped: number | null; historyIncomplete?: boolean; historyFloor?: string | null };
@@ -2050,6 +2061,75 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   if (asJson) { console.log(JSON.stringify(out, null, 2)); return 0; }
   renderHuman(ws, windowMs, fires, out, nowMs);
   return 0;
+}
+
+// ── Consecutive failure detection for doctor W44 and metrics recency signal ──
+// AC1 & AC7: exported helper used by both doctor check and metrics renderer
+
+export interface ConsecutiveFailure {
+  agent: string;
+  count: number;
+  errorClass: string;
+  oldestTs: string;
+  newestTs: string;
+  durationMs: number;
+}
+
+export function findConsecutiveFailures(
+  rows: FireRow[],
+  minConsecutive: number = 5,
+  recencyWindowMs: number = 24 * 60 * 60 * 1000,
+  nowMs: number = Date.now(),
+): ConsecutiveFailure[] {
+  const results: ConsecutiveFailure[] = [];
+  const byAgent = new Map<string, FireRow[]>();
+
+  for (const row of rows) {
+    if (!byAgent.has(row.agent)) byAgent.set(row.agent, []);
+    byAgent.get(row.agent)!.push(row);
+  }
+
+  for (const [agent, agentRows] of byAgent) {
+    agentRows.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+
+    let failCount = 0;
+    let consecutiveStart = -1;
+    for (let i = 0; i < agentRows.length; i++) {
+      if (agentRows[i].errorClass) {
+        failCount++;
+        if (consecutiveStart === -1) consecutiveStart = i;
+      } else {
+        break;
+      }
+    }
+
+    if (failCount >= minConsecutive && consecutiveStart !== -1) {
+      const newestTs = agentRows[0].ts;
+      const newestMs = Date.parse(newestTs);
+
+      if (newestMs + recencyWindowMs >= nowMs) {
+        const streak = agentRows.slice(0, failCount);
+        const oldestTs = streak[streak.length - 1].ts;
+
+        const classCounts = new Map<string | undefined, number>();
+        for (const row of streak) {
+          classCounts.set(row.errorClass, (classCounts.get(row.errorClass) ?? 0) + 1);
+        }
+        const errorClass = [...classCounts.entries()].sort((a, b) => b[1] - a[1])[0][0] ?? "unknown";
+
+        results.push({
+          agent,
+          count: failCount,
+          errorClass: errorClass as string,
+          oldestTs,
+          newestTs,
+          durationMs: Date.parse(newestTs) - Date.parse(oldestTs),
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
 if (isMainEntry(import.meta.url)) {
