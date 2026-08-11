@@ -390,6 +390,69 @@ try {
       "LOOP-544: …while the same ticket with nothing stranded hands off normally");
   }
 
+  // ── LOOP-573: a commit naming X on a branch NOT named for X ──────────────────────────────────────
+  // The shared checkout is writable and can be left on any branch. A fire commits naming its ticket,
+  // inheriting the prior branch. The result is a well-formed commit on a foreign branch, orphaned
+  // by any later `git checkout` to a different branch.
+  {
+    const root = makeRepo("misaligned");
+    const base = { fromState: "In Progress", toState: "In Review", actor: "junior-dev", repoRoot: root, landing: "pr" as const };
+
+    // Replicate LOOP-573's live repro: checkout a branch named for LOOP-384, then commit work for LOOP-573.
+    git(root, "checkout", "-q", "-b", "dev-loop/LOOP-384");
+    writeFileSync(join(root, "a.ts"), "export const a = 573; // LOOP-573's work committed on LOOP-384's branch\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-m", "fix(hub): LOOP-573 bug (LOOP-573)");
+    const commitSha = git(root, "rev-parse", "HEAD").trim();
+
+    // LOOP-309 is satisfied — `hasLocalWorkFor` finds the commit. But LOOP-573 detects the mismatch.
+    ok(hasLocalWorkFor(root, "LOOP-573"),
+      "LOOP-573 AC1 setup: the commit message names LOOP-573, so hasLocalWorkFor returns true");
+
+    // AC1: the gate refuses the handoff for LOOP-573 because the commit is on LOOP-384's branch.
+    const refused = handoffGateRejection({ ...base, id: "LOOP-573" });
+    ok(refused !== null && /commit .* names LOOP-573/.test(refused),
+      `LOOP-573 AC1: a commit naming LOOP-573 on a foreign branch is DETECTED (${refused?.slice(0, 100)})`);
+    ok(refused !== null && /dev-loop\/LOOP-384/.test(refused),
+      "LOOP-573 AC1: …the detection names the ACTUAL branch the commit is on");
+
+    // AC2: the refusal names the branch AND the sha for recovery.
+    ok(refused !== null && refused.includes(commitSha.slice(0, 7)),
+      `LOOP-573 AC2: the refusal names the sha for cherry-pick recovery (${refused?.slice(0, 150)})`);
+    ok(refused !== null && /cherry-pick/.test(refused),
+      "LOOP-573 AC2: …and suggests the recovery command");
+
+    // AC3: `git status --porcelain` returning clean does NOT short-circuit the check.
+    git(root, "checkout", "-q", "main");  // Clean the working tree by switching branches
+    ok(git(root, "status", "--porcelain").trim() === "",
+      "LOOP-573 AC3 setup: git status is clean after switching branches");
+    const stillRefused = handoffGateRejection({ ...base, id: "LOOP-573" });
+    ok(stillRefused !== null && /commit .* names LOOP-573/.test(stillRefused),
+      "LOOP-573 AC3: even with a clean working tree, the misaligned commit is still detected");
+
+    // Mutation test: revert the fix and this should pass (the unaligned predicate is bypassed).
+    // Create a control ticket on the CORRECT branch.
+    git(root, "checkout", "-q", "-b", "dev-loop/LOOP-573");
+    writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "fix(y): correct branch (LOOP-573)");
+    ok(handoffGateRejection({ ...base, id: "LOOP-573" }) === null,
+      "LOOP-573: a handoff for LOOP-573 on its own branch PASSES — the gate is selective, not blanket");
+
+    // Mutation: ensure LOOP-544 cases still work. Leave LOOP-388 uncommitted in the shared checkout.
+    git(root, "checkout", "-q", "main");
+    writeFileSync(join(root, "a.ts"), "export const a = 1; // clean\n");
+    git(root, "checkout", "-q", "-b", "dev-loop/LOOP-388");
+    writeFileSync(join(root, "a.ts"), "export const a = 388; // src fix\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "fix(z): LOOP-388 src");
+    git(root, "checkout", "-q", "main");
+    writeFileSync(join(root, "b.ts"), "export const b = 1;\n// LOOP-388 regression test, left in shared\n");
+    const split = handoffGateRejection({ ...base, id: "LOOP-388" });
+    ok(split !== null && /split across TWO trees/.test(split),
+      "LOOP-573 mutation: LOOP-544's split-tree detection still works (not replaced by this check)");
+  }
+
   // ── LOOP-312: W33 in doctor, on the same four fixtures ───────────────────────────────────────
   // A DIFFERENT population from W26. W26 asks "would `git rebase` refuse?" (unmerged, or
   // staged-but-uncommitted). W33 asks "is there tracked work here another fire's `git checkout`
