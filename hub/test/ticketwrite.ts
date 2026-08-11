@@ -2,7 +2,7 @@
 // to senior-dev (assignee + label swap) in BOTH insertTicket and updateTicketRow, and log
 // issue.retier. Must be a strict no-op when sensitive label absent, junior-dev absent, or
 // senior-dev actor not registered. Design: sensitive-routing §2 / LOOP-79 Child A.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
@@ -380,6 +380,57 @@ try {
   const hySweep = updateTicketRow(db, "p", "sweep", hyId, "In Review",
     updateFields({ state: "In Review", labels: JSON.stringify([...QA_OWN, "needs-qa"]) }));
   ok(hySweep.ok && stateOf(hyId) === "In Review", "LOOP-208: a non-transition write (sweep re-labels an In Review qa ticket) is NOT gated (edge-specific)");
+
+  // ── LOOP-587: one reader for the update row-shape — the SELECT list lives in exactly one module ──
+  //
+  // The break this stops: TicketUpdateFields' fields are REQUIRED, but a row comes back from
+  // db.prepare().get() as a cast, never a checked value. So a module that hand-writes its own
+  // "SELECT …cols… FROM tickets" and casts the result type-checks perfectly while being one column
+  // short — and only fails later, at the bind, inside updateTicketRow. LOOP-384 added
+  // tickets.waiting_on to the interface, the INSERT, the UPDATE and to readTicketUpdateFields, but
+  // two modules held private copies of the column list: merge-guard.ts (threw parameter-10, main went
+  // red) and ticket-release.ts (same throw, swallowed by a per-ticket `catch {}` — infra-killed
+  // tickets silently stopped being released for as long as it was broken).
+  //
+  // Type-checking cannot catch the next one; this scan can. It asserts a PRESENCE (the canonical list
+  // is in ticketwrite.ts) before asserting the absence, so a pattern that stops matching fails loudly
+  // here instead of passing vacuously and reporting the codebase clean.
+  {
+    const SRC = new URL("../src/", import.meta.url);
+    const OWNER = "ticketwrite.ts";                     // the module allowed to spell the column list
+    // A tickets SELECT that feeds an update: it names the two columns unique to the update row-shape.
+    // Scoped to plain SELECTs — db.ts's v1 rebuild is an `INSERT INTO tickets_new … SELECT … FROM tickets`,
+    // which names the same columns but copies rows table-to-table and never produces a TicketUpdateFields.
+    const hydrates = (s: string): boolean =>
+      /(?<!INSERT\s+INTO[^;]{0,400})SELECT[^;]*\bduplicate_of\b[^;]*\brelated_to\b[^;]*FROM\s+tickets/is.test(s);
+    // The invariant is about CALLERS: a module that writes a row back through updateTicketRow must get
+    // that row from the shared reader. A module that merely mentions tickets is not in scope.
+    const isCaller = (s: string): boolean => /\bupdateTicketRow\s*\(/.test(s);
+
+    const ownerSrc = readFileSync(new URL(OWNER, SRC), "utf8");
+    // Positive controls FIRST — if these go red the matchers are broken and every verdict below is void.
+    ok(hydrates(ownerSrc),
+      `LOOP-587 control: the canonical row SELECT is found in ${OWNER} — proves the scan matches a real hydrate before it certifies anything absent`);
+    ok(/export const readTicketUpdateFields/.test(ownerSrc),
+      "LOOP-587 control: readTicketUpdateFields is exported — the shared reader other modules are required to use");
+
+    const callers = readdirSync(SRC)
+      .filter((f: string) => f.endsWith(".ts") && f !== OWNER)
+      .filter((f: string) => isCaller(readFileSync(new URL(f, SRC), "utf8")));
+    ok(callers.length >= 2,
+      `LOOP-587 control: the scan found the updateTicketRow callers to check (${callers.length}: ${callers.join(", ")}) — an empty set would make the next assertion vacuous`);
+    const offenders = callers.filter((f: string) => hydrates(readFileSync(new URL(f, SRC), "utf8")));
+    ok(offenders.length === 0,
+      `LOOP-587: no updateTicketRow caller outside ${OWNER} hydrates its row from its own SELECT — they call readTicketUpdateFields${offenders.length ? ` (found: ${offenders.join(", ")})` : ""}`);
+
+    // And the two modules that HELD the stale copies are named explicitly, so deleting the scan above
+    // without replacing it cannot quietly retire the specific regression it was written for.
+    for (const f of ["merge-guard.ts", "ticket-release.ts"]) {
+      const s = readFileSync(new URL(f, SRC), "utf8");
+      ok(/readTicketUpdateFields\s*\(/.test(s),
+        `LOOP-587: ${f} reads its ticket row through readTicketUpdateFields (it is a caller of updateTicketRow)`);
+    }
+  }
 
   db.close();
 } finally {
