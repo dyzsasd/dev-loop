@@ -172,10 +172,12 @@ for (const r of bill.rows) {
   // strategyDoc is null in the no-stat call — include it in sum for generality (0 when null)
   const sdBytes = r.strategyDoc?.bytes ?? 0;
   const sdLines = r.strategyDoc?.lines ?? 0;
-  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + sdBytes;
+  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + sdBytes + r.inherited.bytes;
   ok(r.total.bytes === sum && r.tokens === Math.ceil(sum / BYTES_PER_TOKEN),
-    `${r.skill}: total = prose+cheat+conventions+lessons+strategyDoc (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
-  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + sdLines, `${r.skill}: line total adds up`);
+    `${r.skill}: total = prose+cheat+conventions+lessons+strategyDoc+inherited (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
+  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + sdLines + r.inherited.lines, `${r.skill}: line total adds up`);
+  ok((r.skill === "senior-dev-agent" || r.skill === "junior-dev-agent") ? r.inherited.bytes > 0 : r.inherited.bytes === 0,
+    `${r.skill}: inherited dev slices billed on split tiers only (LOOP-553)`);
   ok(r.conventions.bytes < bill.conventions.total.bytes,
     `${r.skill}: section-selective boot loads LESS than whole-file conventions (${r.conventions.bytes} < ${bill.conventions.total.bytes}B)`);
   const wantLessons = r.agent ? INDEX_MAX_LINES + SHARD_MAX_LINES : 0;
@@ -200,8 +202,8 @@ for (const r of bill.rows) {
 
   for (const r of billWithDoc.rows) {
     const isReader = STRATEGY_DOC_READERS.has(r.skill);
-    const baseBytes = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes;
-    const baseLines = r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines;
+    const baseBytes = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + r.inherited.bytes;
+    const baseLines = r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + r.inherited.lines;
     if (isReader) {
       ok(r.strategyDoc !== null && r.strategyDoc.bytes === FIXTURE_BYTES,
         `${r.skill} (reader): strategyDoc field is the fixture stat (LOOP-263)`);

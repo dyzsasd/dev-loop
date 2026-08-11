@@ -16,7 +16,7 @@ import { selfDriftLine, installedRootOf } from "./self-drift.ts"; // LOOP-249: d
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { parseConventions, parseSectionsLine, splitSkill, splitLines } from "./context-bill.ts";
+import { devInheritedSlices, parseConventions, parseSectionsLine, splitSkill, splitLines } from "./context-bill.ts";
 
 export interface BootCorpus {
   text: string;        // the full marker-wrapped block to append to the prompt
@@ -251,14 +251,12 @@ export function assembleBootCorpus(
       const devSkill = readFileSync(join(root, "skills", "dev-agent", "SKILL.md"), "utf8");
       // LOOP-553: the tiers are told to run Step 0.5 "exactly as dev-agent spells out" — ship it,
       // not just the ship sequence, or the instruction references text the corpus never carries.
-      // Each marker pair fails open independently (missing pair ⇒ that slice is skipped silently).
-      const slices: Array<{ label: string; text: string }> = [];
-      const fb = devSkill.indexOf("<!-- fire-start:begin -->");
-      const fe = devSkill.indexOf("<!-- fire-start:end -->");
-      if (fb !== -1 && fe > fb) slices.push({ label: "Step 0.5", text: devSkill.slice(fb + "<!-- fire-start:begin -->".length, fe).trim() });
-      const b = devSkill.indexOf("<!-- ship-sequence:begin -->");
-      const e = devSkill.indexOf("<!-- ship-sequence:end -->");
-      if (b !== -1 && e > b) slices.push({ label: "Steps 4–6.5 + 7 + HARD LIMITS", text: devSkill.slice(b + "<!-- ship-sequence:begin -->".length, e).trim() });
+      // The extractor is shared with the bill (context-bill.ts) so shipped and billed cannot drift.
+      // The fire-start slice rides the SAME predicate that keeps §12c: a project with neither
+      // autoMerge nor release-pr prunes the pass from conventions, so it must not pay for the
+      // slice either (codex review, PR #313).
+      const fireStartActive = CONDITIONAL_SECTIONS["12c"].active(projectCfg, backend, repos, maxPerProject);
+      const slices = devInheritedSlices(devSkill).filter((sl) => sl.label !== "Step 0.5" || fireStartActive);
       if (slices.length > 0) {
         const what = slices.map((sl) => sl.label).join(" + ");
         parts.push(
