@@ -264,6 +264,16 @@ CREATE TABLE IF NOT EXISTS approvals (
   note          TEXT             -- the human's own words, e.g. the chat message that granted it
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_key ON approvals(action_key);
+
+-- LOOP-401 Child 1: scheduler-pause state. Single row, enforced by CHECK(id = 1).
+-- Retro-added via IF NOT EXISTS with no user_version bump (precedent: removed_projects, approvals).
+CREATE TABLE IF NOT EXISTS scheduler_pause (
+  id        INTEGER PRIMARY KEY CHECK(id = 1),
+  paused_at TEXT    NOT NULL,
+  actor     TEXT    NOT NULL,
+  reason    TEXT    NOT NULL,
+  until     TEXT
+);
 `;
 
 // ─── Schema migrations (PRAGMA user_version) ─────────────────────────────────
