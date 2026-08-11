@@ -26,7 +26,7 @@ import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fir
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
-import { breaker, formatBreakerMsg, providerOf, classifyFireError } from "./breaker.ts";
+import { breaker, formatBreakerMsg, providerOf, classifyFireError, producedNoWork, EXIT_NO_WORK } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter, makeStdoutCapture, usageFromCapture } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
@@ -1350,6 +1350,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // that, so the heuristic keeps catching real cases and stops charging the operator's own
       // restarts to the agents (10 of 10 suspectErrors on the board that found this were kills).
       const interrupted = schedulerInterrupted && exitCode === 0 && !timedOut;
+      // LOOP-543 — the same observable the empty-output arm below already reads, named once and shared
+      // so the flag and the errorClass can never disagree about whether the fire produced anything.
+      const noWork = producedNoWork({ exitCode, timedOut, interrupted, outputTail: outTail });
       let suspectError = !interrupted && exitCode === 0 && !timedOut && (outTail.trim() === "" || /^(Execution error|API Error)/.test(lastLine));
       // Structured lanes ADD the adapter's isError signal ON TOP of the tail-regex — never a replacement.
       // The text/empty arm above still catches a crash/kill/timeout that leaves an UNPARSEABLE buffer (claude
@@ -1383,7 +1386,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
         : null;
       const errorClass = classifyFireError(exitCode, timedOut, outTail, stalled, retryLoop, budgetKilled, // P0-1b taxonomy (+ liveness "stalled"/"retry-loop" + LOOP-230/LOOP-445 budget arm)
-        { ceilingUsd: perFireCeilingUsd, spentUsd: usage?.costUsd ?? null, totalTokens });
+        { ceilingUsd: perFireCeilingUsd, spentUsd: usage?.costUsd ?? null, totalTokens }, noWork);        // LOOP-543 — "no-output"
       if (budgetKilled && errorClass !== "budget-per-fire") {
         // The contradiction, on the record: the model condemned this fire and the meter did not confirm it.
         const spent = usage?.costUsd ?? null;
@@ -1408,7 +1411,14 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
         // fire can be back-filled, so the distinction has to be recorded as it happens.
         turns,
       };
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, exitCode, timedOut, fireId,
+      // LOOP-543 AC1 — a fire that did nothing is ledgered under EXIT_NO_WORK, not under the 0 the child
+      // returned. Both halves are needed and neither is decoration: the errorClass gives the taxonomy a
+      // bucket, and the non-zero code is what carries it past breaker.record's `exitCode === 0` early
+      // return (which would otherwise read the fire as a RECOVERY) and into metrics' failure counters,
+      // where byAgent.failures finally ranks a dead lane as dead. `resolveExit(exitCode)` below is
+      // deliberately left on the child's real status: this changes what the loop RECORDS about the
+      // fire, never what `--once` reports to the shell that invoked it.
+      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, noWork ? EXIT_NO_WORK : exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
       if (timedOut || stalled || budgetKilled) releaseClaimedTickets(fireDb, project, agent, fireId, budgetKilled ? "budget" : timedOut ? "timeout" : "stall"); // a budget kill must free its claim too (reclaimable next fire)
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail

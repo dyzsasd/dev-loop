@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
+import { EXIT_NO_WORK } from "../src/breaker.ts";      // LOOP-543: the outcome code a fire that produced nothing is ledgered under
 import { openDb } from "../src/db.ts";                 // LOOP-144: seed servable rows to drive the queue-depth gate
 import { findProject } from "../src/seed.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
@@ -105,7 +106,13 @@ exit 0
   const events = JSON.parse(rows) as { actor: string; data: string }[];
   ok(events.length === 1 && events[0].actor === "sweep", "P1: one fire.completed event, attributed to the fired agent");
   const d = events.length ? JSON.parse(events[0].data) as Record<string, unknown> : {};
-  ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === 0 && d.timedOut === false,
+  // The stub prints nothing and exits 0 — deliberately, per §1 above, since its silence is what drives the
+  // suspectError stream-lifecycle regression. LOOP-543 reclassifies exactly that fire: an exit-0 fire with an
+  // empty tail produced no observable work, so the LEDGERED outcome is EXIT_NO_WORK rather than the child's
+  // status byte (the same convention provider-env-missing's 4 and spawn-failed's 1 already follow). The
+  // assertion's subject is the field SET fire.completed carries; pinning the symbol keeps it a contract check
+  // rather than a magic number, and asserting 0 here would re-assert the behaviour this ticket removed.
+  ok(d.codingAgent === "claude" && typeof d.durationMs === "number" && d.exitCode === EXIT_NO_WORK && d.timedOut === false,
     "P1: fire.completed carries codingAgent + durationMs + exitCode + timedOut");
   // LOOP-58 (was covered by run-agents.ts's now-removed recordFire import): the fire.completed event carries
   // the per-fire UUID fireId, asserted here on a REAL fire rather than a direct recordFire() call.

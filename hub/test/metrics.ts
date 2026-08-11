@@ -38,6 +38,31 @@ try {
   ok(fm.byAgent.pm.fires === 2 && fm.byAgent.pm.medianMs === 120_000, "per-agent median duration");
   ok(fm.byProject.web.fires === 4 && fm.byProject["(team)"].fires === 1, "per-project split; steward '' → (team)");
 
+  // ── LOOP-543 — a no-work fire is counted ONCE ──────────────────────────────────────────────────
+  // Until LOOP-543, `failures` and `suspect` were disjoint by construction (a suspectError required
+  // exit 0), so `scored - failures - suspect` was right by coincidence of that invariant. A no-work
+  // fire now carries a non-zero exit code AND keeps its suspectError flag, so it lands in both — the
+  // sum form subtracts it twice and drives the success rate negative (-56.6% on the 389-fire window
+  // that filed the ticket). These rows are the shape the ledger records after the fix.
+  {
+    const l543 = join(tmp, "fires-543.jsonl");
+    writeFileSync(l543, [
+      row({ ts: iso(NOW - 1 * DAY), agent: "pm", project: "web", durationMs: 900_000, exitCode: 0 }),      // healthy
+      row({ ts: iso(NOW - 1 * DAY), agent: "pm", project: "web", durationMs: 800_000, exitCode: 0 }),      // healthy
+      row({ ts: iso(NOW - 2 * DAY), agent: "qa", project: "web", durationMs: 9_036, exitCode: 7, suspectError: true, errorClass: "no-output" }),
+      row({ ts: iso(NOW - 2 * DAY), agent: "qa", project: "web", durationMs: 8_100, exitCode: 7, suspectError: true, errorClass: "no-output" }),
+    ].join("\n") + "\n");
+    const f = fireMetrics(l543, 7 * DAY, NOW);
+    ok(f.fires === 4 && f.failures === 2 && f.suspectErrors === 2,
+      `LOOP-543: a no-work row is in BOTH counters — failures 2, suspectErrors 2 (got ${f.failures}/${f.suspectErrors})`);
+    ok(f.successRate !== null && Math.abs(f.successRate - 0.5) < 1e-9,
+      `LOOP-543: …and the success rate counts it ONCE = 2/4 = 50%, never (4-2-2)/4 = 0% (got ${f.successRate})`);
+    ok(f.byErrorClass["no-output"] === 2,
+      "LOOP-543: the taxonomy has a bucket for it — this is what W24 reads and the breaker keys on");
+    ok(f.byAgent.qa.failures === 2 && f.byAgent.pm.failures === 0,
+      "LOOP-543: byAgent ranks the dead lane as failing, which is what a liveness surface reads");
+  }
+
   // ── prune keeps only the retention window ──
   pruneFireLedger(ledger, 10 * DAY, NOW);
   ok(readFireRows(ledger).length === 5 && !readFileSync(ledger, "utf8").includes("torn"), "prune drops old + torn rows, keeps the window");

@@ -160,7 +160,7 @@ export function fireMetrics(
   const rows = allRows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
   const byAgent: FireMetrics["byAgent"] = {};
   const byProject: FireMetrics["byProject"] = {};
-  let failures = 0, timeouts = 0, suspect = 0, interrupted = 0;
+  let failures = 0, timeouts = 0, suspect = 0, interrupted = 0, unsuccessful = 0;
   const byErrorClass: Record<string, number> = {};
   for (const r of rows) {
     const failed = (r.exitCode ?? 0) !== 0;
@@ -168,6 +168,14 @@ export function fireMetrics(
     if (r.timedOut) timeouts++;
     if (r.suspectError) suspect++;
     if (r.interrupted) interrupted++;
+    // LOOP-543 — the count of fires that did NOT succeed, as a set union rather than a sum. Until now
+    // `failures` and `suspect` were disjoint BY CONSTRUCTION (a suspectError required exit 0), so
+    // `scored - failures - suspect` was correct by coincidence of that invariant. LOOP-543 ends the
+    // invariant: a no-work fire is ledgered with a non-zero exit code AND keeps its suspectError flag,
+    // so it is in both counters and the old expression subtracts it twice. Re-measured on the window
+    // that filed this ticket (389 fires, 61 failures, 274 no-work) the sum form yields a success rate
+    // of -56.6%. Both counters stay published unchanged for the surfaces that report them separately.
+    if (!r.interrupted && (failed || r.suspectError)) unsuccessful++;
     if (r.errorClass) byErrorClass[r.errorClass] = (byErrorClass[r.errorClass] ?? 0) + 1;
     const a = (byAgent[r.agent] ??= { fires: 0, failures: 0, medianMs: null, costUsd: null, costMeteredFires: 0, usdPerFire: null, turnsPerFire: null, turnsCoveredFires: 0, cacheReadPerFire: null, cacheWritePerFire: null, outputPerFire: null, amplification: null });
     a.fires++; if (failed) a.failures++;
@@ -239,7 +247,7 @@ export function fireMetrics(
   // it had already put a phantom "failure pattern #3" into a retrospective.
   // Excluded from BOTH numerator and denominator: a discarded fire is not evidence either way.
   const scored = fires - interrupted;
-  const successRate = scored > 0 ? (scored - failures - suspect) / scored : null;
+  const successRate = scored > 0 ? (scored - unsuccessful) / scored : null;
   return { windowMs, fires, failures, timeouts, suspectErrors: suspect, interrupted, discardedFires,
     // null when NOTHING is priced (never a number we did not measure); a real 0.00 is legitimate.
     discardedCostUsd: costMeteredFires > 0 ? discardedCostAcc : null,
