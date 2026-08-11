@@ -16,7 +16,7 @@ import {
   writePreFireRecord, readPreFireRecord, preflightTreeSnapshot,
 } from "../src/tree-snapshot.ts";
 import { evaluateStaged, stagedFiles } from "../src/stage-guard.ts";
-import { hasLocalWorkFor, handoffGateRejection } from "../src/handoff-gate.ts";
+import { hasLocalWorkFor, handoffGateRejection, splitTreeFiles, worktreeForTicket } from "../src/handoff-gate.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
@@ -253,6 +253,73 @@ try {
       "LOOP-309 control: …and the same ticket on the gated edge with landing 'pr' IS refused");
   }
 
+  // ── LOOP-544: the increment split across TWO trees ───────────────────────────────────────────
+  // LOOP-309 asks "does a commit exist?" and a split increment answers YES. The src half is on the
+  // worktree branch; the regression test is uncommitted in the shared checkout. Both gates pass,
+  // because each looks at one tree — that is how a fix ships without the test that proves it.
+  {
+    const root = makeRepo("split");
+    const base = { fromState: "In Progress", toState: "In Review", actor: "junior-dev", repoRoot: root, landing: "pr" as const };
+
+    // The fire does the §7 thing correctly: a per-ticket worktree, and it commits its src fix there.
+    const wt = join(tmp, "wt-544");
+    git(root, "worktree", "add", "-q", "-b", "dev-loop/LOOP-544", wt);
+    writeFileSync(join(wt, "a.ts"), "export const a = 544; // the src fix\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-qm", "fix(x): the src half (LOOP-544)");
+
+    // LOOP-309 is now satisfied — which is precisely why it cannot catch what follows.
+    ok(hasLocalWorkFor(root, "LOOP-544"),
+      "LOOP-544 control: the commit witness EXISTS, so the LOOP-309 gate is satisfied and cannot be what refuses this");
+
+    // …but the regression test was written into the SHARED checkout — the fire's actual cwd.
+    writeFileSync(join(root, "b.ts"), "export const b = 1;\nassert(fix, 'LOOP-544 regression');\n");
+    const split = splitTreeFiles(root, "LOOP-544");
+    ok(split.join(",") === "b.ts",
+      `LOOP-544 AC2: the uncommitted file in the shared checkout is attributed to the ticket by its own diff (${split.join(",") || "none"})`);
+
+    const refused = handoffGateRejection({ ...base, id: "LOOP-544" });
+    ok(refused !== null && /split across TWO trees/.test(refused),
+      "LOOP-544 AC3: …and the In Progress → In Review handoff is BLOCKED — the chosen behaviour, not a silent report");
+    ok(refused !== null && refused.includes(root) && refused.includes(wt),
+      `LOOP-544 AC2: the refusal names BOTH trees — the shared checkout and the ticket's own worktree`);
+    ok(refused !== null && /b\.ts/.test(refused),
+      "LOOP-544 AC2: …and names the file that is in the wrong one");
+    ok(worktreeForTicket(root, "LOOP-544") === wt,
+      `LOOP-544: the worktree is resolved from git itself, not guessed (${worktreeForTicket(root, "LOOP-544")})`);
+
+    // ZERO cross-ticket false refusals — the property that rules OUT timing-based attribution.
+    // The tree is dirty with LOOP-544's line; a DIFFERENT ticket handing off is untouched by it.
+    // A pre-fire-record ("dirty since the run began") axis would refuse this, wrongly.
+    git(root, "worktree", "add", "-q", "-b", "dev-loop/LOOP-77", join(tmp, "wt-77"));
+    writeFileSync(join(tmp, "wt-77", "a.ts"), "export const a = 77;\n");
+    git(join(tmp, "wt-77"), "add", "-A");
+    git(join(tmp, "wt-77"), "commit", "-qm", "fix(y): unrelated (LOOP-77)");
+    ok(handoffGateRejection({ ...base, id: "LOOP-77" }) === null,
+      "LOOP-544: another ticket's handoff is NOT refused by LOOP-544's dirt — attribution is by content, so it is ticket-scoped");
+
+    // An uncommitted edit that names NO ticket is not attributable, and the gate says nothing.
+    // Stated as a known limit in the source rather than papered over; W33/LOOP-320 cover the residual.
+    git(root, "checkout", "-q", "--", "b.ts");
+    writeFileSync(join(root, "b.ts"), "export const b = 2; // nobody's, by name\n");
+    ok(splitTreeFiles(root, "LOOP-544").length === 0 && handoffGateRejection({ ...base, id: "LOOP-544" }) === null,
+      "LOOP-544: an unattributable uncommitted edit does not trip the gate — the documented limit, measured");
+
+    // A ticket id in the diff HEADER (`+++ b/…`) is a path, not content, and must not attribute.
+    git(root, "checkout", "-q", "--", "b.ts");
+    const idPath = join(root, "LOOP-544-notes.ts");
+    writeFileSync(idPath, "export const n = 0;\n");
+    git(root, "add", "-A"); git(root, "commit", "-qm", "add notes file");
+    writeFileSync(idPath, "export const n = 1; // unrelated edit\n");
+    ok(splitTreeFiles(root, "LOOP-544").length === 0,
+      "LOOP-544: a ticket id in the FILE PATH does not attribute the file — only added CONTENT does");
+    git(root, "checkout", "-q", "--", ".");
+
+    // A clean shared checkout is the normal case and must cost nothing.
+    ok(handoffGateRejection({ ...base, id: "LOOP-544" }) === null,
+      "LOOP-544: a clean shared checkout passes — the gate adds no refusal to the healthy path");
+  }
+
   // ── LOOP-309 through the REAL write path ─────────────────────────────────────────────────────
   // The predicate passing proves nothing about whether the gate is WIRED. This drives
   // `save_issue` — the same op a dev fire calls — against a workspace whose repo is `landing: "pr"`,
@@ -302,6 +369,25 @@ try {
     const passed = drive("LOOP-32");
     ok(/"status":2\d\d/.test(passed.out) && !/blocked/.test(passed.out),
       `LOOP-309: …and a handoff WITH a commit passes through the same path (${passed.out.slice(0, 120)})`);
+
+    // LOOP-544 on the SAME real path. AC2 requires detection that does not depend on the fire
+    // noticing, and only this proves it: the fire calls `save_issue` exactly as it always does and
+    // is refused by the write layer. A passing predicate would prove nothing about the wiring.
+    git(repoDir, "checkout", "-q", "main");
+    git(repoDir, "worktree", "add", "-q", "-b", "dev-loop/LOOP-33", join(tmp, "wt-33"));
+    writeFileSync(join(tmp, "wt-33", "f.ts"), "export const f = 33; // the src half\n");
+    git(join(tmp, "wt-33"), "add", "-A");
+    git(join(tmp, "wt-33"), "commit", "-qm", "feat: src half (LOOP-33)");
+    writeFileSync(join(repoDir, "f.ts"), "export const f = 1;\n// LOOP-33 regression test, left behind\n");
+    const halved = drive("LOOP-33");
+    ok(/split across TWO trees/.test(halved.out) && /"status":4\d\d/.test(halved.out),
+      `LOOP-544 AC2/AC3: the split-tree gate fires through the REAL save_issue path with a 4xx (${halved.out.slice(0, 140)})`);
+    ok(/f\.ts/.test(halved.out) && halved.out.includes(repoDir),
+      "LOOP-544 AC2: …naming the file and the shared checkout it was left in");
+    // And the fire that puts it in the right tree is not refused — the gate blocks the split, not the ticket.
+    git(repoDir, "checkout", "-q", "--", "f.ts");
+    ok(/"status":2\d\d/.test(drive("LOOP-33").out),
+      "LOOP-544: …while the same ticket with nothing stranded hands off normally");
   }
 
   // ── LOOP-312: W33 in doctor, on the same four fixtures ───────────────────────────────────────

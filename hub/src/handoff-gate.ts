@@ -49,6 +49,91 @@ export function hasLocalWorkFor(repoRoot: string, ticketId: string): boolean {
   return false;
 }
 
+// ─── LOOP-544: the increment split across two trees ─────────────────────────────────────────────
+//
+// LOOP-309 above asks "does a commit exist?". A fire can answer that YES and still have shipped only
+// HALF its increment: the src fix committed on its worktree branch, the regression test left
+// uncommitted in the shared checkout. Every gate passes, because each gate only ever looks at one
+// tree. Measured live three times in 24h — LOOP-517 (src on the branch, its assertions on `main` in
+// the shared tree), LOOP-539, and a co-resident pair at 06:45Z carrying two tickets' work at once.
+//
+// WHY IT KEEPS HAPPENING — the mechanism, pinned on this ticket (AC1) rather than guessed at:
+// every fire is SPAWNED in the shared checkout. `resolveCwd()` (run-agents.ts) resolves the fire's
+// cwd from `repos.<ref>.path` in config, and config names the shared checkout; it cannot name the
+// worktree, because the worktree does not exist yet — the fire creates it minutes after it is
+// already running, and there is no later chdir. So the shared checkout is the process cwd for the
+// fire's ENTIRE lifetime: every relative path and every `git` call without `-C` lands there by
+// DEFAULT, and reaching the worktree takes an absolute path on every single write. Correctness
+// depends on the fire never once relaxing, which is why it hits both tiers and hits fires that had
+// already created their worktree correctly.
+//
+// So the detection must not depend on the fire noticing (AC2) — it runs here, in the write layer's
+// single choke point, on the fire's own handoff. The fire cannot reach In Review around it.
+
+/**
+ * Attribution: WHICH uncommitted tracked files in the shared checkout are THIS ticket's?
+ *
+ * By CONTENT, not by timing: a file is attributed when its uncommitted diff carries a line naming
+ * the ticket id. That is the discriminator the live diagnosis used —
+ * `grep -c LOOP-517 <shared>/hub/test/team-edit.ts → 4` against `<worktree>/… → 0`.
+ *
+ * Timing attribution was the alternative and is deliberately NOT used. The pre-fire dirty record
+ * (LOOP-320) says "dirty since the RUN began", which is run-scoped, not ticket-scoped: with fires
+ * running concurrently it would refuse ticket B's honest handoff because ticket A left the tree
+ * dirty. Content attribution cannot make that mistake — a hunk that names LOOP-544 is LOOP-544's.
+ *
+ * Either side of the patch counts. An uncommitted hunk that REMOVES a line naming the ticket is
+ * still uncommitted work about that ticket sitting in the wrong tree, and the refusal is cheap to
+ * clear (commit it, or restore the file) — where missing it strands the increment silently.
+ *
+ * KNOWN LIMIT, stated rather than papered over: an uncommitted edit that never names its ticket is
+ * not attributable by this axis and does not trip the gate. It is the price of zero cross-ticket
+ * false refusals, and the residual is covered by W33 (the tree is dirty at all) and LOOP-320 (the
+ * ship commit cannot sweep it up).
+ */
+export function splitTreeFiles(repoRoot: string, ticketId: string): string[] {
+  let out = "";
+  try {
+    // `-G` is git's own "patch text adds or removes a line matching this" search, and `--name-only`
+    // means the OUTPUT is a file list rather than the diff. That matters for more than tidiness:
+    // reading whole patches through execFileSync caps at maxBuffer, so the biggest stranded diffs —
+    // exactly the ones worth catching — would have thrown ENOBUFS and been silently skipped (the
+    // LOOP-502 failure shape). A file list cannot overflow in any realistic tree.
+    //
+    // `-G` matches ADDED and REMOVED lines but never the `+++ b/<path>` header, so a ticket id that
+    // appears only in a FILE NAME does not attribute the file. `git diff HEAD` is tracked-only, which
+    // is the same population LOOP-312/320 protect: untracked files survive `git checkout` and are
+    // not at risk.
+    out = execFileSync("git", ["-C", repoRoot, "diff", "HEAD", "--name-only", `-G${reEscape(ticketId)}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return []; } // no git, not a repo, unreadable ⇒ no attribution, never a hard failure
+  return out.split("\n").map((l) => l.trim()).filter(Boolean).sort();
+}
+
+/** Ticket ids are `PREFIX-123`; a regex-special prefix must match itself, not act as a pattern. */
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The absolute path of the ticket's own worktree, so a refusal can name BOTH trees (AC2).
+ *
+ * Reads `git worktree list --porcelain`, whose records are blank-line-separated and whose branch
+ * line is a full ref (`branch refs/heads/dev-loop/LOOP-544`). Returns null when the fire never made
+ * one — which is itself worth saying in the refusal, since then there is no second tree to move to.
+ */
+export function worktreeForTicket(repoRoot: string, ticketId: string): string | null {
+  let out = "";
+  try {
+    out = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return null; }
+  let path: string | null = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
+    else if (line.startsWith("branch ") && line.includes(ticketId)) return path;
+  }
+  return null;
+}
+
 export interface HandoffGateInput {
   id: string;
   fromState: string;
@@ -86,9 +171,37 @@ export function handoffGateRejection(inp: HandoffGateInput): string | null {
   if (inp.actor === "operator") return null;
   if (inp.isDesignParent) return null;
   if (!inp.repoRoot) return null;
-  if (hasLocalWorkFor(inp.repoRoot, inp.id)) return null;
-  return `verify gate: In Progress → In Review blocked — no commit or branch in ${inp.repoRoot} references ${inp.id}, so there is nothing to review. `
-    + `The work is still uncommitted in the working tree, where another fire's \`git checkout\` discards it silently and a \`git add -A\` lands it under someone else's ticket. `
-    + `Commit it on a branch first (\`git checkout -b dev-loop/${inp.id}\`, then commit naming ${inp.id}), then hand off. `
-    + `This check reads LOCAL git only — it does not require \`gh\`, a PR, or a network.`;
+  if (!hasLocalWorkFor(inp.repoRoot, inp.id))
+    return `verify gate: In Progress → In Review blocked — no commit or branch in ${inp.repoRoot} references ${inp.id}, so there is nothing to review. `
+      + `The work is still uncommitted in the working tree, where another fire's \`git checkout\` discards it silently and a \`git add -A\` lands it under someone else's ticket. `
+      + `Commit it on a branch first (\`git checkout -b dev-loop/${inp.id}\`, then commit naming ${inp.id}), then hand off. `
+      + `This check reads LOCAL git only — it does not require \`gh\`, a PR, or a network.`;
+  // LOOP-544 — a commit exists, so LOOP-309 is satisfied; the increment can still be HALF here.
+  return splitTreeRejection(inp.repoRoot, inp.id);
+}
+
+/**
+ * AC3's chosen behaviour is BLOCK, not report-and-park, and the choice is not a preference.
+ *
+ * The state this ticket exists to prevent is a fix reaching the owner's verify queue WITHOUT its
+ * regression test while that test demonstrably exists — §15 satisfied by inspection and violated in
+ * fact. A parked report would leave the ticket in In Review with the owner already verifying it,
+ * which is the exact state that has to be unreachable. Blocking also keeps the module's one
+ * refusal shape (LOOP-309 above already blocks this same edge for the adjacent omission).
+ *
+ * The refusal names BOTH trees and the files (AC2), because "your increment is split" is not
+ * actionable without knowing where the halves are.
+ */
+function splitTreeRejection(repoRoot: string, id: string): string | null {
+  const files = splitTreeFiles(repoRoot, id);
+  if (!files.length) return null;
+  const wt = worktreeForTicket(repoRoot, id);
+  return `verify gate: In Progress → In Review blocked — ${id}'s increment is split across TWO trees. `
+    + `Its commit exists, but ${files.length} tracked file(s) naming ${id} are still UNCOMMITTED in the shared checkout ${repoRoot}: ${files.join(", ")}. `
+    + (wt
+      ? `The ticket's own worktree is ${wt} — that is the tree its branch commits from, and these files are not in it. `
+      : `No worktree for \`dev-loop/${id}\` exists in this repo, so the commit was made somewhere these edits are not. `)
+    + `Handing off now sends a half increment to the owner's verify queue: the committed half becomes the PR and this half stays behind, which is how a fix ships without its regression test and every gate still passes. `
+    + `Every fire is spawned with its cwd set to the shared checkout, so a relative path writes HERE by default — move each file into the worktree and commit it there (\`git -C ${wt ?? `<worktree>`} …\`), then hand off. `
+    + `This check reads LOCAL git only — no \`gh\`, no PR, no network.`;
 }
