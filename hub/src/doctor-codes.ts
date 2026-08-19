@@ -16,7 +16,9 @@
 // together. `hub/test/doctor-codes.ts` asserts: no duplicate code, and every `[W##]`/`"W##"` literal
 // anywhere in hub/src is registered here.
 //
-// Adding a check: add its row here FIRST. The test fails on an unregistered code, so a collision is
+// Adding a check: add a DOCTOR_CODES row here FIRST, then add a DOCTOR_CHECKS row in
+// doctor-registry.ts. The test fails on an unregistered code, so a collision or orphaned
+// check is caught at merge time instead of by the next reader.
 // caught at merge time instead of by the next reader.
 
 // E-codes are a SECOND namespace, and it is the one with no home (LOOP-473). `W##` warns; `E##` is
