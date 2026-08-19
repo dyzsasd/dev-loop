@@ -5,10 +5,17 @@ new month per the §22 markers) — the due-check itself stays resident in §22.
 
 At run-start, after computing the markers — and **after** finalizing any just-completed
 daily (so the last day's summary header exists before a parent reads it):
-- **New ISO week** (`WEEK` > newest `weekly/` file): write the weekly for the
-  just-completed week by **rolling up that week's daily summary headers**.
-- **New month** (`MONTH` > newest `monthly/` file): write the monthly by **rolling up that
-  month's daily summary headers — from dailies, not weeklies**. (ISO weeks do **not**
+- **Weekly** — due iff `weekly/$PREV_WEEK.md` is ABSENT: write it for **`$PREV_WEEK`, the
+  just-completed week**, by rolling up **that week's** daily summary headers.
+- **Monthly** — due iff `monthly/$PREV_MONTH.md` is ABSENT: write it for **`$PREV_MONTH`, the
+  just-completed month**, by rolling up **that month's** daily summary headers — from dailies,
+  not weeklies.
+  Both periods are the COMPLETED ones, never `$WEEK`/`$MONTH`: writing the current period's file
+  mid-period makes the file exist, which silences the check for the rest of that period and
+  freezes a partial roll-up into the forever tier. Derive them with
+  `date -u -d 'last week'` / `'last month'` (GNU) or `date -u -v-1w` / `-v-1m` (BSD) — never by
+  reasoning about the date, for the same ISO-boundary reason `-u` and `%G-W%V` are mandated
+  (`2026-12-31` is `2027-W01`). (ISO weeks do **not**
   partition calendar months — `2026-W27` straddles June/July — so a weekly→monthly roll-up
   would be lossy or double-count. Dailies *do* partition months cleanly.) Weeklies remain a
   parallel ISO artifact.

@@ -55,7 +55,10 @@ the target repo's resolved `defaultBranch` (§19) for a shipped artifact: a comm
 the ticket id; a local commit when `autoPush:false`; in `git.landing:"pr"` an open/merged PR
 referencing the id (`gh pr list --search "<id>" --state all`, §12b); in `landing:"direct"` an
 unmerged `dev-loop/<id>` branch/worktree (§7) — the prior fire got as far as committing; finish
-by landing it via the §7 merge-back rather than redoing the work. Artifact ⇒ verify and
+by landing it via the §7 merge-back rather than redoing the work. **In `landing:"pr"` finish that
+branch by PUSHING it and opening a PR (`dev-loop push` + `gh pr create`), NEVER by a merge-back —
+the §7 merge-back belongs to `landing:"direct"` only, and the shared checkout's `defaultBranch`
+is not a place work lands.** Artifact ⇒ verify and
 finish/hand off. None ⇒ orphan: release the claim, reset to `Todo` (full label set — keep
 `dev-loop`/owner/`junior-dev`, §10), comment `Orphaned — state cleared from a prior aborted
 run; re-queued.`, verify the move (§10). An unresolvable repo target ⇒ leave it for Step 3

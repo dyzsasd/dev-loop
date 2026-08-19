@@ -50,7 +50,11 @@ On `service`, `dev-loop queue` returns your `inProgress` list; on `linear` query
   `defaultBranch` — a commit referencing the ticket id; a local commit when `autoPush:false`;
   in `git.landing:"pr"` an open/merged PR referencing the id (`gh pr list --search "<id>"
   --state all`, §12b); in `landing:"direct"` an unmerged `dev-loop/<id>` branch/worktree also
-  counts — finish it by landing via the §7 merge-back. Artifact ⇒ verify and finish/hand off.
+  counts — finish it by landing via the §7 merge-back. **In `landing:"pr"` an unmerged
+  `dev-loop/<id>` branch is finished by PUSHING it and opening a PR (`dev-loop push` +
+  `gh pr create`), NEVER by a merge-back — the §7 merge-back sequence belongs to
+  `landing:"direct"` only, and the shared checkout's `defaultBranch` is not a place work lands.**
+  Artifact ⇒ verify and finish/hand off.
   None ⇒ orphan: clear the claim, reset to `Todo` (full label set, §10), comment `Orphaned —
   state cleared from a prior aborted run; re-queued.`, verify the move (§10).
 - **design** crash: children spawned + parent back-linked ⇒ finish the hand-off (parent →
