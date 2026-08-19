@@ -216,6 +216,30 @@ export function deliveryProjects(ws: Workspace, opts: { includeUnschedulable?: b
   if (opts.includeUnschedulable) return keys;
   return keys.filter((k) => ws.file.projects[k]?.enabled !== false && ws.file.projects[k]?.scratch !== true);
 }
+/**
+ * The boards an OPERATOR-DECISION surface must read (LOOP-534).
+ *
+ * `deliveryProjects` answers "where does the loop SCHEDULE work". The decision queue asks a different
+ * question — "where can an item end up waiting on the human" — and the two sets are not the same one.
+ * `_team` fires four of the ten agents (sweep/reflect/ops/communication run there with
+ * `DEVLOOP_TEAM_SCOPE=1`), so a steward that meets an enforced action files its approval request
+ * against `_team`, and §9b directs PM to park an unclear team intake there. Both are accepted and
+ * stored; neither reached any surface, because every consumer iterated the SCHEDULING set.
+ *
+ * The discriminator is whether agents actually FIRE on the board, which is also why the scratch and
+ * disabled projects `deliveryProjects` drops stay dropped here: nothing fires on them, so nothing can
+ * enter their queue, and carrying them would put permanently-empty boards in the operator's set.
+ * `_team` is the one board that fires without being a config project (E11 keeps it out of
+ * `dev-loop.json.projects`; it exists only as the seeded hub.db row), which is exactly how it fell
+ * through the gap.
+ *
+ * This is deliberately a SECOND seam rather than a widening of `deliveryProjects`: that function is
+ * the one place scheduling, boot-corpus assembly and the tier-starvation row agree on their project
+ * set, and re-entering `_team` there would put a board with no config entry back into all three.
+ */
+export function decisionQueueProjects(ws: Workspace): string[] {
+  return [...deliveryProjects(ws), TEAM_INTAKE_PROJECT];
+}
 const KEY_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const TEAM_KEY_RE = /^[a-z0-9-]{2,32}$/;
