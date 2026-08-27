@@ -26,7 +26,7 @@ import { sameDaemonCode, readAutostartBinding, describeAutostartBinding } from "
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
+import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, decisionQueueProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { projectRowDivergences } from "./project-row-sync.ts"; // LOOP-410: W42 shares the ONE "diverged" definition with the projection that repairs it
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
@@ -411,8 +411,11 @@ export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string;
       // LOOP-481: each item carries the project it came from. `humanWrite.enabled` is PER-PROJECT, so
       // the arm W20 prescribes has to be decided from the OLDEST item's own project — a workspace can
       // hold one project with the board writable and another without.
+      // LOOP-534: decisionQueueProjects, not deliveryProjects — W20's question is "what is waiting on
+      // the operator", and `_team` (where the steward agents fire) can hold items while having no
+      // config entry at all. Reading the scheduling set here reported a non-empty queue as healthy.
       const allItems: Array<{ item: DecisionItem; enteredAt: string; pid: string; key: string }> = [];
-      for (const key of deliveryProjects(ws)) {
+      for (const key of decisionQueueProjects(ws)) {
         const pid = findHubProject(db, key);
         if (!pid) continue;
         for (const t of decisionQueue(db, pid) as DecisionItem[]) {
