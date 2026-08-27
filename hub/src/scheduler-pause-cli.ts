@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // `dev-loop pause` and `dev-loop resume` — manage scheduler pause state.
 import { existsSync } from "node:fs";
-import { openDb } from "./db.ts";
+import { openDb, logEvent } from "./db.ts";
 import { tryResolveWorkspace } from "./workspace.ts";
 import { wsHubDb } from "./workspace.ts";
-import { readPause, writePause, clearPause, formatPause } from "./scheduler-pause.ts";
+import { writePause, clearPause, formatPause } from "./scheduler-pause.ts";
+import { TEAM_INTAKE_PROJECT } from "./team-config.ts";
+import { findProject } from "./seed.ts";
 
 interface ParsedArgs {
   action: "pause" | "resume";
@@ -74,13 +76,40 @@ async function main(): Promise<void> {
   try {
     const db = openDb(hubDbPath);
 
+    // `events.project_id` holds a project UUID — every reader (list_events, the daemon notifiers)
+    // filters `WHERE project_id=?` with an id resolved from a key. Stamping the KEY "_team" here
+    // instead writes rows that match no such filter, so `dev-loop events --project _team` returns
+    // nothing and the pause/resume audit line is unreachable (LOOP-593's AC6 failure). Resolve the
+    // reserved intake project to its row id, and refuse if it is absent rather than write a pause
+    // whose audit line is silently lost — a workspace with a hub.db but no `_team` row was never
+    // seeded by `team init`.
+    const teamProjectId = findProject(db, TEAM_INTAKE_PROJECT);
+    if (!teamProjectId) {
+      console.error(
+        `dev-loop pause/resume: no '${TEAM_INTAKE_PROJECT}' project in ${hubDbPath} — this workspace was not seeded by 'dev-loop team init'`,
+      );
+      db.close();
+      process.exit(5);
+    }
+
     if (parsed.action === "pause") {
       const state = writePause(db, actor, parsed.reason!, parsed.until || null);
+      logEvent(db, {
+        project_id: teamProjectId,
+        actor,
+        kind: "scheduler.pause",
+        data: { reason: parsed.reason, until: parsed.until || null }
+      });
       console.log(`dev-loop pause: ${formatPause(state)}`);
     } else {
       // resume
       const cleared = clearPause(db);
       if (cleared) {
+        logEvent(db, {
+          project_id: teamProjectId,
+          actor,
+          kind: "scheduler.resume"
+        });
         console.log("dev-loop resume: scheduler pause cleared");
       } else {
         console.log("dev-loop resume: no pause was active (idempotent)");
