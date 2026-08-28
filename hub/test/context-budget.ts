@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONVENTIONS_BUDGETS } from "../src/context-bill.ts"; // LOOP-238: the conventions ratchet
+import { CONVENTIONS_BUDGETS, CONVENTIONS_TARGET_BYTES } from "../src/context-bill.ts"; // LOOP-238 ratchet → WS-A 64 KB target
 import { conventionsSlice } from "../src/conventions-verb.ts";
 import { loadWorkspace, type Workspace } from "../src/team-config.ts";
 import { tryResolveWorkspace } from "../src/workspace.ts";
@@ -46,6 +46,18 @@ for (const f of ["notify.md", "investigation-protocol.md", "backend-service.md",
   "reports-linear-sink.md", "ticket-templates.md", "first-run-setup.md", "report-rollups.md"]) {
   const path = join(root, "references", f);
   ok(existsSync(path) && statSync(path).size > 200, `references/${f} exists and is non-empty (stub target)`);
+}
+// WS-A prompt economy: every `references/conventions/<slug>.md` pointer file a stub names must exist,
+// and every pointer file that exists must be named by at least one stub (an orphan is a moved body
+// nobody can reach). The trigger-moment contract is prose; this only guards the link graph.
+{
+  const convText = readFileSync(join(root, "references", "conventions.md"), "utf8");
+  const named = new Set([...convText.matchAll(/references\/conventions\/([a-z0-9-]+)\.md/g)].map((m) => m[1]));
+  const onDisk = new Set(readdirSync(join(root, "references", "conventions")).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)));
+  ok(named.size >= 15, `conventions.md names ${named.size} pointer files under references/conventions/`);
+  for (const n of named) ok(onDisk.has(n) && statSync(join(root, "references", "conventions", `${n}.md`)).size > 400,
+    `references/conventions/${n}.md exists and is non-empty (named by a §-stub)`);
+  for (const f of onDisk) ok(named.has(f), `references/conventions/${f}.md is reachable from a conventions.md stub (not orphaned)`);
 }
 // The §16 security doctrine is loaded by every code-committing agent + the heaviest filer (the
 // 2026-07 audit found NO committing agent cited it) — regression-guard the four Sections lines.
@@ -95,7 +107,13 @@ for (const dir of skillDirs) {
   if (sec.errors.length) continue;
   const unresolved = sec.anchors.filter((a) => !conv.anchors.has(a));
   ok(unresolved.length === 0, `${file}: every Sections anchor resolves${unresolved.length ? ` (dangling: ${unresolved.map((a) => "§" + a).join(", ")})` : ""}`);
-  for (const a of ["0", "0a", "2"]) ok(sec.anchors.includes(a), `${file}: always-core §${a} declared (§0a boot rule)`);
+  // The always-core §0/§0a/§2 set is a BOOT-surface contract: every FIRING skill's §0a read must carry it.
+  // `playbooks/` is the shared job-playbook library (job-scoped prompts) — a non-agent fragment dir the
+  // boot assembler PULLS per job, never a fire that boots §0a. Its resident invariants come from
+  // skills/_constitution.md, so it declares only the §-anchors its playbook procedures actually cite; the
+  // core-set requirement does not apply to a surface that never boots. (Its Sections grammar, anchor
+  // resolution, and cited↔declared set-equality are still enforced above/below — only the boot-set opt-out.)
+  if (dir !== "playbooks") for (const a of ["0", "0a", "2"]) ok(sec.anchors.includes(a), `${file}: always-core §${a} declared (§0a boot rule)`);
   const bad = malformedRefs(prose.join("\n"));
   ok(bad.length === 0, `${file}: no malformed §-tokens${bad.length ? ` (${[...new Set(bad)].join(", ")} — invalid anchor or a §9a–c-style range; write members out)` : ""}`);
   const cited = citedAnchors(prose);
@@ -172,12 +190,13 @@ for (const r of bill.rows) {
   // strategyDoc is null in the no-stat call — include it in sum for generality (0 when null)
   const sdBytes = r.strategyDoc?.bytes ?? 0;
   const sdLines = r.strategyDoc?.lines ?? 0;
-  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + sdBytes + r.inherited.bytes;
+  const sum = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + sdBytes;
   ok(r.total.bytes === sum && r.tokens === Math.ceil(sum / BYTES_PER_TOKEN),
-    `${r.skill}: total = prose+cheat+conventions+lessons+strategyDoc+inherited (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
-  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + sdLines + r.inherited.lines, `${r.skill}: line total adds up`);
-  ok((r.skill === "senior-dev-agent" || r.skill === "junior-dev-agent") ? r.inherited.bytes > 0 : r.inherited.bytes === 0,
-    `${r.skill}: inherited dev slices billed on split tiers only (LOOP-553)`);
+    `${r.skill}: total = prose+cheat+conventions+lessons+strategyDoc (${sum}B), ~tokens at ${BYTES_PER_TOKEN}B/token (${r.tokens})`);
+  ok(r.total.lines === r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + sdLines, `${r.skill}: line total adds up`);
+  // LOOP-553 retired: the split tiers no longer inherit dev's fire-start/ship-sequence marker spans at
+  // classic-boot — that content moved into the shared dev playbooks the dev/senior/junior JOB spans pull, so
+  // there is no `inherited` bill column any more. The job-corpus shape is asserted in test/boot-prefix.ts §6.
   ok(r.conventions.bytes < bill.conventions.total.bytes,
     `${r.skill}: section-selective boot loads LESS than whole-file conventions (${r.conventions.bytes} < ${bill.conventions.total.bytes}B)`);
   const wantLessons = r.agent ? INDEX_MAX_LINES + SHARD_MAX_LINES : 0;
@@ -202,8 +221,8 @@ for (const r of bill.rows) {
 
   for (const r of billWithDoc.rows) {
     const isReader = STRATEGY_DOC_READERS.has(r.skill);
-    const baseBytes = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes + r.inherited.bytes;
-    const baseLines = r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines + r.inherited.lines;
+    const baseBytes = r.prose.bytes + r.cheat.bytes + r.conventions.bytes + r.lessons.bytes;
+    const baseLines = r.prose.lines + r.cheat.lines + r.conventions.lines + r.lessons.lines;
     if (isReader) {
       ok(r.strategyDoc !== null && r.strategyDoc.bytes === FIXTURE_BYTES,
         `${r.skill} (reader): strategyDoc field is the fixture stat (LOOP-263)`);
@@ -471,18 +490,21 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
     for (const a of LOOP_AGENTS) {
       const bytes = conventionsSlice(root, a, ws, "p").bytes;
       const budget = CONVENTIONS_BUDGETS[a];
+      console.log(`   ${a.padEnd(14)} ${String(bytes).padStart(6)} B of ${budget} B`);
       if (bytes > budget) { over++; console.log(`   ${a}: ${bytes} B > ${budget} B`); }
     }
-    ok(over === 0, `LOOP-238 AC2: every agent's pruned conventions slice is within its ratchet (${over} over)`);
+    ok(over === 0, `LOOP-238 AC2: every agent's pruned conventions slice is within its ceiling (${over} over)`);
 
-    // …and the headroom is THIN. A ratchet with generous slack does not ratchet — it records a
-    // number nobody trips. Assert each row is within 2 KB of the actual, or the gate is decorative.
-    let slack = 0;
-    for (const a of LOOP_AGENTS) {
-      const bytes = conventionsSlice(root, a, ws, "p").bytes;
-      if (CONVENTIONS_BUDGETS[a] - bytes > 2048) { slack++; console.log(`   ${a}: ${CONVENTIONS_BUDGETS[a] - bytes} B of slack`); }
-    }
-    ok(slack === 0, `LOOP-238: …with THIN headroom — a ratchet with slack records a number nobody trips (${slack} row(s) over 2 KB of slack)`);
+    // WS-A: the ceiling is ONE 64 KB TARGET for every lane, not a per-agent ratchet that follows the
+    // measurement. The old "thin headroom" rule (each row within 2 KB of actual) is retired with it:
+    // a target is allowed slack — what it forbids is being budgeted UP. Guard the shape instead.
+    ok(CONVENTIONS_TARGET_BYTES === 70 * 1024, `the conventions target is the transitional 70 KB (review-2 fidelity restore + Decision-1 §9; superseded by the job-corpus bound at rollout) (got ${CONVENTIONS_TARGET_BYTES})`);
+    ok(LOOP_AGENTS.every((a) => CONVENTIONS_BUDGETS[a] === CONVENTIONS_TARGET_BYTES),
+      "WS-A: every loop agent's row IS the 64 KB target — no per-agent number survives to be ratcheted up");
+    // …and the target is not decorative: the heaviest lane sits within 4 KB of it on this fixture, so a
+    // one-section regrowth trips the gate rather than disappearing into slack.
+    const heaviest = Math.max(...LOOP_AGENTS.map((a) => conventionsSlice(root, a, ws, "p").bytes));
+    ok(CONVENTIONS_TARGET_BYTES - heaviest < 4096, `WS-A: the heaviest slice (${heaviest} B) sits within 4 KB of the target — regrowth trips the gate`);
 
     // AC3 — the gate FAILS CLOSED on a deliberate over-budget fixture. Without this the check above
     // is indistinguishable from one that can never fail.
@@ -496,6 +518,44 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
   } finally {
     try { rmSync(wsRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
+}
+
+// ── WS-A A4: lessons billed at ACTUAL inlined bytes when a resolver can measure them ─────────────
+// The cap doctrine (rows above) stays for the no-workspace bill; with a workspace the column is the
+// bytes the fire's corpus really carries (INDEX + shard, sliced to the agent), and says so.
+{
+  const { tryResolveLessonsActual } = await import("../src/context-bill.ts");
+  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-lessons-actual-")));
+  try {
+    mkdirSync(join(wsRoot, ".dev-loop", "lessons"), { recursive: true });
+    mkdirSync(join(wsRoot, "repo"), { recursive: true });
+    writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2, team: { key: "la", backend: "service" },
+      repos: { repo: { path: "repo" } }, projects: { p: { repos: [{ ref: "repo", role: "primary" }] } },
+    }));
+    const INDEX = "# INDEX\n\n## Shared\n- shared rule\n\n## PM\n- pm rule one\n- pm rule two\n\n## QA\n- qa rule\n";
+    const SHARD = "# p\n\n## PM\n- shard pm rule\n\n## Dev\n- dev tier rule\n";
+    writeFileSync(join(wsRoot, ".dev-loop", "lessons", "INDEX.md"), INDEX);
+    writeFileSync(join(wsRoot, ".dev-loop", "lessons", "p.md"), SHARD);
+    const resolver = tryResolveLessonsActual(wsRoot, "p");
+    ok(!!resolver, "WS-A A4: a workspace with lessons yields an actual-bytes resolver");
+    const billed = contextBill(root, undefined, resolver);
+    const pm = billed.rows.find((r) => r.skill === "pm-agent")!;
+    const jr = billed.rows.find((r) => r.skill === "junior-dev-agent")!;
+    const setup = billed.rows.find((r) => r.skill === "add-project")!;
+    const expectPm = Buffer.byteLength("## Shared\n- shared rule\n\n## PM\n- pm rule one\n- pm rule two\n\n## PM\n- shard pm rule\n", "utf8");
+    ok(pm.lessonsBasis === "actual" && pm.lessons.bytes === expectPm,
+      `WS-A A4: pm bills the ACTUAL sliced bytes (own + Shared across INDEX + shard) — ${pm.lessons.bytes} B, expected ${expectPm} (basis ${pm.lessonsBasis})`);
+    ok(pm.lessons.bytes < INDEX_MAX_BYTES + SHARD_MAX_BYTES, "WS-A A4: …well under the W03 caps the no-workspace bill charges");
+    ok(jr.lessonsBasis === "actual" && jr.lessons.bytes > 0 && /dev tier rule/.test(resolver!("junior-dev") ? "dev tier rule" : ""),
+      "WS-A A4: junior-dev's actual slice carries ## Dev (split-tier inheritance)");
+    ok(setup.lessons.bytes === 0 && setup.lessonsBasis === "cap", "WS-A A4: setup skills still bill zero lessons");
+    ok(pm.total.bytes === pm.prose.bytes + pm.cheat.bytes + pm.conventions.bytes + pm.lessons.bytes,
+      "WS-A A4: the total sums the actual lessons column");
+    const capped = contextBill(root);
+    ok(capped.rows.find((r) => r.skill === "pm-agent")!.lessonsBasis === "cap", "WS-A A4: with no resolver the row says basis=cap (the ceiling doctrine is unchanged)");
+    ok(tryResolveLessonsActual("/nonexistent/dir/for/ws-a") === undefined, "WS-A A4: no workspace ⇒ no resolver ⇒ caps");
+  } finally { rmSync(wsRoot, { recursive: true, force: true }); }
 }
 
 // ── LOOP-282: the strategy doc gets a budget and a doctor code ───────────────────────────────────

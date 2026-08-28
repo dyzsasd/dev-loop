@@ -30,7 +30,18 @@ is `docs/HUB-ARCHITECTURE.md` and is operator/developer reading, not agent boot 
 - **Write semantics.** `save_issue` takes `duplicateOf` (scalar — set it with
   `state:"Duplicate"`, §8) and `relatedTo` (**append-only** — re-passing unions into the
   set, never replaces; §4 splits, §15 coverage). `parentId` / `blockedBy` / `blocks` do
-  not exist — blocking is the `blocked` label (§9).
+  not exist — blocking is the `blocked` label (§9). `waitingOn` (`human-decision` |
+  `human-action` | `external`) is the Human-Blocked discriminator and belongs to that
+  STATE: set it when you park (`state:"Human-Blocked"`, default `human-decision`); the
+  write layer clears it on every exit from Human-Blocked and re-defaults it on every
+  entry, so never carry it forward yourself.
+- **Rulings are not yours.** A `save_comment` whose body starts `Ruling:` is the operator's
+  answer (`references/operator-rulings.md`): the op parses that grammar and refuses it from
+  any agent identity (`403`) — a `Ruling:` you post would otherwise be read by PM's next
+  pass as the human's decision. A valid one from the operator is recorded (an
+  `issue.ruling` event in `list_events`; on a Human-Blocked ticket `waiting_on` clears) and
+  never moves state by itself. To ASK for a ruling, park the ticket Human-Blocked with a
+  `Bail-shape:` comment (§9); to ask for an authorization, `dev-loop request <key>`.
 - **Docs.** `strategyDoc` defaults to a repo file. With `hub.docs:true` (or a
   `{ "hubDoc": "<kind>" }` strategyDoc) the strategy/roadmap become hub documents: any
   agent appends DRAFT versions via `doc.save` (optimistic CAS — a CONFLICT carries

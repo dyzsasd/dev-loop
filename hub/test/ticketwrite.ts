@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDb } from "../src/db.ts";
-import { insertTicket, updateTicketRow, moveTicket, verifyCreateGateRejection } from "../src/ticketwrite.ts";
+import { insertTicket, updateTicketRow, moveTicket, insertComment, verifyCreateGateRejection, waitingOnFor, parseRuling, rulingBody, rulingCommentPolicy, recordRuling } from "../src/ticketwrite.ts";
 import type { NewTicketFields, TicketUpdateFields } from "../src/ticketwrite.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts"; // LOOP-183 Vector B: exercise the wired create path (opSaveIssue)
 import { AGENT_HANDLES } from "../src/seed.ts"; // LOOP-208: drive the actor-coverage assertion from the REAL roster, so a future handle fails the test
@@ -431,6 +431,106 @@ try {
         `LOOP-587: ${f} reads its ticket row through readTicketUpdateFields (it is a caller of updateTicketRow)`);
     }
   }
+
+  // ── WS-C review 3: waiting_on lives and dies with the Human-Blocked state (ONE choke point) ────────
+  //
+  // LOOP-384 added the discriminator and the ruling grammar claimed "leaving Human-Blocked IS the
+  // clear" — but updateTicketRow carried the column forward on every transition, so a re-park for a
+  // different reason showed the stale value in the operator's queue. The rule is a pure function
+  // (waitingOnFor) applied at the write, so every path — save_issue, the daemon board-move, merge-guard's
+  // demote, ticket-release — gets it by construction.
+  {
+    ok(waitingOnFor("Todo", "human-action", "Human-Blocked") === null, "waitingOnFor: leaving Human-Blocked → null (the clear)");
+    ok(waitingOnFor("Human-Blocked", null, "Todo") === "human-decision", "waitingOnFor: entering with nothing set → the documented default");
+    ok(waitingOnFor("Human-Blocked", "external", "Todo") === "external", "waitingOnFor: an explicit value wins on entry");
+    ok(waitingOnFor("Human-Blocked", null, "Human-Blocked") === null, "waitingOnFor: an explicit null INSIDE Human-Blocked is honored (what a bare Ruling: comment leaves behind)");
+    ok(waitingOnFor("Todo", "external", "In Review") === "external", "waitingOnFor: every other write carries the value through (LOOP-587's In Review rewrite keeps its 'external')");
+    ok(waitingOnFor("Human-Blocked", null, null) === "human-decision" && waitingOnFor("Todo", null, null) === null,
+      "waitingOnFor: the create edge (no fromState) — Human-Blocked defaults, anything else stays null");
+    const wo = (id: string): string | null => (db.prepare("SELECT waiting_on FROM tickets WHERE id=?").get(id) as { waiting_on: string | null }).waiting_on;
+    const wid = insertTicket(db, "p", "pm", newFields({ state: "Human-Blocked" }), {});
+    ok(wo(wid) === "human-decision", "insertTicket: a create straight into Human-Blocked gets the default");
+    const out = updateTicketRow(db, "p", "operator", wid, "Human-Blocked", updateFields({ state: "Todo", waiting_on: "human-decision" }));
+    ok(out.ok && wo(wid) === null, "updateTicketRow: Human-Blocked → Todo clears waiting_on even though the caller carried it forward");
+    const again = updateTicketRow(db, "p", "operator", wid, "Todo", updateFields({ state: "Todo", waiting_on: null }));
+    ok(again.ok && wo(wid) === null, "…idempotent: a later non-parked write stays null");
+    const repark = updateTicketRow(db, "p", "pm", wid, "Todo", updateFields({ state: "Human-Blocked", waiting_on: null }));
+    ok(repark.ok && wo(wid) === "human-decision", "updateTicketRow: re-entering Human-Blocked with nothing set gets a FRESH default (never the stale one)");
+    const edit = updateTicketRow(db, "p", "pm", wid, "Human-Blocked", updateFields({ state: "Human-Blocked", waiting_on: "external" }));
+    ok(edit.ok && wo(wid) === "external", "updateTicketRow: an explicit edit inside Human-Blocked is honored");
+    const mv = moveTicket(db, "p", "operator", wid, "Backlog");
+    ok(mv.ok && wo(wid) === null, "moveTicket (the daemon board-move) is covered by the same clear — ONE choke point");
+  }
+
+  // ── WS-C review 3: the ruling grammar + the who-may-post policy + the record ───────────────────────
+  {
+    ok(parseRuling("just a note") === null, "parseRuling: a non-ruling body is null (not subject to the policy)");
+    const p = parseRuling("Ruling: approve — ship it");
+    ok(typeof p === "object" && p !== null && p.verdict === "approve" && p.reason === "ship it", "parseRuling: the canonical form parses to {verdict, reason}");
+    const p2 = parseRuling("Ruling: defer wait for 2026-09-03\nmore detail");
+    ok(typeof p2 === "object" && p2 !== null && p2.verdict === "defer" && p2.reason.startsWith("wait for") && p2.reason.includes("more detail"), "parseRuling: the dash is optional and a multi-line reason is kept whole");
+    ok(typeof parseRuling("Ruling: maybe — hmm") === "string", "parseRuling: a ruling-shaped body with an unknown verdict is an ERROR, not prose");
+    ok(typeof parseRuling("ruling: approve — lowercase") === "string", "parseRuling: a lookalike prefix is ruling-shaped (subject to the policy) but not canonical");
+    ok(typeof parseRuling("Ruling: reject") === "string" && /reason/.test(parseRuling("Ruling: reject —") as string), "parseRuling: a verdict without the human's reason is refused");
+    ok(rulingBody("approve", "  ship it ") === "Ruling: approve — ship it", "rulingBody emits exactly the form parseRuling reads");
+    const plain = rulingCommentPolicy(db, "pm", "a plain comment");
+    ok(plain.error === null && plain.ruling === null, "policy: a plain comment from an agent is untouched");
+    ok(rulingCommentPolicy(db, "pm", "Ruling: approve — sneaky").status === 403, "policy: a ruling from an agent identity is 403");
+    ok(AGENT_HANDLES.every((h) => rulingCommentPolicy(db, h, "Ruling: reject — x").status === 403), `policy: EVERY roster agent is refused (${AGENT_HANDLES.length} handles) — the check is actors.kind, not a handle list`);
+    const human = rulingCommentPolicy(db, "operator", "Ruling: approve — yes");
+    ok(human.status === 200 && human.ruling?.verdict === "approve", "policy: the human operator passes");
+    ok(rulingCommentPolicy(db, "operator", "Ruling: nope — x").status === 400, "policy: malformed from anyone is 400 (parsed before the actor is asked)");
+    const rid = insertTicket(db, "p", "pm", newFields({ state: "Human-Blocked", waiting_on: "human-action" }), {});
+    const rec = recordRuling(db, "p", "operator", rid, { verdict: "approve", reason: "go" });
+    const after = db.prepare("SELECT state, waiting_on FROM tickets WHERE id=?").get(rid) as { state: string; waiting_on: string | null };
+    ok(rec.waitingOnCleared === "human-action" && after.waiting_on === null && after.state === "Human-Blocked", "recordRuling: waiting_on cleared, state UNTOUCHED, the old value reported");
+    const rev = db.prepare("SELECT actor, data FROM events WHERE ticket_id=? AND kind='issue.ruling'").all(rid) as { actor: string; data: string }[];
+    ok(rev.length === 1 && rev[0]!.actor === "operator" && JSON.parse(rev[0]!.data).ruling === "approve", "recordRuling: one issue.ruling event, attributed to the operator");
+    ok(recordRuling(db, "p", "operator", rid, { verdict: "reject", reason: "no" }).waitingOnCleared === null, "recordRuling: a second ruling on the same parked ticket has nothing left to clear (idempotent)");
+    const tid = insertTicket(db, "p", "pm", newFields({ state: "Todo" }), {});
+    const rec3 = recordRuling(db, "p", "operator", tid, { verdict: "approve", reason: "x" });
+    ok(rec3.state === "Todo" && rec3.waitingOnCleared === null, "recordRuling: on a non-parked ticket it only logs (nothing to clear)");
+  }
+  // ── Decision 1: the bail-shape label is a DERIVED, single-source field ────────
+  const labelsOf = (id: string): string[] => JSON.parse(row(id).labels) as string[];
+  const bailLabels = (id: string): string[] =>
+    labelsOf(id).filter((l) => ["info-needed", "decision-needed", "scope-design", "external-prereq", "fix-exhausted"].includes(l));
+
+  // (a) a `Bail-shape:` comment on a blocked ticket derives the matching label at the write choke point
+  const bs1 = insertTicket(db, "p", "pm",
+    newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm", "blocked", "needs-pm"] }), {});
+  insertComment(db, "p", "senior-dev", bs1, "Bail-shape: decision-needed\nProduct call: which currency wins?");
+  ok(bailLabels(bs1).length === 1 && bailLabels(bs1)[0] === "decision-needed",
+    "Decision 1: a `Bail-shape: decision-needed` comment on a blocked ticket derives exactly the `decision-needed` label");
+  ok(labelsOf(bs1).includes("blocked") && labelsOf(bs1).includes("needs-pm"),
+    "Decision 1: the block's existing labels are preserved when the bail-shape label is derived");
+
+  // (b) a NEW bail-shape comment supersedes — exactly one bail-shape label at a time (latest wins)
+  insertComment(db, "p", "senior-dev", bs1, "Bail-shape: info-needed\nActually need the repro seed first.");
+  ok(bailLabels(bs1).length === 1 && bailLabels(bs1)[0] === "info-needed",
+    "Decision 1: a newer bail-shape comment replaces the label (single-valued: decision-needed → info-needed)");
+
+  // (c) clearing `blocked` through updateTicketRow strips the bail-shape label (unblock invariant)
+  const unblocked = labelsOf(bs1).filter((l) => l !== "blocked" && l !== "needs-pm");
+  updateTicketRow(db, "p", "pm", bs1, "Todo", updateFields({ state: "Todo", labels: JSON.stringify(unblocked) }));
+  ok(bailLabels(bs1).length === 0 && !labelsOf(bs1).includes("blocked"),
+    "Decision 1: removing the `blocked` label removes the derived bail-shape label");
+
+  // (d) ordering: `blocked` set AFTER the comment — updateTicketRow derives from the existing comment
+  const bs2 = insertTicket(db, "p", "pm", newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm"] }), {});
+  insertComment(db, "p", "senior-dev", bs2, "Bail-shape: scope-design\nSpans two repos; needs a design call.");
+  ok(bailLabels(bs2).length === 0, "Decision 1: a bail-shape comment on a NOT-yet-blocked ticket sets no label");
+  updateTicketRow(db, "p", "pm", bs2, "Todo", updateFields({ state: "Todo", labels: JSON.stringify(["dev-loop", "Feature", "pm", "blocked", "needs-pm"]) }));
+  ok(bailLabels(bs2).length === 1 && bailLabels(bs2)[0] === "scope-design",
+    "Decision 1: setting `blocked` derives the label from the pre-existing Bail-shape comment (write ordering cannot drift)");
+
+  // (e) a non-bail comment is a strict no-op; a bail comment on a non-blocked ticket sets nothing
+  const bs3 = insertTicket(db, "p", "pm", newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm", "blocked", "needs-pm"] }), {});
+  insertComment(db, "p", "senior-dev", bs3, "just a status note, no marker");
+  ok(bailLabels(bs3).length === 0, "Decision 1: a comment with no `Bail-shape:` line derives no label");
+  const bs4 = insertTicket(db, "p", "pm", newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm"] }), {});
+  insertComment(db, "p", "senior-dev", bs4, "Bail-shape: fix-exhausted\ntried, gates still red");
+  ok(bailLabels(bs4).length === 0, "Decision 1: a `Bail-shape:` comment on a non-blocked ticket derives no label (blocked-gated)");
 
   db.close();
 } finally {

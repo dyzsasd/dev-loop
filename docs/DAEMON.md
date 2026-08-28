@@ -135,21 +135,75 @@ dev-loop daemon down                                     # → stops this projec
 
 ### Login autostart
 
-On macOS, a global `npm i -g @dyzsasd/dev-loop` attempts to install a LaunchAgent automatically
-during `postinstall` (unless `DEVLOOP_SKIP_AUTOSTART=1` is set or npm scripts are skipped). To repair
-or install it manually after the npm package and service projects are configured:
+Installing the package never installs a login item (LOOP-468). Opting in is one explicit verb, run
+inside (or pointed at) the workspace it should serve:
 
 ```sh
-dev-loop daemon install-autostart
+dev-loop daemon install-autostart [--workspace <root>] [--dry-run] [--format plist|systemd]
+dev-loop daemon uninstall-autostart [--workspace <root>] [--all]     # symmetric removal
 ```
 
-The LaunchAgent runs the packaged daemon entry with `up-all` at login, using the compatible Node that
-`dev-loop` resolved (`DEVLOOP_NODE` when set, otherwise a probed Node ≥23.6). It starts configured
-`backend:"service"` projects only; projects that are unseeded in the hub DB are skipped cleanly. Remove it with:
+- **Linux → a `systemd --user` unit** `~/.config/systemd/user/dev-loop-daemon@<team-key>.service`
+  (WS-B): `Type=oneshot` + `RemainAfterExit`, `ExecStart=<node> <daemon entry> up-all`, then
+  `systemctl --user daemon-reload && systemctl --user enable --now <unit>`. The daemons `up-all`
+  detaches stay in the unit's cgroup, so `systemctl --user stop|restart dev-loop-daemon@<key>` is
+  the stop/restart. Run `loginctl enable-linger "$USER"` once to keep it running after logout /
+  start it at boot. `uninstall-autostart` does `disable --now`, removes the file, reloads.
+- **macOS → a LaunchAgent** `~/Library/LaunchAgents/com.dyzsasd.dev-loop.daemon.plist` with
+  `RunAtLoad`, the same `up-all` program line.
+- Either artifact is a **written binding** (LOOP-469): `WorkingDirectory` + `DEVLOOP_WORKSPACE` name
+  exactly one workspace; the install shell's `DEVLOOP_HOME` / `DEVLOOP_PROJECTS_JSON` /
+  `DEVLOOP_HUB_DB` / `DEVLOOP_RUN_DIR` are never carried into it (only `DEVLOOP_NODE`, which names
+  the interpreter). `dev-loop daemon status` prints the binding line on both OSes.
+- `--dry-run` renders the artifact on any OS and writes nothing; `--format` forces the other shape
+  for inspection. Unseeded projects are skipped cleanly at login; only `backend:"service"` projects start.
+
+Hand-managed equivalents (a scheduler unit too, since `dev-loop run` owns the daemon on a machine
+that runs the loop) ship in the package as `dev-loop-operator/templates/systemd/*.service` and
+`dev-loop-operator/templates/launchd/*.plist` — see `dev-loop-operator/SKILL.md` §3. Machines with
+no init system: `nohup dev-loop daemon up-all` (or `dev-loop run --background`).
+
+### The Claude SessionStart hook (opt-in)
+
+The Claude plugin registers a SessionStart hook (`hooks/hooks.json` → `hook-session-start`) that
+nudges `dev-loop daemon up`. Since WS-B it is **opt-in**: the hook exits 0 immediately unless
+`DEVLOOP_SESSION_HOOK=1` is set in the environment or the resolved workspace's `dev-loop.json` has
+`team.sessionStartHook: true`. When it does act it appends one line per session to
+`<workspace>/.dev-loop/hook.log` (`~/.dev-loop/hook.log` without a workspace; `DEVLOOP_RUN_DIR`
+wins) instead of swallowing everything. The hook was never load-bearing for fires — the scheduler
+inlines skills from the package and `dev-loop run` ensures the daemon itself.
+
+### Upgrading
+
+Node caches modules at import time and never reloads them, so a running scheduler or daemon keeps
+the build it started with while `dev-loop doctor` reports the newly installed one (`W36` scheduler
+build skew, `W28` daemon on old code). A source `npm run build` also deletes and re-copies
+`skills/`, which every fire reads. **Never `npm i -g` (or build) over a running scheduler.** The
+sequence, in order (`dev-loop-operator/SKILL.md` §6 is the same list):
 
 ```sh
-dev-loop daemon uninstall-autostart
+dev-loop pause --drain --reason "upgrade"    # 1. no new fires; wait for in-flight ones to finish
+dev-loop stop                                # 2. the scheduler exits once drained
+npm i -g @dyzsasd/dev-loop@<ver> --ignore-scripts   # 3. install (or dev-loop-operator/scripts/ensure-install.sh)
+dev-loop doctor                              # 4. no W36 / W28
+dev-loop daemon up-all                       # 5. `up` restarts a daemon running OLD code on its port
+dev-loop run --agents core --background && dev-loop resume   # 6. resume
 ```
+
+`daemon up` refuses to downgrade a daemon that is NEWER than the CLI calling it (the CLI is the stale
+side — upgrade it). If `pause --drain` is not available, `dev-loop pause --reason …` and wait until
+`dev-loop metrics --window 1h` shows no running fire before step 2.
+
+**A restart does not close an open breaker.** The scheduler persists its failure-streak breaker to
+`.dev-loop/team/breaker.json` (beside `scheduler-build.json`; atomic, owner-only) on every change and
+at start/stop. Step 6 above RESUMES any breaker that was OPEN when the last failure on that lane is
+younger than the probe cadence (`--breaker-probe`, default 1h) — the restart is not evidence the
+provider recovered, so the lane comes back at probe cadence and its first fire is the probe. One log
+line at boot says what was resumed; stale entries and partial streaks start fresh. To start every
+breaker closed on purpose: `dev-loop run … --breaker-reset`. `dev-loop status` reads the same file
+while the scheduler runs (`scheduler.breakers.source: "live"`, with `half-open` while a probe is in
+flight and the next probe time); when the writer is gone or predates the file it replays the ledger
+and says `source: "replay"` — an approximation that cannot know the flags or the probe timing.
 
 ## Read endpoints
 

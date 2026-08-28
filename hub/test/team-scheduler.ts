@@ -151,7 +151,7 @@ try {
     // real argv (the prompt is the last arg) through a stub CLI instead.
     const promptFile = join(tmp, "steward-prompt.txt");
     const promptDump = join(tmp, "prompt-claude.sh");
-    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
+    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\ncat >> ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
     runAgents(["--agents", "sweep", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
     ok(/enabled projects: alpha, beta/.test(readFileSync(promptFile, "utf8")),
       "a weight:0 project STAYS in steward enumeration (delivery paused, stewards continue — T3.2)");
@@ -185,7 +185,7 @@ try {
   {
     const promptFile = join(tmp, "comms-prompt.txt");
     const promptDump = join(tmp, "comms-claude.sh");
-    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
+    writeFileSync(promptDump, `#!/bin/sh\nprintf '%s\\n' "$@" > ${promptFile}\ncat >> ${promptFile}\nexit 0\n`); chmodSync(promptDump, 0o755);
     // no team.comms → the fire is told the channel is missing and to surface it, not to push
     runAgents(["--agents", "communication", "--once"], ws, { DEVLOOP_CLAUDE_BIN: promptDump });
     let prompt = readFileSync(promptFile, "utf8");

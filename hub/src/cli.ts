@@ -37,14 +37,17 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   push:             ["push"],                      // LOOP-521: `push-guard --strict` AND `git push` as ONE call — the gate is the precondition of the push, so skipping it is not an available argv (design approvals §16.3)
   "stage-guard":    ["stage-guard"],               // LOOP-320: pre-COMMIT check — refuse another fire's edits in the staged set
   "conventions":    ["conventions-verb"],          // LOOP-237: the PULL half of §0a delivery — one agent's config-pruned slice, on demand
+  "playbook":       ["playbook-verb"],             // job-scoped prompts: the PULL half — one (agent, job) slice (constitution + job span + pulled playbooks), byte-identical to the pushed corpus
   metrics:          ["metrics"],                   // team KPIs from fires.jsonl (+ hub board on service)
   quality:          ["quality"],                   // per-function CRAP report/gate + mutation probe (quality-gauntlet)
   doctor:           ["server", "doctor"],
   seed:             ["seed"],
   run:              ["run-agents"],                // scheduler: own cadence + shells out to claude/codex once per fire
   stop:             ["stop"],                      // stop the workspace's running scheduler via the run lock (pairs with `run --background`)
-  pause:            ["scheduler-pause-cli", "pause"],   // pause the scheduler — no new fires, existing ones continue
+  pause:            ["scheduler-pause-cli", "pause"],   // pause the scheduler — no new fires, existing ones continue; --drain blocks until none is in flight (WS-C C3)
   resume:           ["scheduler-pause-cli", "resume"],  // resume the paused scheduler
+  status:           ["status"],                    // WS-C C2: ONE read model for any harness — scheduler/pause/drain/breakers, decision queue, fire health, daemons, board, 24h cost + a NEXT line
+  system:           ["system-propose"],            // WS-C C6: propose|list|show|resolve — the §17 firewall's sanctioned route for agents to suggest governing-file changes (file inbox; resolve is operator-only)
   "install-claude-plugin": ["install-claude-plugin"], // register a local npm-source marketplace so Claude Code loads the published plugin
   "init-service":   ["init-service"],              // turnkey bootstrap (DL-60)
   "mcp-merge":      ["mcp-merge"],                 // merge into a product .mcp.json, never clobbers (DL-61)
@@ -76,6 +79,12 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   revoke:           ["approvals-cli", "revoke"],
   approvals:        ["approvals-cli", "approvals"],
   request:          ["approvals-cli", "request"],
+  // WS-C review 3: the operator's one-shot ruling — the validated `Ruling:` comment AND the state verb
+  // the operator-rulings table prescribes, as ONE call, so a ruled-but-never-moved ticket (or a moved-
+  // but-never-explained one) is not an available argv. Operator-only: refused under a fire marker,
+  // no bypass. A ticket ruling rides the op layer (so it travels over an attach, see ATTACH_OK); an
+  // approval-id ruling delegates to approvals-cli, which is home-only, and refuses over an attach.
+  rule:             ["rule-cli"],
   // NB: `release-version` is deliberately NOT routed here — it mutates repo-only manifests
   // (.claude-plugin/*) absent from the npm package, so it's a source-tree-only tool: run it in-repo
   // via `node hub/src/release-version.ts <semver>` (Codex review 2026-06-27).
@@ -120,6 +129,8 @@ Usage: dev-loop <command> [args]
   with-repo-lock <ref> -- <cmd>   run a command holding a shared repo's base-clone lock
   conventions --agent <a> [--project <k>] [--json]      the config-pruned §0a slice for ONE agent, on
                                                         demand (the PULL half of the delivery path)
+  playbook <agent> <job> [--json]                       the job-scoped slice ONE (agent, job) fire loads
+                                                        (constitution + job span + pulled playbooks), on demand
   stage-guard [--repo <d>] [--override "<why>"]         pre-COMMIT check: refuse staged files that were
                                                         already uncommitted before this run started
   push-guard [--repo <dir>] [--branch <b>] [--strict]   pre-push ride-along check: flag unpushed commits
@@ -155,10 +166,32 @@ Usage: dev-loop <command> [args]
                               itself — agent-callable, authorises nothing, and nothing waits on it
                               (an action key names an END STATE: push:main:<sha>, never push:main —
                               run \`dev-loop approve --help\` for the grammar)
+  rule <id> approve|reject|defer --reason "<the human's words>" [--to <state>] [--waiting-on human-action|external]
+                              [--project K] [--json]   rule on a decision-queue item in ONE call: the validated
+                              \`Ruling:\` comment AND the state verb the operator-rulings table prescribes
+                              (approve → Todo, or Done from In Review; reject → Canceled; defer → stays
+                              Human-Blocked with waiting_on set; --to overrides). <id> may be an approval-id:
+                              approve/reject delegate to \`approve --request\` / \`revoke\`. OPERATOR-ONLY —
+                              refused inside a fire (exit 4), no bypass; \`rule --help\` for the table
   init-service <key> <name> <PREFIX>   (legacy) turnkey-bootstrap a service project — start at \`init\`/\`up\` instead
   run [--background] [--cli claude|codex|opencode] [--agents core,outward]   schedule agents by calling the
                               selected CLI; --background detaches (log → .dev-loop/run.log), \`stop\` ends it
   stop                        cleanly stop this workspace's running scheduler (the hub daemon stays up)
+  pause --reason T [--until ISO] [--drain [--timeout <s>]]   pause the scheduler (no new fires; in-flight ones
+                              finish). --drain then BLOCKS until no fire is in flight, printing progress; exit 0
+                              drained · 1 timeout (the pause stays set). \`resume\` clears it
+  resume                      clear the scheduler pause (idempotent)
+  status [--json] [--project <key>]   ONE read model for whoever operates the loop, from any harness:
+                              scheduler (running/paused/DRAINING, in-flight fires, breakers), the decision
+                              queue (Human-Blocked + waiting_on, In Review@operator, approval requests, open
+                              system proposals), fire health, daemons (+ W36 build skew), board counts, 24h
+                              cost — each section fails soft; text mode ends with ONE NEXT line
+  system propose --target <file> (--body T|--body-file F|-) [--title T] [--severity low|medium|high]
+                              propose a change to a GOVERNING file (SKILL.md / conventions.md / dev-loop.json)
+                              instead of editing it — the §17 firewall route, agent-callable; inbox at
+                              .dev-loop/system-inbox/. \`system list [--status S]\` · \`system show <id>\` ·
+                              \`system resolve <id> --status accepted|rejected|applied [--note T]\` (operator-only,
+                              refused inside a fire)
   install-claude-plugin      register a local npm-source marketplace so /plugin install can load it
   mcp-merge <args>            merge dev-loop-hub into a product .mcp.json (never clobbers other servers)
   seed <key> <name> [PREFIX]  (legacy) seed a project into the hub db — \`team add-project\` auto-seeds
@@ -203,7 +236,7 @@ if (!route) { console.error(`dev-loop: unknown command '${cmd}'\n`); usage(); pr
 // against local state while the operator THINKS they're driving the remote is the failure mode this
 // gate exists to prevent.
 if (process.env.DEVLOOP_HUB_URL?.trim()) {
-  const ATTACH_OK = new Set(["tickets", "ticket", "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "up", "attach", "version", "help"]);
+  const ATTACH_OK = new Set(["tickets", "ticket", "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "rule", "up", "attach", "version", "help"]); // rule: a TICKET ruling is two ops over the op-API; its approval-id arm refuses over attach itself
   if (!ATTACH_OK.has(cmd)) {
     console.error(`dev-loop ${cmd}: this verb runs at the WORKSPACE HOME, not over attach (DEVLOOP_HUB_URL is set). Run it on the home host (ssh / redeploy a bundle), or unset DEVLOOP_HUB_URL to work locally.`);
     process.exit(2);
@@ -212,8 +245,8 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "pr", "doc-land", "push", "settings", "pause", "resume",
-  "approve", "revoke", "approvals", "request"]); // worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; settings reads/writes the projects row; the approvals verbs read/write the approvals table
+  "worktree", "merge-guard", "pr", "doc-land", "push", "settings", "pause", "resume", "status",
+  "approve", "revoke", "approvals", "request", "rule"]); // status reads the pause row + queue + board; system is file-only; worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; settings reads/writes the projects row; the approvals verbs read/write the approvals table
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.
 if (NEEDS_NODE_SQLITE.has(cmd) && !nodeVersionOk()) {

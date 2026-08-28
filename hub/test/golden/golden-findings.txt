@@ -3,7 +3,6 @@ dev-loop workspace — 'golden-findings' @ <WS> (backend:service)
 ✅ dev-loop.json valid (1 repos, 1 projects)
 ⚠️  [W01] projects.loop.repos: project 'loop' references no repos
 ⚠️  [W02] repos.repo: repo 'repo' is registered but referenced by no project
-⚠️  [W03] team.bootCorpus: §0a boot corpus is OFF (team.bootCorpus unset/false) — fires run in PULL mode and the push-path byte budget below is not being delivered against. Turn it on with: dev-loop team set team.bootCorpus true
 ✅ repo 'repo' → <WS>/repo
 •  repo 'repo' has no deploy/ops config (interview-only fields) — fill via /dev-loop:add-repo, or team set repos.repo.deploy.* once it deploys
 ⚠️  [W16] [loop] owner 'qa' has 1 open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest <DATE>) but no fire on record in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.qa.manual true is a config edit)

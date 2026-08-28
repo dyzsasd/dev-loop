@@ -53,6 +53,45 @@ export function lessonsForFire(ws: Workspace, project: string | null): string {
   return parts.join("\n\n");
 }
 
+// §14 layout: one `## <Section>` per role + `## Shared`. The agent-id → section-name map mirrors the
+// init scaffold order in conventions §14. Lives HERE (the lessons authority) so the boot assembler
+// (boot-prefix.ts) and the context bill (context-bill.ts) slice by ONE definition — the bill imports
+// this module already, and importing boot-prefix from the bill would be a cycle.
+export const LESSONS_SECTION: Record<string, string> = {
+  pm: "PM", qa: "QA", dev: "Dev", "senior-dev": "senior-dev", "junior-dev": "junior-dev",
+  sweep: "Sweep", reflect: "Reflect", ops: "Ops", architect: "Architect",
+  communication: "Communication",
+};
+
+// Extract `## <name>` sections from a lessons file, preserving file order: the agent's own section
+// (+ `## Dev` for the split tiers) + `## Shared` — §0a step 4. Missing sections are skipped silently
+// (a young lessons file may not carry every heading yet).
+export function lessonsSlice(text: string, agent: string): string {
+  const want = new Set<string>(["Shared"]);
+  const own = LESSONS_SECTION[agent];
+  if (own) want.add(own);
+  if (agent === "senior-dev" || agent === "junior-dev") want.add("Dev");
+  const ls = text.split("\n");
+  if (ls.length && ls[ls.length - 1] === "") ls.pop();
+  const out: string[] = [];
+  let keep = false;
+  for (const l of ls) {
+    const m = /^## (.+?)\s*$/.exec(l);
+    if (m) keep = want.has(m[1]);
+    if (keep) out.push(l);
+  }
+  return out.join("\n");
+}
+
+// The lessons text ONE fire actually receives in its boot corpus (WS-A A4): the INDEX + this project's
+// shard (the same two files lessonsForFire loads), sliced to the agent's sections. `bytes` is what the
+// context bill charges when a workspace resolves — the delivered count, not the W03 cap.
+export function lessonsSliceForFire(ws: Workspace, agent: string, project: string | null): { text: string; bytes: number; lines: number } {
+  const text = lessonsSlice(lessonsForFire(ws, project), agent);
+  const lines = text ? text.split("\n").length : 0;
+  return { text, bytes: Buffer.byteLength(text, "utf8"), lines };
+}
+
 function budgetOf(path: string): { lines: number; bytes: number } | null {
   if (!existsSync(path)) return null;
   try { const t = readFileSync(path, "utf8"); return { lines: t.split("\n").length, bytes: statSync(path).size }; }
@@ -63,12 +102,13 @@ function budgetOf(path: string): { lines: number; bytes: number } | null {
 export function checkLessonsBudget(ws: Workspace): WsWarning[] {
   const P = lessonsPaths(ws);
   const out: WsWarning[] = [];
-  // LOOP-272 AC(C) — W03 polices the byte budget of the §0a PUSH path, which is OFF by default and
-  // was, until this ticket, unreachable from config at all. A green or absent W03 therefore read as
+  // LOOP-272 AC(C) — W03 polices the byte budget of the §0a PUSH path (ON by default since WS-A; before
+  // that it was OFF and, until LOOP-272, unreachable from config at all). A green or absent W03 therefore read as
   // "the push-path budget is honoured" when in truth NOTHING WAS EVER PUSHED. Doctor cannot see a
   // fire's env or flag, so it resolves from CONFIG ONLY — `opts.assembleBoot` is invisible here and
   // depending on it would make doctor's answer depend on how a fire happened to be launched.
-  const corpusEnabled = ws.file.team?.bootCorpus === true;
+  // WS-A (2026-08-27): the corpus is ON by default — `team.bootCorpus:false` is the explicit opt-out.
+  const corpusEnabled = ws.file.team?.bootCorpus !== false;
   const modeNote = corpusEnabled ? "" : " (note: team.bootCorpus is OFF — this budget governs the §0a PUSH path, which is not delivering; the INDEX still costs on the pull read)";
   const idx = budgetOf(P.index);
   if (idx && (idx.lines > INDEX_MAX_LINES || idx.bytes > INDEX_MAX_BYTES))
@@ -82,6 +122,6 @@ export function checkLessonsBudget(ws: Workspace): WsWarning[] {
   // off, say so once — the over-budget checks above stay, because an oversized INDEX costs on the
   // pull read too, so silencing them would trade one wrong reading for another.
   if (!corpusEnabled)
-    out.push({ code: "W03", path: "team.bootCorpus", message: `§0a boot corpus is OFF (team.bootCorpus unset/false) — fires run in PULL mode and the push-path byte budget below is not being delivered against. Turn it on with: dev-loop team set team.bootCorpus true` });
+    out.push({ code: "W03", path: "team.bootCorpus", message: `§0a boot corpus is OFF (team.bootCorpus:false) — fires run in PULL mode and the push-path byte budget below is not being delivered against. Turn it back on with: dev-loop team set team.bootCorpus true (or remove the key — ON is the default)` });
   return out;
 }

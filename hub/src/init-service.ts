@@ -175,9 +175,9 @@ export async function runInitService(opts: InitServiceOpts): Promise<number> {
   }
 
   // ── lifecycle report: standalone autostart first; Claude hook only as compatibility ──
-  log("ℹ️  For login-time daemon startup, run `dev-loop daemon install-autostart` once (macOS LaunchAgent; use your OS process manager elsewhere).");
+  log("ℹ️  For login-time daemon startup, run `dev-loop daemon install-autostart` once (systemd --user unit on Linux, LaunchAgent on macOS; hand-managed templates in dev-loop-operator/templates/).");
   if (sessionStartHookPresent(pluginRoot)) {
-    log("✅ Claude SessionStart hook present — plugin sessions can also nudge `dev-loop daemon up`");
+    log("✅ Claude SessionStart hook present — plugin sessions can also nudge `dev-loop daemon up` once enabled (DEVLOOP_SESSION_HOOK=1 or team.sessionStartHook: true; opt-in)");
   } else {
     log("ℹ️  Claude SessionStart hook not found — fine for scheduler/Codex/standalone installs.");
   }

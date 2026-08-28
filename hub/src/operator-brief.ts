@@ -49,7 +49,7 @@ markers; with them set, operator writes refuse (exit 4).
 
 ## Operating (day 2+)
 
-- **Your decision queue** — \`dev-loop metrics --json\` → \`.decisionQueue\` (Human-Blocked ∪
+- **Your decision queue** — \`dev-loop status --json\` → \`.decisionQueue\` (one read model; \`dev-loop metrics --json\` still carries it) (Human-Blocked ∪
   In Review assigned to operator ∪ pending approval requests). Ruling on an item: comment +
   \`dev-loop ticket update <id> …\`. An entry with \`"kind":"approval"\` is an AGENT ASKING for an
   authorization it cannot grant itself — read its \`actionKey\` (the end state) and \`ticketId\`, then
@@ -72,7 +72,7 @@ markers; with them set, operator writes refuse (exit 4).
   different end state rather than as a bare absence. \`dev-loop approvals\` lists what is in force,
   \`dev-loop revoke <key|id>\` ends one early. Granting is yours alone — inside an agent fire
   \`approve\`/\`revoke\` refuse (exit 4), which is what makes a grant worth consulting.
-- **Health**: \`dev-loop doctor\` (W-codes), \`dev-loop metrics\` (fires/errorClass/board KPIs).
+- **Health**: \`dev-loop status\` (scheduler/breakers/in-flight/NEXT), \`dev-loop doctor\` (W-codes), \`dev-loop metrics\` (fires/errorClass/board KPIs).
 - **Moving/deploying this workspace**: \`dev-loop bundle export --help\` (encrypted move/backup) and
   \`dev-loop up --help\` (local chat console / \`--bundle\` headless load / \`--attach\` remote hub).
 

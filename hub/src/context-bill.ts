@@ -25,8 +25,9 @@ import { strategyDocRelPath as strategyDocRelPathLeaf } from "./default-branch-p
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { STRATEGY_DOC_MAX_BYTES, INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES } from "./lessons.ts";
-import { resolveWorkspace, wsHubDb } from "./workspace.ts";
+import { STRATEGY_DOC_MAX_BYTES, INDEX_MAX_BYTES, INDEX_MAX_LINES, SHARD_MAX_BYTES, SHARD_MAX_LINES, lessonsSliceForFire } from "./lessons.ts";
+import { deliveryProjects } from "./team-config.ts";
+import { resolveWorkspace, tryResolveWorkspace, wsStateRoot, wsHubDb } from "./workspace.ts";
 import { reposOfProject, type Workspace } from "./team-config.ts";
 
 export interface Budget { lines: number; bytes: number }
@@ -44,7 +45,7 @@ export const BUDGETS: Record<string, Budget> = {
   "senior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "junior-dev-agent":    { lines: 220, bytes: 16 * 1024 },
   "sweep-agent":         { lines: 220, bytes: 16 * 1024 },
-  "dev-agent":           { lines: 268, bytes: 19_968 }, // canonical Step 0–7 ship sequence senior/junior inherit by reference (§21a); raised 260/18K → 266/19.5K for LOOP-277, then 266 → 268 lines for LOOP-553's fire-start marker pair (operator-applied §17, 2026-08-11) — headroom deliberately thin so regrowth trips here
+  "dev-agent":           { lines: 200, bytes: 14 * 1024 }, // lean shell since the job-scoped rollout: the canonical Step 0–7 ship sequence moved into the shared dev playbooks (skills/playbooks/fire-start.md, ship.md, …) the dev/senior/junior job spans pull, so dev-agent no longer HOSTS the sequence senior/junior once inherited by marker (LOOP-553 retired). Budget dropped 268/19_968 → 200/14K to match its peers now that the body is a shell.
   "reflect-agent":       { lines: 200, bytes: 14 * 1024 },
   "ops-agent":           { lines: 200, bytes: 14 * 1024 },
   "architect-agent":     { lines: 200, bytes: 14 * 1024 },
@@ -54,34 +55,42 @@ export const BUDGETS: Record<string, Budget> = {
   "sync-project":        { lines: 150, bytes: 10 * 1024 },
   "sync-repo":           { lines: 150, bytes: 10 * 1024 },
   "operator-console":    { lines: 160, bytes: 11 * 1024 }, // one-click §3: the conversational cockpit (operator-present, no cheat block)
+  "playbooks":           { lines: 80, bytes: 6 * 1024 }, // job-scoped prompts: the SHARED-playbook library INDEX (skills/playbooks/SKILL.md); NOT a launchable agent — a fragment dir the boot assembler pulls per job. The per-playbook FILES are budgeted by their own job's pull, not here.
 };
 /**
- * Per-agent CONVENTIONS ceilings (LOOP-238) — the ratchet, so a landed compression win cannot
- * silently regrow.
+ * Per-agent CONVENTIONS ceilings — 64 KB for every loop agent (WS-A prompt economy, 2026-08-27).
  *
  * Distinct from BUDGETS above, which bounds an agent's own SKILL prose. This bounds the far larger
- * input: the config-pruned §0a conventions slice that agent's fire receives. Conventions is 75% of
- * context at a measured $4.79/fire (LOOP-228), so it is the number worth a failing gate — and it had
- * none, which is how 20 rollup passes failed to bound it.
+ * input: the config-pruned §0a conventions slice that agent's fire receives — the byte-constant prefix
+ * the boot corpus inlines on every fire, so the number a cache hit is priced on.
  *
- * SEEDED FROM MEASUREMENT, not from a target. These are today's actual pruned bytes on this
- * workspace, rounded up to the next KB. Headroom is deliberately ~1 KB: a ratchet with generous
- * slack does not ratchet, it just records a number nobody trips. A compression win LOWERS its row in
- * the same commit that lands it — that is what makes the win permanent rather than a moment.
- *
- * Measured 2026-08-06 via `dev-loop conventions --agent <a> --json` (LOOP-237's verb, which shares
- * the prune with the boot corpus, so this bounds what a fire actually receives).
+ * Before WS-A this table was a per-agent RATCHET seeded from measurement (+~1 KB headroom, pm at
+ * 127 KB). WS-A moved the large, rarely-needed section bodies out to `references/conventions/<slug>.md`
+ * pointer files (read at their stub's trigger moment) and set ONE target for every lane instead: a
+ * 64 KB slice is what keeps the whole constant segment (SKILL + corpus) inside a single cacheable
+ * prefix on every lane. It is a TARGET the lint enforces, not a ratchet that follows the measurement —
+ * a section that regrows past it is trimmed or externalized, never budgeted up. Measured after the
+ * move (single-repo autoMerge fixture, hub/test/context-budget.ts): pm 63.9 KB, qa 63.0, sweep 58.1,
+ * junior-dev 57.6, ops 55.0, senior-dev 54.8, architect 42.1, reflect 40.8, communication 34.4.
  */
+// TRANSITIONAL ceiling. WS-A A3 set a uniform 64 KB target; review-2's fidelity audit then RESTORED 8
+// invariants A3 had over-compressed away, and Decision-1 added the §9 bail-shape-label docs — legitimately
+// pushing pm (66.6 KB) and qa (68.8 KB) over 64 KB. Fidelity beats an arbitrary byte target, so the ceiling
+// is loosened to 70 KB rather than re-dropping restored rules. This whole per-agent conventions-UNION bound
+// is superseded by the job-scoped corpus (constitution + one playbook ≈ 18 KB): a migrated agent (pm) no
+// longer loads the union at all, and rollout step h removes it for qa/sweep/dev too — at which point this
+// ceiling and CONVENTIONS_BUDGETS go away. See docs/design/job-scoped-prompts.md.
+export const CONVENTIONS_TARGET_BYTES = 70 * 1024;
 export const CONVENTIONS_BUDGETS: Record<string, number> = {
-  "pm":            127 * 1024,  // actual 129,134 —   914 B headroom (re-measured 2026-08-10, LOOP-465)
-  "qa":            119 * 1024,  // actual 121,350 —   506 B
-  "senior-dev":    107 * 1024,  // actual 109,178 —   390 B
-  "junior-dev":    105 * 1024,  // actual 107,375 —   145 B
-  "sweep":         114 * 1024,  // actual 116,118 —   618 B
-  "reflect":        79 * 1024,  // actual  80,510 —   386 B
-  "ops":            99 * 1024,  // actual 100,720 —   656 B
-  "architect":      77 * 1024,  // actual  77,904 —   944 B
-  "communication":  63 * 1024,  // actual  63,992 —   520 B
+  "pm":            CONVENTIONS_TARGET_BYTES,
+  "qa":            CONVENTIONS_TARGET_BYTES,
+  "senior-dev":    CONVENTIONS_TARGET_BYTES,
+  "junior-dev":    CONVENTIONS_TARGET_BYTES,
+  "sweep":         CONVENTIONS_TARGET_BYTES,
+  "reflect":       CONVENTIONS_TARGET_BYTES,
+  "ops":           CONVENTIONS_TARGET_BYTES,
+  "architect":     CONVENTIONS_TARGET_BYTES,
+  "communication": CONVENTIONS_TARGET_BYTES,
 };
 
 // Cheat-sheet blocks are generator-owned (gen-cheatsheets.ts); growth past this = trim the
@@ -244,22 +253,62 @@ export function conventionsLoad(c: Conventions, anchors: readonly string[]): Mea
   return { lines: ln, bytes };
 }
 
-// ─── the inherited dev slices (LOOP-553) ────────────────────────────────────────────────────────────
-// The split tiers inherit dev-agent's fire-start (Step 0.5) and ship-sequence slices by marker pair.
-// This extractor is the ONE parser both the assembler (boot-prefix.ts) and the bill use, so what
-// ships and what is billed cannot drift. Markers missing ⇒ that slice is absent (fail-open).
-export const DEV_SLICE_MARKERS = [
-  { label: "Step 0.5", begin: "<!-- fire-start:begin -->", end: "<!-- fire-start:end -->" },
-  { label: "Steps 4–6.5 + 7 + HARD LIMITS", begin: "<!-- ship-sequence:begin -->", end: "<!-- ship-sequence:end -->" },
-] as const;
-export function devInheritedSlices(devSkillText: string): Array<{ label: string; text: string }> {
-  const out: Array<{ label: string; text: string }> = [];
-  for (const m of DEV_SLICE_MARKERS) {
-    const b = devSkillText.indexOf(m.begin);
-    const e = devSkillText.indexOf(m.end);
-    if (b !== -1 && e > b) out.push({ label: m.label, text: devSkillText.slice(b + m.begin.length, e).trim() });
-  }
+// ─── job spans (job-scoped prompts, docs/design/job-scoped-prompts.md) ────────────────────────────────
+// A SKILL/RUNBOOK wraps each of an agent's jobs in `<!-- job:<slug>:begin -->…<!-- job:<slug>:end -->`.
+// jobSlice is ONE span authority for the assembler (boot-prefix.ts), the pull verb (playbook-verb.ts) and
+// any bill, so what a pushed fire loads and what a `dev-loop playbook` pull prints cannot drift. The SKILL
+// is the source of truth for the set of valid jobs (jobsOf scans its begin markers). Missing/malformed
+// markers ⇒ null, fail-open.
+//
+// (The retired LOOP-553 DEV_SLICE_MARKERS / devInheritedSlices mechanism lived here: the split tiers used to
+// inherit dev-agent's fire-start + ship-sequence marker spans at classic-boot. That content moved into the
+// shared playbooks (skills/playbooks/fire-start.md, ship.md, …) the dev/senior/junior JOB spans pull, so the
+// tiers now job-boot and the marker-inheritance path — and its `inherited` bill column — are gone.)
+export const CONSTITUTION_FILE = join("skills", "_constitution.md"); // the resident kernel, loaded VERBATIM every job fire
+export const readConstitution = (root: string): string => readFileSync(join(root, "skills", "_constitution.md"), "utf8");
+
+const jobBegin = (job: string): string => `<!-- job:${job}:begin -->`;
+const jobEnd = (job: string): string => `<!-- job:${job}:end -->`;
+const JOB_BEGIN_RE = /<!--\s*job:([a-z0-9][a-z0-9-]*):begin\s*-->/g;
+
+export interface JobSpan {
+  job: string;
+  kind: string;      // the span's `kind:` front-matter — "mechanical" | "judgment-scaffold" ("" if omitted)
+  pulls: string[];   // the span's `pulls:` list, in order (shared playbooks + reference stubs, deduped)
+  text: string;      // the span body between the markers, trimmed (markers excluded)
+}
+
+// Every job an agent's SKILL declares, in first-seen order — the SKILL IS the source of truth (design §M1).
+export function jobsOf(skillText: string): string[] {
+  const out: string[] = [];
+  for (const m of skillText.matchAll(JOB_BEGIN_RE)) if (!out.includes(m[1])) out.push(m[1]);
   return out;
+}
+
+// The agent-specific CLI cheat-sheet block a job corpus carries VERBATIM (job-scoped prompts): the exact
+// `dev-loop` verb forms + flags + the exit-code table gen-cheatsheets.ts renders, which lives in the SKILL
+// FRAME that job-boot otherwise drops. ONE extractor — same `splitSkill` marker authority the bill measures
+// with and cli-cheatsheet.ts byte-checks against the generator — so the corpus, the bill and the drift lint
+// can never disagree on where the block starts and ends. Returns "" when the SKILL has no cheat block
+// (setup skills, or any SKILL without cli-cheatsheet markers) — the corpus then skips it gracefully.
+export function cheatSlice(skillText: string): string {
+  return splitSkill(skillText).cheat.join("\n");
+}
+
+// Extract + parse ONE job span. Returns null when the marker pair is absent or malformed (fail-open).
+export function jobSlice(skillText: string, job: string): JobSpan | null {
+  const begin = jobBegin(job), end = jobEnd(job);
+  const b = skillText.indexOf(begin);
+  const e = skillText.indexOf(end);
+  if (b === -1 || e <= b) return null;
+  const text = skillText.slice(b + begin.length, e).trim();
+  const lines = text.split("\n");
+  const kindLine = lines.find((l) => l.startsWith("kind:"));
+  const pullsLine = lines.find((l) => l.startsWith("pulls:"));
+  const kind = kindLine ? kindLine.slice("kind:".length).trim() : "";
+  const pulls: string[] = [];
+  if (pullsLine) for (const p of pullsLine.slice("pulls:".length).split(",").map((s) => s.trim()).filter(Boolean)) if (!pulls.includes(p)) pulls.push(p);
+  return { job, kind, pulls, text };
 }
 
 // ─── the bill ───────────────────────────────────────────────────────────────────────────────────────
@@ -268,14 +317,17 @@ export interface BillRow {
   agent: boolean;            // *-agent dirs fire on the loop (cheat block + lessons); setup skills don't
   sections: string[];        // the declared Sections anchors (without §)
   prose: Measure; cheat: Measure; conventions: Measure; lessons: Measure;
+  // WS-A A4: how the lessons column was priced — "actual" = the bytes the fire's corpus inlines
+  // (INDEX + shard, sliced to this agent), "cap" = the W03 ceiling (no workspace to measure against).
+  lessonsBasis: "actual" | "cap";
   // null when the agent is not in STRATEGY_DOC_READERS; StrategyDocStat (bytes may be 0) when it is.
   strategyDoc: StrategyDocStat | null;
-  // The dev-agent slices a split tier receives in its corpus (LOOP-553) — billed at worst case
-  // (both slices), matching the lessons-cap doctrine; ZERO for every other row.
-  inherited: Measure;
   total: Measure; tokens: number;
   budget: Budget; withinBudget: boolean;
 }
+// WS-A A4: an optional per-agent resolver for the ACTUAL lessons bytes a fire inlines. Absent (or
+// returning null) ⇒ the row bills the W03 caps, exactly as before.
+export type LessonsResolver = (agent: string) => Measure | null;
 export interface Bill {
   conventions: { anchors: number; total: Measure; alwaysRead: Measure };
   // The resolved strategy-doc stat passed to contextBill(); absent when no workspace was available.
@@ -288,7 +340,7 @@ const ZERO: Measure = { lines: 0, bytes: 0 };
 // shard), not the current file sizes — the bill is the guaranteed ceiling, not today's weather.
 const LESSONS_CAP: Measure = { lines: INDEX_MAX_LINES + SHARD_MAX_LINES, bytes: INDEX_MAX_BYTES + SHARD_MAX_BYTES };
 
-export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat): Bill {
+export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat, lessonsActual?: LessonsResolver): Bill {
   const convText = readFileSync(join(root, "references", "conventions.md"), "utf8");
   const conv = parseConventions(convText);
   const rows: BillRow[] = [];
@@ -300,21 +352,22 @@ export function contextBill(root = pluginRoot(), strategyDoc?: StrategyDocStat):
     const agent = dir.endsWith("-agent");
     const prose = measureOf(parts.prose), cheat = measureOf(parts.cheat);
     const conventions = conventionsLoad(conv, sec.anchors);
-    const lessons = agent ? LESSONS_CAP : ZERO; // setup skills are operator-attended, no §14 lessons read
+    // setup skills are operator-attended, no §14 lessons read. Loop agents bill the ACTUAL inlined slice when
+    // a resolver can measure it (WS-A A4), else the W03 caps (the guaranteed ceiling — the old doctrine).
+    const actual = agent && lessonsActual ? lessonsActual(dir.replace(/-agent$/, "")) : null;
+    const lessons = agent ? (actual ?? LESSONS_CAP) : ZERO;
+    const lessonsBasis: "actual" | "cap" = agent && actual ? "actual" : "cap";
     const isReader = STRATEGY_DOC_READERS.has(dir);
     const rowStrategyDoc: StrategyDocStat | null = (isReader && strategyDoc) ? strategyDoc : null;
     const docBytes = rowStrategyDoc?.bytes ?? 0;
     const docLines = rowStrategyDoc?.lines ?? 0;
-    const inherited: Measure = (dir === "senior-dev-agent" || dir === "junior-dev-agent")
-      ? measureOf(splitLines(devInheritedSlices(readFileSync(join(root, "skills", "dev-agent", "SKILL.md"), "utf8")).map((sl) => sl.text).join("\n\n")))
-      : ZERO;
     const total: Measure = {
-      lines: prose.lines + cheat.lines + conventions.lines + lessons.lines + docLines + inherited.lines,
-      bytes: prose.bytes + cheat.bytes + conventions.bytes + lessons.bytes + docBytes + inherited.bytes,
+      lines: prose.lines + cheat.lines + conventions.lines + lessons.lines + docLines,
+      bytes: prose.bytes + cheat.bytes + conventions.bytes + lessons.bytes + docBytes,
     };
     const budget = BUDGETS[dir] ?? { lines: 0, bytes: 0 }; // unknown dir → 0-budget (the lint fails it loudly)
     rows.push({
-      skill: dir, agent, sections: sec.anchors, prose, cheat, conventions, lessons, inherited,
+      skill: dir, agent, sections: sec.anchors, prose, cheat, conventions, lessons, lessonsBasis,
       strategyDoc: rowStrategyDoc,
       total, tokens: Math.ceil(total.bytes / BYTES_PER_TOKEN),
       budget,
@@ -413,15 +466,87 @@ export function tryResolveStrategyDocStat(cwd?: string, projectKey?: string, ws?
 
 // `dev-loop metrics --context` — the operator-facing render (kept here so metrics.ts stays thin).
 // Accepts an optional projectKey to resolve that project's strategy doc (LOOP-355).
+// WS-A A4: the lessons bytes a fire on THIS workspace actually inlines — INDEX + the project's shard,
+// sliced per agent. undefined when no workspace resolves (the bill then falls back to the W03 caps).
+export function tryResolveLessonsActual(cwd?: string, projectKey?: string): LessonsResolver | undefined {
+  try {
+    const ws = resolveWorkspace(cwd);
+    const key = projectKey ?? deliveryProjects(ws)[0] ?? null;
+    return (agent: string) => { const m = lessonsSliceForFire(ws, agent, key); return { lines: m.lines, bytes: m.bytes }; };
+  } catch { return undefined; }
+}
+
+// `dev-loop metrics --context --jobs` — the job-scoped-prompt measurement (docs/design/job-scoped-prompts.md).
+// For EVERY migrated loop agent's job it prints the pushed constant-segment bytes a fire loads (constitution +
+// the job span + the shared playbooks it pulls) against the whole-role classic-boot load the context bill
+// reports — the before/after the design promises. Kept here (not metrics.ts) so the one bill authority owns
+// the number.
+// The migrated loop agents, in scheduler-roster order — every one job-boots now (pm/qa via their lanes, the
+// dev tiers + single-job stewards fire as themselves with a resolved job). The SKILL is the source of truth
+// for the set of jobs (jobsOf scans its begin markers), so this bill and the scheduler cannot drift on which
+// jobs exist.
+export const JOB_BILL_AGENTS = ["pm", "qa", "dev", "senior-dev", "junior-dev", "sweep", "reflect", "ops", "architect", "communication"] as const;
+export async function printJobLaneBill(asJson: boolean, root = pluginRoot()): Promise<number> {
+  // Dynamic import: boot-prefix imports THIS module (context-bill), so a top-level import would be a
+  // cycle; a runtime import sidesteps it and keeps the plain --context path from loading crypto/self-drift.
+  const { assembleJobCorpus } = await import("./boot-prefix.ts");
+  // Enumerate each agent's jobs from its SKILL markers (jobsOf) — one source of truth, no hand-kept list.
+  const jobsByAgent: Record<string, readonly string[]> = {};
+  for (const agent of JOB_BILL_AGENTS) jobsByAgent[agent] = jobsOf(readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8"));
+  type JobRow = { agent: string; job: string; kind: string; corpusBytes: number; constantBytes: number; lessonsBytes: number; pulledPlaybooks: string[] };
+  const rows: JobRow[] = [];
+  const HEADER_BYTES = 435; // the readPrompt job-mode constant header (byte-stable per job, ±1B for the job name)
+  // A job corpus now carries the agent's CLI cheat-sheet (always) + this project's §14 lessons (when a
+  // workspace resolves). Resolve it best-effort so the reported bytes are the HONEST per-fire load; no
+  // workspace ⇒ dataDir undefined ⇒ cheat only (the plugin-static number). The cheat block is per-agent
+  // constant and the lessons per-(agent,project) constant, so the byte is still stable per fire.
+  const ws = tryResolveWorkspace();
+  const dataDir = ws ? wsStateRoot(ws) : undefined;
+  const billProject = ws ? deliveryProjects(ws)[0] : undefined;
+  for (const [agent, jobs] of Object.entries(jobsByAgent)) {
+    const skill = readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8");
+    for (const job of jobs) {
+      const span = jobSlice(skill, job);
+      const corpus = assembleJobCorpus(root, agent, job, dataDir, billProject);
+      if (!span || !corpus) continue;
+      rows.push({ agent, job, kind: span.kind, corpusBytes: corpus.bytes, constantBytes: corpus.bytes + HEADER_BYTES,
+        lessonsBytes: corpus.lessonsBytes,
+        pulledPlaybooks: span.pulls.filter((p) => p.startsWith("skills/playbooks/")) });
+    }
+  }
+  const bill = contextBill(root);
+  const wholeRole: Record<string, number> = {};
+  for (const agent of Object.keys(jobsByAgent)) wholeRole[agent] = bill.rows.find((r) => r.skill === `${agent}-agent`)?.total.bytes ?? 0;
+  if (asJson) { console.log(JSON.stringify({ jobLanes: rows, wholeRole }, null, 2)); return 0; }
+  console.log(`job-scoped per-fire load — pushed constant segment (skills/_constitution.md + the job span + its pulled shared playbooks + the agent CLI cheat-sheet + this project's §14 lessons slice) per agent job vs the whole-role classic-boot load; ~tokens at ${BYTES_PER_TOKEN} B/token`);
+  console.log(dataDir ? `lessons: resolved from ${billProject ? `project '${billProject}'` : "the workspace"} (LESSONS column = the actual injected bytes)`
+                     : `lessons: no workspace resolved — cheat-sheet included, lessons 0 (the plugin-static floor; a real fire adds this project's §14 slice)`);
+  const pad = (s: string, w: number) => s.padEnd(w);
+  console.log(pad("AGENT/JOB", 24) + pad("KIND", 20) + pad("CONSTANT", 16) + pad("~TOKENS", 10) + pad("LESSONS", 10) + "PULLED PLAYBOOKS");
+  for (const r of rows) {
+    console.log(pad(`${r.agent}/${r.job}`, 24) + pad(r.kind, 20) + pad(`${r.constantBytes}B`, 16) + pad(String(Math.ceil(r.constantBytes / BYTES_PER_TOKEN)), 10)
+      + pad(`${r.lessonsBytes}B`, 10) + r.pulledPlaybooks.map((p) => p.replace("skills/playbooks/", "")).join(", "));
+  }
+  for (const [agent, bytes] of Object.entries(wholeRole)) {
+    const mine = rows.filter((r) => r.agent === agent);
+    if (!mine.length || bytes === 0) continue;
+    const lightest = Math.min(...mine.map((r) => r.constantBytes));
+    const heaviest = Math.max(...mine.map((r) => r.constantBytes));
+    console.log(`\nwhole-role ${agent} load today: ${bytes}B (~${(bytes / 1024).toFixed(1)}KB) — job-scoped is ${(bytes / heaviest).toFixed(1)}×–${(bytes / lightest).toFixed(1)}× lighter (heaviest ${heaviest}B → lightest ${lightest}B)`);
+  }
+  return 0;
+}
+
 export function printContextBill(asJson: boolean, projectKey?: string): number {
   const strategyDoc = tryResolveStrategyDocStat(undefined, projectKey);
+  const lessonsActual = tryResolveLessonsActual(undefined, projectKey);
   let bill: Bill;
-  try { bill = contextBill(undefined, strategyDoc); }
+  try { bill = contextBill(undefined, strategyDoc, lessonsActual); }
   catch (e) { console.error(`metrics --context: ${(e as Error).message}`); return 1; }
   if (asJson) { console.log(JSON.stringify(bill, null, 2)); return 0; }
   const m = (x: Measure) => `${x.lines}L/${x.bytes}B`;
   const docLabel = strategyDoc ? strategyDoc.label : "—";
-  console.log(`per-agent per-fire context bill — SKILL prose + cheat sheet + conventions (always-read + cited §-spans) + lessons caps (§14; hub/src/lessons.ts) + strategyDoc for ${[...STRATEGY_DOC_READERS].join("/")} (§20 R2); ~tokens at ${BYTES_PER_TOKEN} B/token`);
+  console.log(`per-agent per-fire context bill — SKILL prose + cheat sheet + conventions (always-read + cited §-spans; target ≤${CONVENTIONS_TARGET_BYTES}B/agent) + lessons (${lessonsActual ? "ACTUAL inlined bytes on this workspace" : "W03 caps — no workspace"}; §14; hub/src/lessons.ts) + strategyDoc for ${[...STRATEGY_DOC_READERS].join("/")} (§20 R2); ~tokens at ${BYTES_PER_TOKEN} B/token`);
   console.log(`conventions.md: ${bill.conventions.anchors} anchors, ${m(bill.conventions.total)} total; always-read (title/ToC + Topology): ${m(bill.conventions.alwaysRead)}`);
   // LOOP-282 — show the doc AGAINST its budget, in the same OK / over-budget shape the SKILL rows
   // use. A byte count with no ceiling beside it is what let 114 KB read as unremarkable for 20 rollup
@@ -435,7 +560,7 @@ export function printContextBill(asJson: boolean, projectKey?: string): number {
   for (const r of bill.rows) {
     const sdCol = r.strategyDoc ? `${r.strategyDoc.bytes}B` : "—";
     console.log(pad(r.skill, 22) + pad(m(r.prose), 15) + pad(m(r.cheat), 13) + pad(`${r.sections.length}§ → ${m(r.conventions)}`, 22)
-      + pad(`${r.lessons.bytes}B`, 13) + pad(sdCol, 16) + pad(`${r.total.bytes}B`, 15) + pad(String(r.tokens), 9)
+      + pad(`${r.lessons.bytes}B${r.lessonsBasis === "cap" && r.agent ? " (cap)" : ""}`, 13) + pad(sdCol, 16) + pad(`${r.total.bytes}B`, 15) + pad(String(r.tokens), 9)
       + `${r.withinBudget ? "OK" : "OVER"} (≤${r.budget.lines}L/${r.budget.bytes}B)`);
   }
   if (bill.conventions.total.bytes > CONVENTIONS_WARN_BYTES)

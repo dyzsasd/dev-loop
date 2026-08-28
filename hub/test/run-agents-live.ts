@@ -480,6 +480,66 @@ sleep 600
     `exit 0`,
   ].join("\n"));
   ok(structErr.data.suspectError === true, "LOOP-85 AC: exit-0 opencode fire streaming a type:'error' event → suspectError (adapter isError, on top of the tail-regex)");
+
+  // ── 8. WS-A C4 review 1: the codex lane on a REAL fire (a stub `codex` on DEVLOOP_CODEX_BIN). Three
+  //    contracts: (a) EVERY codex fire carries --skip-git-repo-check (it only lifts codex's non-git-cwd
+  //    startup refusal; a steward's cwd is the workspace root) and, on the SAFE default, NO
+  //    --dangerously-bypass-approvals-and-sandbox; (b) a codex fire that prints NOTHING and exits 0 is
+  //    ledgered EXIT_NO_WORK / "no-output" — the LOOP-543 arm stays honest on this lane; (c) the honest
+  //    LIMIT of that arm: a real SAFE fire whose write-shaped tool calls were refused still streams its JSONL
+  //    and exits 0, so it records as a SUCCESS. (c) is the reason doctor W45 and the scheduler-start NOTICE
+  //    exist; pinning it here keeps the docs from claiming the breaker catches a dead SAFE lane. ──
+  const cxStub = join(tmp, "stub-codex");
+  const cxDb = join(tmp, "hub-cx.db");
+  const cxArgv = join(tmp, "codex-argv.txt");
+  writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { cx: { repoPath: repo, backend: "service" } } }));
+  execFileSync("node", ["src/seed.ts", "cx", "CX Project", "CXX", cxDb], { cwd: hubRoot, encoding: "utf8" });
+  const cxCommon = ["--root", repoRoot, "--data", data, "--hub-db", cxDb, "--project", "cx", "--cwd", repo, "--cli", "codex", "--agents", "sweep", "--once"];
+  const cxFireData = (): Record<string, unknown> => {
+    const rows = execFileSync("node", ["--input-type=module", "-e",
+      `import {openDb} from './src/db.ts'; import {findProject} from './src/seed.ts'; const db=openDb('${cxDb}'); const pid=findProject(db,'cx'); const r=db.prepare("SELECT data FROM events WHERE project_id=? AND kind='fire.completed' ORDER BY rowid DESC LIMIT 1").all(pid); process.stdout.write(JSON.stringify(r));`],
+      { cwd: hubRoot, encoding: "utf8", env: { ...scrubFireEnv() } });
+    const arr = JSON.parse(rows) as { data: string }[];
+    return arr.length ? (JSON.parse(arr[0].data) as Record<string, unknown>) : {};
+  };
+  const cxFire = (body: string, extraArgs: string[] = []) => {
+    // The stub records its argv one-per-line (the flag contract is read from what codex would have SEEN),
+    // drains stdin (the prompt rides `codex exec -`), then runs the body.
+    writeFileSync(cxStub, `#!/bin/sh\nprintf '%s\\n' "$@" > "$CX_ARGV"\ncat >/dev/null\n${body}\n`);
+    chmodSync(cxStub, 0o755);
+    rmSync(cxArgv, { force: true });
+    const run = runLive([...cxCommon, ...extraArgs], { DEVLOOP_CODEX_BIN: cxStub, CX_ARGV: cxArgv });
+    const argv = existsSync(cxArgv) ? readFileSync(cxArgv, "utf8").split("\n") : [];
+    return { run, data: cxFireData(), argv };
+  };
+  // 8a. the SAFE default: a silent exit-0 fire. Flags + the LOOP-543 classification.
+  const cxSilent = cxFire("exit 0");
+  ok(cxSilent.argv[0] === "exec" && cxSilent.argv.includes("--skip-git-repo-check"),
+    "C4 review 1: a SAFE codex fire still carries --skip-git-repo-check (the flag is independent of the sandbox choice)");
+  ok(!cxSilent.argv.includes("--dangerously-bypass-approvals-and-sandbox"),
+    "C4 review 1: a SAFE codex fire carries NO --dangerously-bypass-approvals-and-sandbox");
+  ok(/dev-loop run: NOTICE codex sandbox=safe \(default\) for sweep/.test(cxSilent.run.out) && /doctor W45/.test(cxSilent.run.out),
+    "C4 review 1: a REAL run on the default prints the one-line scheduler-start NOTICE naming doctor W45");
+  ok(cxSilent.data.codingAgent === "codex" && cxSilent.data.exitCode === EXIT_NO_WORK && cxSilent.data.errorClass === "no-output",
+    `LOOP-543 on the codex lane: a stub codex that prints nothing and exits 0 is ledgered EXIT_NO_WORK / "no-output" (got exit ${cxSilent.data.exitCode}, class ${cxSilent.data.errorClass})`);
+  // 8b. --codex-unsafe: the bypass flag rides, adjacent to --skip-git-repo-check (the pre-WS-A shape).
+  const cxUnsafe = cxFire("exit 0", ["--codex-unsafe"]);
+  const bypassAt = cxUnsafe.argv.indexOf("--dangerously-bypass-approvals-and-sandbox");
+  ok(bypassAt >= 0 && cxUnsafe.argv[bypassAt + 1] === "--skip-git-repo-check",
+    "C4 review 1: --codex-unsafe restores --dangerously-bypass-approvals-and-sandbox immediately before --skip-git-repo-check");
+  ok(/dev-loop run: codex sandbox=bypass \(--codex-unsafe\) for sweep/.test(cxUnsafe.run.out) && !/NOTICE codex sandbox/.test(cxUnsafe.run.out),
+    "C4 review 1: an explicit posture prints the plain start line, not the NOTICE");
+  // 8c. THE LIMIT, pinned: a SAFE fire whose tool calls were refused still streams codex's JSONL and exits 0.
+  //     The ledger records a success — exit 0, no errorClass, no suspectError. Nothing in the fire-record
+  //     path can tell this apart from a fire that landed work, which is exactly why W45 warns from CONFIG.
+  const cxRefused = cxFire([
+    `echo '{"type":"thread.started","thread_id":"t1"}'`,
+    `echo '{"type":"item.completed","item":{"type":"agent_message","text":"I could not commit: the sandbox denied the write and no approval path exists."}}'`,
+    `echo '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}'`,
+    `exit 0`,
+  ].join("\n"));
+  ok(cxRefused.data.exitCode === 0 && cxRefused.data.errorClass === undefined && !cxRefused.data.suspectError,
+    `C4 review 1 (the honest limit): a SAFE codex fire that streamed JSONL and exited 0 after its writes were refused records as a SUCCESS (exit ${cxRefused.data.exitCode}, class ${cxRefused.data.errorClass}) — the breaker cannot see a dead SAFE lane; doctor W45 can`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

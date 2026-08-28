@@ -15,7 +15,7 @@ import { createServer as netCreateServer } from "node:net";
 import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync, renameSync, readdirSync, existsSync, realpathSync } from "node:fs";
-import { join, dirname, isAbsolute, resolve as resolvePath } from "node:path";
+import { join, dirname, basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { openDb } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
@@ -456,7 +456,9 @@ async function daemonStatus(): Promise<number> {
   resolveDaemonContext();
   // AC4 (LOOP-469): which workspace the login item will start, printed before anything else and in
   // EVERY branch below — a binding you must read a plist to discover is not a readable decision.
+  // WS-B: Linux reads the systemd --user units the same way (one line per bound workspace).
   if (platform() === "darwin") console.log(`[daemon] ${describeAutostartBinding(readAutostartBinding())}`);
+  else if (platform() === "linux") for (const b of listSystemdBindings()) console.log(`[daemon] ${describeAutostartBinding(b)}`);
   const key = lcResolveKey();
   if (!key) { console.log("[daemon] status: no project resolved (DEVLOOP_PROJECT unset, cwd outside every repo). Set DEVLOOP_PROJECT=<key>, or run from inside a configured repo."); return 0; }
   const info = lcReadRun(key);
@@ -536,9 +538,91 @@ ${envXml}
 
 export interface AutostartBinding {
   installed: boolean;
+  /** The artifact path: the LaunchAgent plist on macOS, the systemd --user unit on Linux. */
   plist: string;
   /** The bound workspace root; null when a plist exists but names none (pre-LOOP-469 format). */
   workspace: string | null;
+  /** Which init system owns the artifact (absent = launchd, the pre-WS-B shape). */
+  kind?: "launchd" | "systemd";
+}
+
+// ─── Linux: systemd --user binding (WS-B) ─────────────────────────────────────────────────────
+// The same written-decision contract as the plist: ONE unit per workspace, named by the team key
+// (`dev-loop-daemon@<key>.service` — a concrete instance file, so `%i` is never consulted), carrying
+// WorkingDirectory + DEVLOOP_WORKSPACE and nothing that would re-decide the workspace behind them.
+// `daemon up-all` starts the service daemons detached and returns, so the unit is oneshot +
+// RemainAfterExit: the daemons stay in the unit's cgroup, `systemctl --user stop` ends them.
+const SYSTEMD_UNIT_PREFIX = "dev-loop-daemon@";
+export function systemdUserUnitDir(): string { return join(process.env.HOME || "", ".config", "systemd", "user"); }
+export function systemdUnitPath(key: string): string { return join(systemdUserUnitDir(), `${SYSTEMD_UNIT_PREFIX}${key}.service`); }
+// systemd's own quoting: double quotes, backslash-escaped backslash and quote — covers a path with spaces.
+function systemdQuote(s: string): string { return `"${s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`; }
+function systemdUnquote(s: string): string {
+  const t = s.trim();
+  return t.startsWith("\"") && t.endsWith("\"") && t.length >= 2 ? t.slice(1, -1).replaceAll("\\\"", "\"").replaceAll("\\\\", "\\") : t;
+}
+// Pure renderer — no fs, no systemctl — so the unit's CONTENT is directly assertable.
+export function autostartSystemdUnit(o: {
+  node: string; entry: string; workspace: string; logDir: string; key: string; carriedEnv?: Record<string, string>;
+}): string {
+  const env: Record<string, string> = { DEVLOOP_WORKSPACE: o.workspace, ...(o.carriedEnv ?? {}) };
+  const envLines = Object.entries(env).map(([k, v]) => `Environment=${systemdQuote(`${k}=${v}`)}`).join("\n");
+  return `# dev-loop hub daemon autostart — written by \`dev-loop daemon install-autostart\` (do not hand-edit; re-run to rebind).
+# Bound to ONE workspace: ${o.workspace} (team key ${o.key}). Remove with \`dev-loop daemon uninstall-autostart\`.
+[Unit]
+Description=dev-loop hub daemon for workspace ${o.key} (${o.workspace})
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${o.workspace}
+${envLines}
+ExecStart=${systemdQuote(o.node)} ${systemdQuote(o.entry)} up-all
+StandardOutput=append:${join(o.logDir, "daemon-autostart.out.log")}
+StandardError=append:${join(o.logDir, "daemon-autostart.err.log")}
+
+[Install]
+WantedBy=default.target
+`;
+}
+export function readSystemdBinding(unitPath: string): AutostartBinding {
+  if (!existsSync(unitPath)) return { installed: false, plist: unitPath, workspace: null, kind: "systemd" };
+  let text: string;
+  try { text = readFileSync(unitPath, "utf8"); } catch { return { installed: true, plist: unitPath, workspace: null, kind: "systemd" }; }
+  let fromEnv: string | null = null, fromWd: string | null = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const env = /^Environment=(.*)$/.exec(line);
+    if (env) { const kv = systemdUnquote(env[1]); if (kv.startsWith("DEVLOOP_WORKSPACE=")) fromEnv = kv.slice("DEVLOOP_WORKSPACE=".length); }
+    const wd = /^WorkingDirectory=(.*)$/.exec(line);
+    if (wd) fromWd = systemdUnquote(wd[1]);
+  }
+  const ws = fromEnv ?? fromWd;
+  return { installed: true, plist: unitPath, workspace: ws && ws.length ? ws : null, kind: "systemd" };
+}
+// Every dev-loop-daemon@*.service in the user unit dir — Linux may bind several workspaces (one unit each).
+export function listSystemdBindings(dir: string = systemdUserUnitDir()): AutostartBinding[] {
+  let files: string[] = [];
+  try { files = readdirSync(dir).filter((f) => f.startsWith(SYSTEMD_UNIT_PREFIX) && f.endsWith(".service")).sort(); } catch { /* no unit dir */ }
+  return files.map((f) => readSystemdBinding(join(dir, f)));
+}
+// The team key a unit is named by — read leniently (workspace.ts validation is not this verb's job);
+// a workspace whose dev-loop.json cannot be parsed falls back to its directory name.
+function workspaceTeamKey(root: string): string {
+  try {
+    const j = JSON.parse(readFileSync(join(root, "dev-loop.json"), "utf8")) as { team?: { key?: string } };
+    const k = j.team?.key?.trim();
+    if (k) return k;
+  } catch { /* fall through */ }
+  return basename(root);
+}
+function systemctlUser(args: string[], stdio: "inherit" | "ignore" = "inherit"): boolean {
+  try { execFileSync("systemctl", ["--user", ...args], { stdio }); return true; }
+  catch (e) {
+    if ((e as { code?: string }).code === "ENOENT") console.error("[daemon] systemctl not found — no systemd --user here. Use dev-loop-operator/templates/ with your process manager, or `nohup dev-loop daemon up-all`.");
+    return false;
+  }
 }
 
 // AC4: the binding is readable without parsing the plist by hand. One reader, two consumers
@@ -557,7 +641,7 @@ export function describeAutostartBinding(b: AutostartBinding): string {
   if (!b.installed)
     return "daemon autostart — no login item installed (the default; run `dev-loop daemon install-autostart` inside a workspace to opt in)";
   if (!b.workspace)
-    return `daemon autostart — installed at ${b.plist} but bound to NO workspace (pre-LOOP-469 plist: it starts whatever the install shell exported); re-run \`dev-loop daemon install-autostart\` to bind one`;
+    return `daemon autostart — installed at ${b.plist} but bound to NO workspace (pre-LOOP-469 ${b.kind === "systemd" ? "unit" : "plist"}: it starts whatever the install shell exported); re-run \`dev-loop daemon install-autostart\` to bind one`;
   return `daemon autostart — installed, bound to workspace ${b.workspace} → ${b.plist}`;
 }
 
@@ -606,32 +690,72 @@ function resolveAutostartWorkspace(argv: string[]): string | null {
 // it into launchd) needs macOS. Gating the whole verb on darwin, as this did, made the binding a
 // login item WOULD carry unobservable anywhere but a Mac — including on the Linux CI that gates
 // every merge, where it left the ambient-env regression this ticket exists to prevent unasserted.
+// `--format plist|systemd` forces which artifact is rendered/installed; the default follows the OS
+// (darwin → launchd plist, linux → systemd --user unit, anything else → plist for `--dry-run` only).
+function autostartFormat(argv: string[]): "plist" | "systemd" | null {
+  let v: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--format") v = argv[i + 1];
+    else if (argv[i].startsWith("--format=")) v = argv[i].slice("--format=".length);
+  }
+  if (v === undefined) return platform() === "linux" ? "systemd" : "plist";
+  if (v === "plist" || v === "launchd") return "plist";
+  if (v === "systemd") return "systemd";
+  console.error(`[daemon] install-autostart: --format must be plist|systemd (got '${v ?? ""}').`);
+  return null;
+}
+
 function installAutostart(argv: string[] = []): number {
   const root = resolveAutostartWorkspace(argv);
   if (!root) return 1; // AC1 — refused; nothing written
-  const plist = launchAgentPath();
+  const format = autostartFormat(argv);
+  if (!format) return 1;
   const logDir = join(root, ".dev-loop"); // logs follow the BINDING, not the installing shell's run dir
   const node = lcNode();
   const self = lcDaemonEntry();
   const carriedEnv: Record<string, string> = {};
   for (const k of AUTOSTART_CARRIED_ENV) if (process.env[k]) carriedEnv[k] = process.env[k]!;
-  const xml = autostartPlistXml({ node, entry: self, workspace: root, logDir, carriedEnv });
+  const key = workspaceTeamKey(root);
+  const artifact = format === "systemd" ? systemdUnitPath(key) : launchAgentPath();
+  const body = format === "systemd"
+    ? autostartSystemdUnit({ node, entry: self, workspace: root, logDir, key, carriedEnv })
+    : autostartPlistXml({ node, entry: self, workspace: root, logDir, carriedEnv });
   // `--dry-run`: show the operator the exact binding before it becomes a login item. Writes nothing
-  // and runs no launchctl, so it is also the only safe way to assert plist CONTENT in a test —
-  // the real path installs a live LaunchAgent on the machine running it.
+  // and runs no launchctl/systemctl, so it is also the only safe way to assert artifact CONTENT in a
+  // test — the real path installs a live login item on the machine running it.
   if (argv.includes("--dry-run")) {
-    console.log(`[daemon] install-autostart --dry-run: would bind workspace ${root} and write ${plist}:`);
-    console.log(xml);
+    console.log(`[daemon] install-autostart --dry-run: would bind workspace ${root} and write ${artifact}:`);
+    console.log(body);
+    return 0;
+  }
+  if (format === "systemd") {
+    if (platform() !== "linux") {
+      console.error("[daemon] install-autostart --format systemd installs only on Linux (`--dry-run` renders it anywhere).");
+      return 1;
+    }
+    mkdirSync(dirname(artifact), { recursive: true });
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(artifact, body);
+    const unit = basename(artifact);
+    if (!systemctlUser(["daemon-reload"]) || !systemctlUser(["enable", "--now", unit])) {
+      console.error(`[daemon] install-autostart: unit written to ${artifact} but systemctl --user failed — fix the above, then \`systemctl --user daemon-reload && systemctl --user enable --now ${unit}\`.`);
+      return 1;
+    }
+    console.log(`[daemon] autostart installed → ${artifact}`);
+    console.log(`[daemon] bound workspace: ${root} (WorkingDirectory + DEVLOOP_WORKSPACE).`);
+    console.log(`[daemon] systemd --user unit ${unit} runs \`${node} ${self} up-all\` at login for THAT workspace's backend:"service" projects only.`);
+    console.log(`[daemon] to keep it running after logout / start it at boot: loginctl enable-linger ${process.env.USER ?? "$USER"}`);
     return 0;
   }
   if (platform() !== "darwin") {
-    console.error("[daemon] install-autostart currently supports macOS LaunchAgent only.");
-    console.error("[daemon] `--dry-run` renders the binding on any OS; run `dev-loop daemon up-all` from systemd/cron to autostart here.");
+    console.error("[daemon] install-autostart: the LaunchAgent form installs on macOS only; on Linux the default is a systemd --user unit.");
+    console.error("[daemon] `--dry-run` renders the binding on any OS; elsewhere run `dev-loop daemon up-all` from your process manager (templates: dev-loop-operator/templates/).");
     return 1;
   }
+  const plist = artifact;
   mkdirSync(dirname(plist), { recursive: true });
   mkdirSync(logDir, { recursive: true });
-  writeFileSync(plist, xml);
+  writeFileSync(plist, body);
   try { execFileSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plist], { stdio: "ignore" }); } catch { /* not loaded */ }
   execFileSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plist], { stdio: "inherit" });
   execFileSync("launchctl", ["enable", `gui/${process.getuid!()}/${AUTOSTART_LABEL}`], { stdio: "inherit" });
@@ -641,9 +765,32 @@ function installAutostart(argv: string[] = []): number {
   return 0;
 }
 
-function uninstallAutostart(): number {
+// Symmetric with install: macOS removes the one LaunchAgent; Linux removes the unit of the resolved
+// workspace (`--workspace <root>` or the cwd ascent) — or every dev-loop-daemon@*.service with `--all`.
+function uninstallAutostart(argv: string[] = []): number {
+  if (platform() === "linux") {
+    let units: string[];
+    if (argv.includes("--all")) units = listSystemdBindings().map((b) => b.plist);
+    else {
+      const root = resolveAutostartWorkspace(argv);
+      if (!root) {
+        const have = listSystemdBindings();
+        if (have.length) console.error(`[daemon] installed units: ${have.map((b) => basename(b.plist)).join(", ")} — pass --workspace <root> or --all.`);
+        return 1;
+      }
+      units = [systemdUnitPath(workspaceTeamKey(root))];
+    }
+    if (!units.length) { console.log("[daemon] uninstall-autostart: no dev-loop systemd --user unit installed — nothing to remove."); return 0; }
+    for (const u of units) {
+      systemctlUser(["disable", "--now", basename(u)], "ignore");
+      try { unlinkSync(u); } catch { /* already gone */ }
+      console.log(`[daemon] autostart removed → ${u}`);
+    }
+    systemctlUser(["daemon-reload"], "ignore");
+    return 0;
+  }
   if (platform() !== "darwin") {
-    console.error("[daemon] uninstall-autostart currently supports macOS LaunchAgent only.");
+    console.error("[daemon] uninstall-autostart: no login item is installed by dev-loop on this OS (macOS LaunchAgent / Linux systemd --user only).");
     return 1;
   }
   const plist = launchAgentPath();
@@ -758,7 +905,7 @@ export async function daemonLifecycleCode(sub: LifecycleSub): Promise<number> {
     : sub === "status" ? await daemonStatus()
     : sub === "reap" ? await daemonReap({ dryRun: process.argv.includes("--dry-run") })
     : sub === "install-autostart" ? installAutostart(process.argv.slice(2))
-    : uninstallAutostart();
+    : uninstallAutostart(process.argv.slice(2));
 }
 export async function daemonLifecycle(sub: LifecycleSub): Promise<void> {
   process.exit(await daemonLifecycleCode(sub));

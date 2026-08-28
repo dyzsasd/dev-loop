@@ -29,6 +29,7 @@ hub/skills/
 hub/references/
 hub/hooks/
 hub/config/
+hub/dev-loop-operator/
 # LOOP-187: export-desktop-skill output folders (devloop-<agent>-<project>/) when accidentally pointed
 # inside the repo via explicit --out; belt-and-suspenders so a generated skill is never committable.
 devloop-*-*/
@@ -51,3 +52,4 @@ undefined
 # python bytecode from the security/ tooling; never committed, and its presence makes `git status`
 # permanently non-empty, which trains everyone to ignore a dirty tree.
 __pycache__/
+.claude/worktrees/

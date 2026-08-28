@@ -28,7 +28,8 @@ the home (live WAL-checkpoint snapshot; repos need no backup — their state is 
 |---|---|---|
 | Docker / a VPS | `Dockerfile`, `docker-compose.yml` | single service + workspace volume; secrets via docker secrets (decrypt key + UI token only — provider keys travel INSIDE the bundle) |
 | Kubernetes | `helm/dev-loop/` | **single-replica StatefulSet by construction** (single-writer SQLite + run lock): replicas hard-pinned 1, `OnDelete` rollout, required one-per-node anti-affinity; PVC = the home |
-| Bare Linux | `systemd/dev-loop.service` | the Linux autostart the macOS-only LaunchAgent never covered |
+| Bare Linux (system service) | `systemd/dev-loop.service` | SYSTEM-level unit for a bundle-mode remote home (`up --bundle`) |
+| Bare Linux / macOS (per-user) | `../dev-loop-operator/templates/{systemd,launchd}/` | per-USER daemon + scheduler units for a workspace you operate directly; `dev-loop daemon install-autostart` writes the daemon one for you (systemd --user on Linux, LaunchAgent on macOS) — see `dev-loop-operator/SKILL.md` §3 |
 
 Non-negotiables the artifacts encode (do not "fix" them):
 

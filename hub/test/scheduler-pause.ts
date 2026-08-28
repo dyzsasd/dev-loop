@@ -158,3 +158,76 @@ test("scheduler-pause: AC6 — table retro-adds to existing DBs without user_ver
 
   db.close();
 });
+
+// ── WS-C C3 — `dev-loop pause --drain [--timeout <s>]` ──────────────────────────────────────────
+// The drain blocks on the SAME in-flight reader `dev-loop status` renders as DRAINING: the runner log
+// the scheduler writes (a spawn header with no exit marker), bounded by a LIVE run lock. Simulated
+// here with this test process holding the lock and a hand-written pm.log; the exit marker appended
+// later is exactly the line run-agents.ts's finalize() writes.
+test("scheduler-pause: C3 — --drain blocks on the in-flight fire, times out with the pause still set, drains once the fire exits", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { appendFileSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { dirname, join: j } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const { scrubFireEnv } = await import("./env-scrub.ts");
+  const { inFlightFires, readRunLock } = await import("../src/status.ts");
+  const { resolveWorkspace, wsHubDb, wsLockPath, wsStateRoot } = await import("../src/workspace.ts");
+  const hubRoot = j(dirname(fileURLToPath(import.meta.url)), "..");
+  const CLI = j(hubRoot, "src", "cli.ts");
+  const tmp = mkdtempSync(join(tmpdir(), "pause-drain-"));
+  const HOME = j(tmp, "home");
+  const cli = (args: string[], cwd: string, extra: Record<string, string> = {}) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd, env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME, DEVLOOP_DRAIN_POLL_MS: "100", ...extra } as NodeJS.ProcessEnv, encoding: "utf8" });
+    return { code: r.status ?? -1, out: r.stdout ?? "", err: r.stderr ?? "" };
+  };
+  try {
+    const wsDir = j(tmp, "ws");
+    const init = cli(["team", "init", "--dir", wsDir, "--key", "drain-team", "--backend", "service", "--yes"], tmp);
+    assert.equal(init.code, 0, `team init: ${init.err}`);
+    const ws = resolveWorkspace(wsDir);
+    mkdirSync(dirname(wsLockPath(ws, "run")), { recursive: true });
+    writeFileSync(wsLockPath(ws, "run"), JSON.stringify({ pid: process.pid, team: "drain-team", startedAt: new Date(Date.now() - 60_000).toISOString() }));
+    assert.equal(readRunLock(ws).alive, true, "this process holds a live run lock");
+    const logDir = j(wsStateRoot(ws), "web", "runner-logs");
+    mkdirSync(logDir, { recursive: true });
+    const log = j(logDir, "pm.log");
+    writeFileSync(log, `\n\n===== ${new Date().toISOString()} claude -p cwd=${wsDir} =====\nworking…\n`);
+    assert.equal(inFlightFires(ws).length, 1, "the open header is one fire in flight");
+
+    // 1. drain with a fire in flight → progress line, timeout, exit 1, pause STAYS set
+    const t0 = Date.now();
+    const timedOut = cli(["pause", "--drain", "--timeout", "1"], wsDir);
+    assert.equal(timedOut.code, 1, `timeout exit 1 (got ${timedOut.code}) ${timedOut.err}`);
+    assert(Date.now() - t0 >= 900, "the drain actually waited for the timeout");
+    assert(/draining — 1 in flight: pm@web/.test(timedOut.out), `progress line names the fire: ${timedOut.out}`);
+    assert(/drain timed out after 1s/.test(timedOut.err) && /pause STAYS set/.test(timedOut.err), `timeout message: ${timedOut.err}`);
+    { const db = openDb(wsHubDb(ws)); const p = readPause(db); db.close(); assert(p && p.reason === "drain", "pause row written with the default reason 'drain'"); }
+    const st = cli(["status", "--json"], wsDir);
+    assert.equal(st.code, 0, st.err);
+    const sched = (JSON.parse(st.out) as { scheduler: { state: string; inFlight: unknown[] } }).scheduler;
+    assert.equal(sched.state, "draining", "`dev-loop status` shows DRAINING while paused with a fire in flight");
+    assert.equal(sched.inFlight.length, 1);
+
+    // 2. the fire exits (the scheduler's finalize footer) → the same drain returns 0
+    appendFileSync(log, "\n===== exit code=0 signal=null =====\n");
+    assert.equal(inFlightFires(ws).length, 0, "the exit marker ends the in-flight read");
+    const drained = cli(["pause", "--drain", "--reason", "upgrade", "--timeout", "5"], wsDir);
+    assert.equal(drained.code, 0, `drained exit 0 (got ${drained.code}) ${drained.err}`);
+    assert(/drained — no fire in flight/.test(drained.out), drained.out);
+    { const db = openDb(wsHubDb(ws)); const p = readPause(db); db.close(); assert(p && p.reason === "upgrade", "--reason still wins over the drain default; pausedAt preserved across the two pauses"); }
+    const st2 = (JSON.parse(cli(["status", "--json"], wsDir).out) as { scheduler: { state: string } }).scheduler;
+    assert.equal(st2.state, "paused", "status: paused, nothing in flight");
+
+    // 3. a bare pause is unchanged (reason still required); resume clears; drain with no scheduler is a no-op success
+    assert.equal(cli(["pause"], wsDir).code, 2, "a bare pause without --reason stays a usage error");
+    assert.equal(cli(["pause", "--drain", "--timeout", "x"], wsDir).code, 2, "a garbled --timeout is a usage error");
+    assert(/pause cleared/.test(cli(["resume"], wsDir).out));
+    writeFileSync(wsLockPath(ws, "run"), JSON.stringify({ pid: 2147483000, startedAt: new Date().toISOString() }));
+    writeFileSync(log, `\n\n===== ${new Date().toISOString()} claude -p cwd=${wsDir} =====\n`); // an open header but a dead scheduler
+    const dead = cli(["pause", "--drain", "--timeout", "1"], wsDir);
+    assert.equal(dead.code, 0, `no live scheduler ⇒ nothing in flight ⇒ drained (${dead.code}) ${dead.err}`);
+    assert(/no scheduler running/.test(dead.out), dead.out);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

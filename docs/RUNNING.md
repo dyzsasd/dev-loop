@@ -8,10 +8,23 @@ point: one directory, one team, one backend, and one `dev-loop.json`.
 A workspace is one directory, one team, one backend, and one `dev-loop.json`. Repos are real
 git clones inside the workspace; projects are virtual delivery units that reference those repos.
 
-The fastest path is the guided wizard:
+**Installing the engine.** The primary, harness-neutral install path is the operator skill shipped
+in the package (and at the repo root) as **`dev-loop-operator/`** — pure markdown + pure shell, so
+Claude Code, Codex, opencode or a plain terminal can drive it:
 
 ```bash
-npm i -g @dyzsasd/dev-loop        # Node >= 23.6
+bash dev-loop-operator/scripts/ensure-install.sh   # node ≥ 23.6 → coding CLI → npm i -g … --ignore-scripts
+                                                   # (or DEVLOOP_INSTALL_SOURCE=<tarball|checkout>) → doctor → ready
+```
+
+`dev-loop-operator/SKILL.md` is the operator handbook: install, init, daemon/scheduler lifecycle
+(systemd --user / launchd templates), the daily read, the pause→drain→edit→resume config discipline,
+upgrading, and a fault handbook. The bare equivalent is `npm i -g @dyzsasd/dev-loop --ignore-scripts`
+(Node ≥ 23.6). The Claude plugin (`dev-loop install-claude-plugin`, §2) is optional.
+
+The fastest path to a team is then the guided wizard:
+
+```bash
 dev-loop init                     # interactive on a TTY; --yes accepts every default (service backend)
 ```
 
@@ -70,14 +83,16 @@ the **LLM-assisted skills** below, which can inspect code, create backend object
 you about build/deploy details. The plugin/MCP setup is only *required* for the `linear` backend.
 
 For the LLM-assisted path, first make the dev-loop skills available in the coding CLI you will
-use for onboarding. In Claude Code, install the npm-backed plugin marketplace once:
+use for onboarding. In Claude Code, the **optional** npm-backed plugin marketplace does that:
 
 ```bash
-dev-loop install-claude-plugin
+dev-loop install-claude-plugin     # optional convenience — the /dev-loop:* slash commands only
 ```
 
 The command prints two interactive `/plugin ...` commands. Run those inside Claude Code, then
-restart or refresh the session so `/dev-loop:*` commands are visible. Codex can run scheduled
+restart or refresh the session so `/dev-loop:*` commands are visible. The plugin is not needed to
+run the loop (agent fires inline their skills from the npm package), and its SessionStart hook is
+opt-in (`DEVLOOP_SESSION_HOOK=1` or `team.sessionStartHook: true`; see `DAEMON.md`). Codex can run scheduled
 agent fires through `dev-loop run --cli codex`; for operator-present onboarding, use an environment
 where the same dev-loop skills are available, or call the validated `dev-loop team add-project` /
 `dev-loop team add-repo` mutators directly after doing the backend sync yourself.
@@ -230,7 +245,7 @@ Long-running options:
 | `--fire-timeout <dur>` | Kill a stuck fire; default is `1h`, and `0` disables the timeout. |
 | `--stagger <dur>` | Delay initial slots so a cold start does not launch every agent at once. |
 | `--max-fires <n>` | Stop after a fixed number of fires, useful for trial runs and budget caps. |
-| `--codex-safe` | For attended Codex runs, omit unsafe bypass flags so tool calls can ask for approval. |
+| `--codex-unsafe` | Add Codex's `--dangerously-bypass-approvals-and-sandbox` for this run. The default is SAFE — `codex exec` at `approval: never` + `sandbox: read-only`, so an unattended fire's writes are refused and it still exits 0 as a "success" — make the bypass standing with `dev-loop team set team.codex.sandbox bypass` (doctor `W45` warns while it is unset; the run prints one `NOTICE` line at boot). `--skip-git-repo-check` always rides. `--codex-safe` is a no-op kept for compatibility. |
 
 ## 5. Agent View
 
@@ -423,7 +438,10 @@ Reports may also go to Linear docs when `reports.sink:"linear"` is configured.
 
 ## 10. Stopping Safely
 
-- Stop the scheduler with `Ctrl-C`.
+- Stop the scheduler with `Ctrl-C` (or `dev-loop stop` for a `--background` one).
+- Before a config change or an upgrade: `dev-loop pause --drain` → edit / install → `dev-loop doctor`
+  → `dev-loop resume`. Never `npm i -g` over a running scheduler — `DAEMON.md` → Upgrading and
+  `dev-loop-operator/SKILL.md` §5–§6 carry the full sequence.
 - For service teams, run `dev-loop hub stop` before copying the workspace or doing maintenance.
 - `dev-loop doctor` remains read-only. Use `dev-loop team repair` for post-move repair work such as
   worktree repair, index rebuilds, and WAL checkpointing.
@@ -432,7 +450,8 @@ Reports may also go to Linear docs when `reports.sink:"linear"` is configured.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `/dev-loop:add-project` is not available in Claude Code | The plugin marketplace is not installed or the session has not refreshed. | Run `dev-loop install-claude-plugin`, execute the printed `/plugin` commands in Claude Code, then restart/refresh Claude Code. |
+| `/dev-loop:add-project` is not available in Claude Code | The (optional) plugin marketplace is not installed or the session has not refreshed. | Run `dev-loop install-claude-plugin`, execute the printed `/plugin` commands in Claude Code, then restart/refresh Claude Code — or skip the plugin and use `dev-loop team add-project` directly. |
+| The hub daemon does not start when a Claude session opens | The SessionStart hook is opt-in since WS-B. | Set `DEVLOOP_SESSION_HOOK=1` or `team.sessionStartHook: true`, or rely on `dev-loop run` / `dev-loop daemon install-autostart` (systemd --user / launchd). |
 | `doctor` reports `W05` on a Linear team | Steward agents run from the workspace root, where repo-level MCP config may not apply. | Configure the Linear MCP in Claude Code user scope. |
 | A service workspace has no web UI URL | The workspace hub daemon is stopped or the cwd does not resolve to the workspace. | Run `dev-loop hub ensure` and then `dev-loop hub status` from the workspace. |
 | A copied workspace opens the wrong state | Absolute worktree paths or the workspace index still point at the old machine. | Run `dev-loop team repair`, then `dev-loop doctor`. |

@@ -39,7 +39,8 @@ try {
   // — was unreachable from config at all. A green/absent W03 therefore read as "the push-path budget
   // is honoured" when in truth NOTHING WAS EVER PUSHED. This arm fails against today's code, which
   // returns [] here regardless of the delivery mode.
-  const wsOff = ws;                       // team.bootCorpus unset ⇒ OFF
+  // WS-A: ON is the default; `bootCorpus:false` is the explicit opt-out that produces the OFF notice.
+  const wsOff = { ...ws, file: { ...ws.file, team: { ...ws.file.team, bootCorpus: false } } } as typeof ws;
   const offW03 = checkLessonsBudget(wsOff);
   ok(offW03.length === 1 && offW03[0].path === "team.bootCorpus",
     `LOOP-272 AC(C): within budget but corpus OFF ⇒ exactly one informational W03 naming the mode (got ${offW03.length})`);
@@ -49,19 +50,23 @@ try {
     "LOOP-272 AC(C): …and names the mutator that turns it on");
 
   // ON + within budget ⇒ silent, exactly as before this ticket.
-  const wsOn = { ...ws, file: { ...ws.file, team: { ...ws.file.team, bootCorpus: true } } } as typeof ws;
+  const wsOn = ws;                        // team.bootCorpus unset ⇒ ON (the WS-A default)
+  ok(checkLessonsBudget({ ...ws, file: { ...ws.file, team: { ...ws.file.team, bootCorpus: true } } } as typeof ws).length === 0,
+    "WS-A: an explicit bootCorpus:true is also silent");
   ok(checkLessonsBudget(wsOn).length === 0,
     "LOOP-272 AC(C): with the corpus ON and within budget, W03 is silent — unchanged from today");
 
   // ── LOOP-272 AC(A)/AC(B): the predicate, and the don't-regress marker ─────────────────────────
   {
-    // The ONE predicate, as the ticket states it. Config OR the runtime override; absent ⇒ OFF.
-    const resolve = (bootCorpus: unknown, assembleBoot: boolean): boolean =>
-      ((({ bootCorpus }) as { bootCorpus?: unknown }).bootCorpus === true) || assembleBoot;
-    ok(resolve(undefined, false) === false, "LOOP-272 AC(A): absent config + no flag ⇒ OFF — the shipped default is unchanged");
-    ok(resolve(true, false) === true, "LOOP-272 AC(A): config ALONE turns it on — no hand-typed flag needed, which is the whole ticket");
-    ok(resolve(false, true) === true, "LOOP-272 AC(A): the runtime override still works with config explicitly false");
-    ok(resolve("true", false) === false, "LOOP-272 AC(A): a stringly-typed value does NOT enable it — E18 refuses it at load");
+    // The ONE predicate as WS-A restates it: an explicit runner flag wins, else config, else ON.
+    const resolve = (bootCorpus: unknown, assembleBoot: boolean | null): boolean =>
+      assembleBoot ?? (bootCorpus !== false);
+    ok(resolve(undefined, null) === true, "WS-A: absent config + no flag ⇒ ON — the corpus is the shipped default");
+    ok(resolve(false, null) === false, "WS-A: bootCorpus:false is the explicit opt-out");
+    ok(resolve(false, true) === true, "WS-A: --assemble-boot beats a config opt-out");
+    ok(resolve(true, false) === false, "WS-A: --no-assemble-boot beats config");
+    ok(resolve(true, null) === true, "LOOP-272 AC(A): config ALONE turns it on — no hand-typed flag needed, which is the whole ticket");
+    ok(resolve("false", null) === true, "WS-A: a stringly-typed \"false\" does NOT opt out — only the boolean does; E18 refuses the string at load");
 
     // Don't-regress (the ticket asks to VERIFY, not to build): the pushed prompt must still carry
     // the marker that tells §0a step 4 not to re-read the library, or an agent double-ingests.

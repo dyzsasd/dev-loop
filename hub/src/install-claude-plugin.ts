@@ -73,6 +73,10 @@ export function installClaudePlugin(argv = process.argv.slice(2)): number {
   console.log(`  /plugin install ${PLUGIN}@${MARKETPLACE}`);
   console.log(`\nInstalls @dyzsasd/dev-loop@${version || "latest"} (pinned to this CLI's version; pass --version to change).`);
   console.log(`Then /reload-plugins (or restart). Skills appear as /dev-loop:pm-agent … /dev-loop:add-project.`);
+  console.log(`\nThis plugin is an OPTIONAL convenience (the /dev-loop:* slash commands inside Claude Code). The loop itself
+needs only this CLI + a logged-in coding CLI: the primary, harness-neutral install path is the
+dev-loop-operator/ skill shipped in this package (SKILL.md + scripts/ensure-install.sh) — see docs/RUNNING.md §1.
+The plugin's SessionStart hook is opt-in: set DEVLOOP_SESSION_HOOK=1 or team.sessionStartHook: true to enable it.`);
   if (!opts.dryRun && !existsSync(file)) die(`failed to write ${file}`, 1);
   return 0;
 }

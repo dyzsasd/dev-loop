@@ -9,7 +9,7 @@ import { join, isAbsolute } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
-import { validateTeamFile, referencingProjects, isTeamProject, normalizeAutonomy, MODES, AUTONOMY_INPUTS, type TeamFile, type Workspace, type AutonomyInput } from "./team-config.ts";
+import { validateTeamFile, referencingProjects, isTeamProject, normalizeAutonomy, MODES, AUTONOMY_INPUTS, CODEX_SANDBOX_MODES, type TeamFile, type Workspace, type AutonomyInput } from "./team-config.ts";
 import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
@@ -91,6 +91,11 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^team\.agents\.[^.]+\.codingAgent$/, kind: ["claude", "codex", "opencode"] as const },
   { re: /^team\.agents\.[^.]+\.model$/, kind: "string" },
   { re: /^team\.agents\.[^.]+\.effort$/, kind: "string" },
+  // WS-A C4 review 1 — the codex sandbox posture had NO settable path: the CHANGELOG's own restore line
+  // (`dev-loop team set team.codex.sandbox bypass`) exited 2 as "not an operator-settable path", so the
+  // operator's only route back to an unattended codex lane was the hand-edit the console forbids.
+  { re: /^team\.codex\.sandbox$/, kind: CODEX_SANDBOX_MODES },
+  { re: /^team\.agents\.[^.]+\.codexSandbox$/, kind: CODEX_SANDBOX_MODES },
   { re: /^projects\.[^.]+\.testEnv\.baseUrl$/, kind: "string" },
   { re: /^projects\.[^.]+\.testEnv\.authConstraint$/, kind: "string" },
   { re: /^projects\.[^.]+\.intake\.mode$/, kind: ["autonomous", "passive"] as const },
@@ -119,7 +124,7 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\..+?\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,agents.<a>.{codingAgent,model,effort}}, " +
+  "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,codex.sandbox,agents.<a>.{codingAgent,model,effort,codexSandbox}}, " +
   "projects.<key>.{enabled,weight,devSplit,scratch,mode,autonomy,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
@@ -280,6 +285,12 @@ export async function teamSet(argv: string[]): Promise<number> {
   });
   console.log(msg); // printed only AFTER the re-validation + write succeeded
   console.log(`wrote ${ws.filePath}`);
+  // WS-A C4 review 1 — the codex sandbox posture is read ONCE at scheduler boot (teamMain), so a write here
+  // reaches no running loop; and routing a handle to codex while the posture is still on the default is the
+  // exact moment the operator should hear that the default cannot run unattended.
+  if (/^team\.(codex\.sandbox|agents\.[^.]+\.codexSandbox)$/.test(path))
+    console.log("restart the scheduler to pick it up: `dev-loop stop && dev-loop run --background …` (the codex sandbox posture is read once at boot)");
+  else if (coerced === "codex") printCodexSandboxHint(ws, path.split(".").at(-2) ?? ""); // team.agents.<h>.codingAgent ⇒ <h>
   // Filling team.linearTeam is the moment a --yes linear workspace comes online — run the fingerprint
   // mismatch check against every mapped Linear project so a double-driven board is caught right here.
   if (path === "team.linearTeam" && ws.file.team.backend === "linear") {
@@ -1158,5 +1169,17 @@ export async function setModel(argv: string[]): Promise<number> {
     if (rc !== 0) console.error("warning: opencode.json sync failed — run `dev-loop team sync-opencode` by hand");
   }
   console.log("restart the scheduler to pick it up: `dev-loop stop && dev-loop run --background …` (the startup model preflight will verify it resolves)");
+  if (codingAgent === "codex" && !teamDefault) printCodexSandboxHint(ws, agent); // C4 review 1 — routing to codex is the moment to say the default is SAFE
   return 0;
+}
+
+// WS-A C4 review 1 — one line, printed by the two mutators that can name codex for a handle, when the posture
+// that handle would run under is still the SAFE default. Keyed on the operator's INTENT (they just typed
+// "codex" for this handle), not on doctor's routing predicate: `team.agents.<h>.codingAgent` is settable but
+// not yet read by the launch-profile resolver (see team-config.codexRoutedHandles), and the note is about the
+// lane they are reaching for either way. The pin test itself is the one W45 uses (team.codex.sandbox, else
+// team.agents.<h>.codexSandbox), so the two cannot disagree about what "pinned" means.
+function printCodexSandboxHint(ws: Workspace, handle: string): void {
+  if (ws.file.team.codex?.sandbox !== undefined || ws.file.team.agents?.[handle]?.codexSandbox !== undefined) return;
+  console.log(`NOTE: team.codex.sandbox is unset — ${handle || "this handle"} will fire on codex's SAFE default (approval:never, sandbox:read-only: write-shaped tool calls are refused, the fire still exits 0). Unattended lane: dev-loop team set team.codex.sandbox bypass (doctor W45)`);
 }

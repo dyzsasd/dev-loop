@@ -114,6 +114,37 @@ const giAfter = await call(verifier, "get_issue", { id: feat.id }); // confirm o
 ok(giAfter.comments.some((c: any) => c.author === "dev" && c.body === "via the op-API as dev"), "the op-API comment is visible on the stdio path, attributed to dev");
 ok(await eventsBy("dev", "comment.add", feat.id), "list_events confirms a comment.add attributed to dev (the X-Devloop-Actor actor)");
 
+// ── WS-C review 3: a `Ruling:` comment is the operator's act — enforced at the op, so EVERY transport meets it ──
+// The daemon cannot see a caller's fire marker (that guard is the CLI's); what it CAN check is the actor's
+// kind, and that is the half that holds here: an agent identity posting a ruling over the op-API is refused,
+// the human operator's ruling is recorded (issue.ruling + the waiting_on clear on a parked ticket) and the
+// state is NOT moved by the comment. The stdio path answers identically (same agentOp).
+{
+  const fake = await op("save_comment", { issueId: feat.id, body: "Ruling: approve — via the op-API as dev" }, DEV);
+  ok(fake.status === 403 && /agent identity/.test(fake.body?.error ?? ""), `op save_comment "Ruling: …" as dev → 403 (got ${fake.status}: ${fake.body?.error?.slice(0, 80)})`);
+  ok(!(await call(verifier, "get_issue", { id: feat.id })).comments.some((c: any) => c.body.startsWith("Ruling:")), "…and the fake ruling never landed on the ticket");
+  let stdioErr = "";
+  try { await call(pm, "save_comment", { issueId: feat.id, body: "Ruling: reject — via stdio as pm" }); } catch (e) { stdioErr = (e as Error).message; }
+  ok(/agent identity/.test(stdioErr), "the stdio MCP path refuses the same ruling from pm (one policy, both transports)");
+  const malformed = await op("save_comment", { issueId: feat.id, body: "Ruling: whatever — x" }, OPER);
+  ok(malformed.status === 400, `a malformed Ruling: from the operator → 400, never stored half-parseable (got ${malformed.status})`);
+  // a parked ticket, created WITH its discriminator (the create path used to drop waitingOn)
+  const parked = await op("save_issue", { title: "Parked for a key", type: "Feature", labels: ["dev-loop", "Feature", "pm"], state: "Human-Blocked", assignee: "operator", waitingOn: "human-action" }, { "x-devloop-actor": "pm" });
+  ok(parked.status === 200 && parked.body.waiting_on === "human-action", `op save_issue CREATE straight into Human-Blocked keeps waitingOn (got ${parked.status}: ${parked.body?.waiting_on})`);
+  const ruled = await op("save_comment", { issueId: parked.body.id, body: "Ruling: approve — key rotated, go" }, OPER);
+  ok(ruled.status === 200 && ruled.body.author === "operator" && ruled.body.ruling?.verdict === "approve" && ruled.body.ruling?.waitingOnCleared === "human-action",
+    `the operator's Ruling: over the op-API → 200 with ruling {verdict, waitingOnCleared} (got ${ruled.status}: ${JSON.stringify(ruled.body?.ruling)})`);
+  const afterRuling = await op("get_issue", { id: parked.body.id }, DEV);
+  ok(afterRuling.body.state === "Human-Blocked" && afterRuling.body.waiting_on === null, `the comment cleared waiting_on but did NOT move state (got ${afterRuling.body.state}/${afterRuling.body.waiting_on})`);
+  ok(await eventsBy("operator", "issue.ruling", parked.body.id), "list_events carries the issue.ruling event attributed to the operator");
+  const resumed = await op("save_issue", { id: parked.body.id, state: "Todo", assignee: "" }, OPER);
+  ok(resumed.status === 200 && resumed.body.state === "Todo" && resumed.body.waiting_on === null, "leaving Human-Blocked keeps waiting_on null (the write-layer clear is idempotent)");
+  const reparked = await op("save_issue", { id: parked.body.id, state: "Human-Blocked" }, { "x-devloop-actor": "pm" });
+  ok(reparked.status === 200 && reparked.body.waiting_on === "human-decision", `a re-park with no waitingOn gets the default, never a stale value (got ${reparked.body?.waiting_on})`);
+  const gone = await op("save_issue", { id: parked.body.id, state: "Canceled" }, OPER);
+  ok(gone.status === 200 && gone.body.waiting_on === null, "…and the next exit clears it again");
+}
+
 // ── save_issue CREATE attributed to a DIFFERENT actor (qa) — multiplexing N agents over one writer ──
 const created = await op("save_issue", { title: "Op-filed bug", type: "Bug", labels: ["dev-loop", "Bug", "qa"], priority: 1 }, QA);
 ok(created.status === 200 && created.body.created_by === "qa" && created.body.type === "Bug" && created.body.state === "Todo", "op save_issue create (X-Devloop-Actor: qa) → 200, created_by qa, Todo");
@@ -312,7 +343,7 @@ ok((await op("bogus_op", {}, DEV)).status === 404, "guard: unknown op name → 4
 
 // ── the CSRF/rebinding refusals + the bad writes created NO comment/ticket (no mutation slipped through) ──
 const cntAfterGuards = (await getJson("/api/tickets")).body.length;
-ok(cntAfterGuards === 2, "no refused/invalid write mutated state (still exactly the seed Feature + the qa Bug)");
+ok(cntAfterGuards === 3, "no refused/invalid write mutated state (still exactly the seed Feature + the qa Bug + the review-3 parked ticket, which the ruling block above created deliberately)");
 
 // ═══ DL-69 single-source cross-path: the DL-24 assignTo + DL-32 prod-gate policies behave IDENTICALLY ═══════
 // via the op-API AND the stdio server. After the dispatch-sharing refactor server.ts's save_issue runs the

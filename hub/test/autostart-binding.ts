@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, realpathSyn
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { autostartPlistXml, readAutostartBinding, describeAutostartBinding, AUTOSTART_CARRIED_ENV } from "../src/daemon-lifecycle.ts";
+import { autostartPlistXml, readAutostartBinding, describeAutostartBinding, AUTOSTART_CARRIED_ENV, readSystemdBinding, listSystemdBindings } from "../src/daemon-lifecycle.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE = process.env.DEVLOOP_NODE || process.execPath;
@@ -86,8 +86,9 @@ try {
 
   // ── AC2/AC5 — the generated plist binds the workspace and carries no ambient decoy ─────────────
   // Rendered through the real CLI with all four decoys exported, i.e. exactly the install-time shell
-  // that caused the incident.
-  const dry = cli(WS_B, { ...DECOY, DEVLOOP_NODE: NODE }, "daemon", "install-autostart", "--workspace", WS_A, "--dry-run");
+  // that caused the incident. `--format plist` pins the LaunchAgent form: since WS-B the default
+  // artifact on Linux is the systemd --user unit (asserted in its own arm below).
+  const dry = cli(WS_B, { ...DECOY, DEVLOOP_NODE: NODE }, "daemon", "install-autostart", "--workspace", WS_A, "--dry-run", "--format", "plist");
   ok(dry.status === 0, `AC2: --dry-run exits 0 (got ${dry.status}: ${(dry.stderr ?? "").split("\n")[0]})`);
   const xml = dry.stdout ?? "";
   ok(!existsSync(PLIST), "AC2: --dry-run wrote no plist (it renders only)");
@@ -199,15 +200,65 @@ try {
     }
   } else ok(true, "AC6: uninstall-autostart is macOS-only (not asserted: not darwin)");
 
-  // ── The platform seam itself — the real install still refuses off darwin, and writes nothing ───
+  // ── The platform seam itself — the LaunchAgent form still refuses off darwin, and writes nothing ─
   // This is what the reordering must NOT have loosened: `--dry-run` renders everywhere, the actual
-  // login item is still macOS-only.
+  // LaunchAgent is still macOS-only.
   if (process.platform !== "darwin") {
     rmSync(PLIST, { force: true });
-    const real = cli(WS_B, {}, "daemon", "install-autostart", "--workspace", WS_A);
-    ok(real.status !== 0, `AC5: a real install off darwin still refuses (got ${real.status})`);
+    const real = cli(WS_B, {}, "daemon", "install-autostart", "--workspace", WS_A, "--format", "plist");
+    ok(real.status !== 0, `AC5: a real LaunchAgent install off darwin still refuses (got ${real.status})`);
     ok(!existsSync(PLIST), "AC5: …and wrote no plist");
   } else ok(true, "AC5: the off-darwin refusal is asserted on non-darwin runners");
+
+  // ── WS-B — Linux: `install-autostart` binds a systemd --user unit, symmetric uninstall ──────────
+  // A FAKE `systemctl` first on PATH records its argv and succeeds; HOME is the fixture home, so the
+  // unit lands under the fake ~/.config/systemd/user and the real user's systemd is never touched.
+  if (process.platform === "linux") {
+    const fakebin = join(RROOT, "fakebin"), sysLog = join(RROOT, "systemctl.log");
+    mkdirSync(fakebin, { recursive: true });
+    writeFileSync(join(fakebin, "systemctl"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${sysLog}"\nexit 0\n`, { mode: 0o755 });
+    const linuxEnv = { PATH: `${fakebin}:${process.env.PATH ?? ""}`, DEVLOOP_NODE: NODE };
+    const UNIT = join(FAKE_HOME, ".config", "systemd", "user", "dev-loop-daemon@wsa.service");
+
+    // dry-run: the default artifact on Linux is the unit; nothing is written, no systemctl runs
+    const ldry = cli(WS_B, { ...DECOY, ...linuxEnv }, "daemon", "install-autostart", "--workspace", WS_A, "--dry-run");
+    ok(ldry.status === 0, `L1: --dry-run (Linux default = systemd) exits 0 (got ${ldry.status}: ${(ldry.stderr ?? "").split("\n")[0]})`);
+    ok(!existsSync(UNIT) && !existsSync(sysLog), "L1: --dry-run wrote no unit and ran no systemctl");
+    const unitDry = ldry.stdout ?? "";
+    ok(unitDry.includes(`WorkingDirectory=${WS_A}`) && unitDry.includes(`Environment="DEVLOOP_WORKSPACE=${WS_A}"`), "L1: the rendered unit binds WorkingDirectory + DEVLOOP_WORKSPACE to the workspace");
+    ok(/ExecStart=.* up-all$/m.test(unitDry) && /^Type=oneshot$/m.test(unitDry) && /^RemainAfterExit=yes$/m.test(unitDry) && /^WantedBy=default\.target$/m.test(unitDry), "L1: unit runs `<node> <entry> up-all` as a oneshot user unit");
+    for (const k of WORKSPACE_SELECTING) ok(!unitDry.includes(k) && !unitDry.includes(DECOY[k as keyof typeof DECOY]), `L1: unit carries no ${k} (name or decoy value)`);
+
+    // real install: unit written under the fake HOME, systemctl --user daemon-reload + enable --now
+    const inst = cli(WS_B, { ...DECOY, ...linuxEnv }, "daemon", "install-autostart", "--workspace", WS_A);
+    ok(inst.status === 0, `L2: install-autostart on Linux exits 0 (got ${inst.status}: ${(inst.stderr ?? "").split("\n")[0]})`);
+    ok(existsSync(UNIT), `L2: unit written at ${UNIT}`);
+    const unitTxt = existsSync(UNIT) ? readFileSync(UNIT, "utf8") : "";
+    ok(unitTxt.includes(`Environment="DEVLOOP_WORKSPACE=${WS_A}"`) && !WORKSPACE_SELECTING.some((k) => unitTxt.includes(k)), "L2: the written unit binds the workspace and carries no ambient decoy");
+    const calls = existsSync(sysLog) ? readFileSync(sysLog, "utf8").trim().split("\n") : [];
+    ok(calls.includes("--user daemon-reload") && calls.includes("--user enable --now dev-loop-daemon@wsa.service"), `L2: systemctl --user daemon-reload + enable --now <unit> (got: ${calls.join(" | ")})`);
+    ok(/loginctl enable-linger/.test(inst.stdout ?? ""), "L2: the linger hint is printed");
+    ok(!existsSync(PLIST), "L2: no plist was written on Linux");
+
+    // the binding is readable: the reader, the listing, and `daemon status`
+    const lb = readSystemdBinding(UNIT);
+    ok(lb.installed && lb.workspace === WS_A && lb.kind === "systemd", `L3: readSystemdBinding reports the bound workspace (got ${lb.workspace})`);
+    const all = listSystemdBindings(join(FAKE_HOME, ".config", "systemd", "user"));
+    ok(all.length === 1 && all[0].workspace === WS_A, "L3: listSystemdBindings finds exactly the one unit");
+    const st = cli(WS_A, linuxEnv, "daemon", "status");
+    ok(/daemon autostart — installed, bound to workspace/.test(st.stdout ?? "") && (st.stdout ?? "").includes(WS_A), "L3: `daemon status` prints the systemd binding line naming the workspace");
+
+    // uninstall: symmetric — disable --now, unlink, daemon-reload; an unresolvable target refuses
+    const none = cli(NOWHERE, { ...linuxEnv, DEVLOOP_WORKSPACE: "" }, "daemon", "uninstall-autostart");
+    ok(none.status !== 0 && existsSync(UNIT), `L4: uninstall with no resolvable workspace refuses and removes nothing (got ${none.status})`);
+    const un = cli(NOWHERE, linuxEnv, "daemon", "uninstall-autostart", "--workspace", WS_A);
+    ok(un.status === 0, `L4: uninstall-autostart --workspace exits 0 (got ${un.status}: ${(un.stderr ?? "").split("\n")[0]})`);
+    ok(!existsSync(UNIT), "L4: the unit is gone");
+    const calls2 = readFileSync(sysLog, "utf8").trim().split("\n");
+    ok(calls2.includes("--user disable --now dev-loop-daemon@wsa.service") && calls2.filter((c) => c === "--user daemon-reload").length >= 2, `L4: systemctl --user disable --now <unit> + daemon-reload (got: ${calls2.join(" | ")})`);
+    const again = cli(NOWHERE, linuxEnv, "daemon", "uninstall-autostart", "--all");
+    ok(again.status === 0 && /nothing to remove/.test(again.stdout ?? ""), "L4: a second uninstall (--all) is a clean no-op");
+  } else ok(true, "WS-B Linux systemd arm: not asserted (not linux)");
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }

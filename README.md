@@ -28,6 +28,11 @@ dev-loop init                     # guided setup — Enter through the defaults 
 dev-loop run                      # ONE scheduler drives the whole team; ^C stops everything
 ```
 
+Operating it from an agent (Claude Code, Codex, opencode) or setting up a new machine? Load the
+harness-neutral operator skill **[`dev-loop-operator/`](dev-loop-operator/SKILL.md)** (ships in the
+npm package too): `scripts/ensure-install.sh` installs everything, and the SKILL is the runbook —
+init, daemon/scheduler lifecycle, daily read, safe config changes, upgrades, faults.
+
 Prefer to set everything up by **talking** instead? `dev-loop up` scaffolds the workspace and lands
 you directly in an operator-console chat (Claude Code or opencode) that runs the setup verbs for you —
 and the same verb deploys remotely (`up --bundle`, an encrypted move of config+secrets+board) and

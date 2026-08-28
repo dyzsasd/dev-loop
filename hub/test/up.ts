@@ -83,6 +83,19 @@ try {
   ok(JSON.stringify(launch.envRemoved) === JSON.stringify(["DEVLOOP_TEAM_SCOPE", "DEVLOOP_DEV_SPLIT"]),
     "dry-launch: the fire markers are STRIPPED (the exit-4 operator-write trap)");
   ok(launch.args.includes("--append-system-prompt"), "dry-launch: claude gets the console brief via the verified flag");
+  const briefArg = launch.args[launch.args.indexOf("--append-system-prompt") + 1] as string;
+  ok(/dev-loop status --json/.test(briefArg) && /operator-rulings\.md/.test(briefArg) && !/Claude/.test(briefArg),
+    "WS-C C1: the injected brief is harness-neutral — first read is `dev-loop status --json`, the ruling grammar is named, nothing presumes Claude");
+
+  // WS-C C1: `--print-brief` is the non-Claude harness's entry — the SAME env block + brief, as text
+  // to paste, and NO launch (no command line, no TUI).
+  const pb = up(["--print-brief", "--no-daemon"]);
+  ok(pb.status === 0, `print-brief: exits 0 (got ${pb.status}: ${(pb.stderr ?? "").split("\n")[0]})`);
+  ok(/^export DEVLOOP_ACTOR="operator"$/m.test(pb.stdout) && new RegExp(`^export DEVLOOP_WORKSPACE=${JSON.stringify(realpathSync(ws))}$`, "m").test(pb.stdout) && /^export DEVLOOP_HUB_DB=/m.test(pb.stdout),
+    "print-brief: the operator env block as export lines (ACTOR/WORKSPACE/HUB_DB)");
+  ok(/^unset DEVLOOP_TEAM_SCOPE DEVLOOP_DEV_SPLIT/m.test(pb.stdout), "print-brief: tells the harness to drop the fire markers");
+  ok(pb.stdout.includes(briefArg) && /Start with: dev-loop status --json/.test(pb.stdout), "print-brief: carries the identical brief text the claude launch injects, ending on the first read");
+  ok(!/launching the operator console/.test(pb.stdout) && !/^\{\n/m.test(pb.stdout), "print-brief: launches nothing and prints no launch JSON");
 
   // CLI precedence: team.defaultCodingAgent beats the built-in fallback; --cli beats both.
   const cfg = JSON.parse(readFileSync(join(ws, "dev-loop.json"), "utf8"));

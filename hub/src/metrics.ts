@@ -107,6 +107,59 @@ export interface UsageReport {
   meteredFires: number;           // fires carrying usage (the coverage numerator "N of M")
   overall: UsageCell;
   byDimension?: Record<string, UsageCell>;  // present when a groupBy dimension is requested
+  byLane?: LaneUsage[];           // WS-A A7: per coding-agent lane, the four cache channels + cost-by-channel
+}
+
+// ─── WS-A A7: metering by cache channel ───────────────────────────────────────────────────────────
+// A fire's bill is four channels — uncached input, cache READ (the prefix the cache served), cache WRITE
+// (what had to be written because the prefix did not match — the channel a variable prompt head inflates),
+// and output. `cacheWriteShare` = cacheWrite / (input + cacheRead + cacheWrite) is the one number that says
+// whether the byte-stable prefix (WS-A A2) is actually hitting: it falls as the prefix holds.
+// Cost is ESTIMATED from a per-lane input price (team.pricing.<lane>.inputUsdPerMTok) with channel multipliers
+// that default to the Anthropic-style 1.25× (cache write) / 0.1× (cache read) / 5× (output). No input price
+// ⇒ tokens only and the lane says "unpriced" — never a made-up dollar.
+export interface LanePricing { inputUsdPerMTok: number; cacheWriteMultiplier?: number; cacheReadMultiplier?: number; outputMultiplier?: number }
+export const DEFAULT_CHANNEL_MULTIPLIERS = { cacheWrite: 1.25, cacheRead: 0.1, output: 5 } as const;
+export interface LaneCostEstimate { inputUsd: number; cacheReadUsd: number; cacheWriteUsd: number; outputUsd: number; totalUsd: number; basis: string }
+export interface LaneUsage {
+  lane: string;                   // the fire's codingAgent (claude | codex | opencode), "(unknown)" when absent
+  fires: number; metered: number;
+  input: number | null; cacheRead: number | null; cacheWrite: number | null; output: number | null;
+  cacheWriteShare: number | null; // cacheWrite / (input + cacheRead + cacheWrite); null when no token is metered
+  reportedCostUsd: number | null; // the provider-reported cost, summed (null when nothing priced)
+  estimate: LaneCostEstimate | null; // null ⇒ "unpriced" (no team.pricing.<lane>)
+}
+export function estimateLaneCost(l: Pick<LaneUsage, "input" | "cacheRead" | "cacheWrite" | "output">, p: LanePricing | undefined): LaneCostEstimate | null {
+  if (!p || typeof p.inputUsdPerMTok !== "number") return null;
+  const per = p.inputUsdPerMTok / 1e6;
+  const cw = p.cacheWriteMultiplier ?? DEFAULT_CHANNEL_MULTIPLIERS.cacheWrite;
+  const cr = p.cacheReadMultiplier ?? DEFAULT_CHANNEL_MULTIPLIERS.cacheRead;
+  const out = p.outputMultiplier ?? DEFAULT_CHANNEL_MULTIPLIERS.output;
+  const inputUsd = (l.input ?? 0) * per, cacheReadUsd = (l.cacheRead ?? 0) * per * cr, cacheWriteUsd = (l.cacheWrite ?? 0) * per * cw, outputUsd = (l.output ?? 0) * per * out;
+  return { inputUsd, cacheReadUsd, cacheWriteUsd, outputUsd, totalUsd: inputUsd + cacheReadUsd + cacheWriteUsd + outputUsd, basis: `input $${p.inputUsdPerMTok}/MTok × cacheWrite ${cw} · cacheRead ${cr} · output ${out}` };
+}
+export function laneUsage(rows: FireRow[], pricing?: Record<string, LanePricing>): LaneUsage[] {
+  const lanes = new Map<string, LaneUsage>();
+  for (const r of rows) {
+    const lane = r.codingAgent ?? "(unknown)";
+    const l = lanes.get(lane) ?? { lane, fires: 0, metered: 0, input: null, cacheRead: null, cacheWrite: null, output: null, cacheWriteShare: null, reportedCostUsd: null, estimate: null };
+    l.fires++;
+    if (r.usage) {
+      l.metered++;
+      l.input = sumNull(l.input, r.usage.inputTokens);
+      l.cacheRead = sumNull(l.cacheRead, r.usage.cacheReadTokens);
+      l.cacheWrite = sumNull(l.cacheWrite, r.usage.cacheWriteTokens);
+      l.output = sumNull(l.output, r.usage.outputTokens);
+      if (r.usage.costUsd != null) l.reportedCostUsd = (l.reportedCostUsd ?? 0) + r.usage.costUsd;
+    }
+    lanes.set(lane, l);
+  }
+  for (const l of lanes.values()) {
+    const denom = (l.input ?? 0) + (l.cacheRead ?? 0) + (l.cacheWrite ?? 0);
+    l.cacheWriteShare = l.input === null && l.cacheRead === null && l.cacheWrite === null ? null : denom > 0 ? (l.cacheWrite ?? 0) / denom : 0;
+    l.estimate = estimateLaneCost(l, pricing?.[l.lane]);
+  }
+  return [...lanes.values()].sort((a, b) => b.fires - a.fires || a.lane.localeCompare(b.lane));
 }
 
 export function readFireRows(ledgerPath: string): FireRow[] {
@@ -463,7 +516,7 @@ function addToCell(cell: UsageCell, r: FireRow): void {
   }
 }
 
-export function usageReport(rows: FireRow[], windowMs: number, opts: { groupBy?: UsageDimension; nowMs?: number } = {}): UsageReport {
+export function usageReport(rows: FireRow[], windowMs: number, opts: { groupBy?: UsageDimension; nowMs?: number; pricing?: Record<string, LanePricing> } = {}): UsageReport {
   const until = opts.nowMs ?? Date.now();
   const cutoff = until - windowMs;                                   // LOOP-314: closed era, both bounds
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= until; });
@@ -483,6 +536,7 @@ export function usageReport(rows: FireRow[], windowMs: number, opts: { groupBy?:
     meteredFires: overall.metered,
     overall,
     ...(dimMap !== undefined ? { byDimension: dimMap } : {}),
+    byLane: laneUsage(inWindow, opts.pricing),
   };
 }
 
@@ -1627,8 +1681,11 @@ export function renderHuman(
   if (Object.keys(fires.byErrorClass).length) // P0-1b: infra failure classes split from task failures
     console.log(`errors: ${Object.entries(fires.byErrorClass).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}×${n}`).join(", ")}`);
 
-  // AC7: detect consecutive failures to flag dead lanes in the per-agent output
-  const fireRows = readFireRows(wsFireLedger(ws));
+  // AC7: detect consecutive failures to flag dead lanes in the per-agent output. Fail-open: a render must
+  // never die on a workspace whose ledger cannot be located (a projection without a root, a fixture) — the
+  // flag is a recency signal, not the report.
+  let fireRows: FireRow[] = [];
+  try { fireRows = readFireRows(wsFireLedger(ws)); } catch { fireRows = []; }
   const consecutiveFailures = findConsecutiveFailures(fireRows, 5, 24 * 60 * 60 * 1000, nowMs);
   const failedAgents = new Map(consecutiveFailures.map((f) => [f.agent, f]));
 
@@ -1754,6 +1811,19 @@ export function renderUsage(report: UsageReport, byDim?: UsageDimension): void {
     for (const [k, cell] of Object.entries(report.byDimension))
       renderCell(`  ${dim}:${k}`, cell, "");
   }
+  // WS-A A7 — the cache-channel view per lane. cacheWriteShare is the prefix-cache health signal: a
+  // byte-stable prompt prefix drives it DOWN (the prefix is read, not re-written).
+  if (report.byLane?.length) {
+    console.log("by lane (cache channels; cacheWriteShare = cacheW ÷ (in + cacheR + cacheW) — lower is a better prefix-cache hit rate):");
+    for (const l of report.byLane) {
+      if (l.metered === 0) { console.log(`  ${l.lane}: no metered fires (${l.fires} total)`); continue; }
+      const share = l.cacheWriteShare === null ? "—" : `${(l.cacheWriteShare * 100).toFixed(1)}%`;
+      const est = l.estimate
+        ? `est $${l.estimate.totalUsd.toFixed(4)} (in $${l.estimate.inputUsd.toFixed(4)} · cacheW $${l.estimate.cacheWriteUsd.toFixed(4)} · cacheR $${l.estimate.cacheReadUsd.toFixed(4)} · out $${l.estimate.outputUsd.toFixed(4)}; ${l.estimate.basis})`
+        : `unpriced — set team.pricing.${l.lane}.inputUsdPerMTok for an estimate`;
+      console.log(`  ${l.lane}: in=${dash(l.input)} cacheR=${dash(l.cacheRead)} cacheW=${dash(l.cacheWrite)} out=${dash(l.output)}  cacheWriteShare=${share}  reported=${usd(l.reportedCostUsd)}  ${est}  [${l.metered} of ${l.fires} metered]`);
+    }
+  }
 }
 
 export function renderCost(report: UsageReport, byDim?: UsageDimension, budget?: { dailyUsd: number; rollingUsd: number; windowUsd?: number }, deadlines?: { ceilingUsd: number; wallMinutes: number; rows: ProfileDeadline[] }): void {
@@ -1870,7 +1940,7 @@ export function renderFlow(report: UsageReport, throughput: number | null, board
 
 interface MetricsOpts {
   windowMs: number; nowMs: number; asJson: boolean; context: boolean; projectKey: string | undefined;
-  showUsage: boolean; showCost: boolean; showFlow: boolean; showKaizen: boolean;
+  showUsage: boolean; showCost: boolean; showFlow: boolean; showKaizen: boolean; showJobs: boolean;
   byDim: UsageDimension | undefined;
 }
 
@@ -1898,7 +1968,8 @@ const METRICS_HELP = `usage: dev-loop metrics [--window 7d|24h|30d | --since ISO
   --flow:  spend→outcome view: cost-per-accepted-change = costUsd÷throughput (service-only)
   --kaizen: self-improvement panel (board+ledger only; —=no data, never 0; composable with --window --json)
   --by:    grouping dimension for --usage/--cost (default: agent)
-  --context: per-agent context bill (plugin-static, needs no workspace)`;
+  --context: per-agent context bill (plugin-static, needs no workspace)
+  --context --jobs: the job-scoped-prompt bill — every migrated agent's per-job pushed constant segment vs its whole-role load`;
 
 const USAGE_DIMENSIONS = ["agent", "project", "provider", "model"] as const;
 
@@ -1906,13 +1977,14 @@ const USAGE_DIMENSIONS = ["agent", "project", "provider", "model"] as const;
 // function for no decision at all — and with --since/--until added, parseMetricsArgs hit CRAP 130.6
 // against the ratchet's 90 and red-lined the merge check on a branch whose local `verify` was green.
 // (That green-local/red-CI gap is LOOP-159, fixed alongside: `verify` now runs the ratchet too.)
-const METRICS_BOOL_FLAGS: Record<string, keyof Pick<MetricsOpts, "asJson" | "context" | "showUsage" | "showCost" | "showFlow" | "showKaizen">> = {
+const METRICS_BOOL_FLAGS: Record<string, keyof Pick<MetricsOpts, "asJson" | "context" | "showUsage" | "showCost" | "showFlow" | "showKaizen" | "showJobs">> = {
   "--json": "asJson",
   "--context": "context",
   "--usage": "showUsage",
   "--cost": "showCost",
   "--flow": "showFlow",
   "--kaizen": "showKaizen",
+  "--jobs": "showJobs", // job-scoped prompts: with --context, the per-pm-lane job-corpus bill
 };
 
 // --since/--until resolve LAST so the two spellings cannot half-apply. --since alone means "from
@@ -1927,7 +1999,7 @@ function resolveEra(windowMs: number, sinceMs: number | null, untilMs: number | 
 }
 
 function parseMetricsArgs(argv: string[]): MetricsOpts | number {
-  const flags = { asJson: false, context: false, showUsage: false, showCost: false, showFlow: false, showKaizen: false };
+  const flags = { asJson: false, context: false, showUsage: false, showCost: false, showFlow: false, showKaizen: false, showJobs: false };
   let windowMs = 7 * 86_400_000;
   let sinceMs: number | null = null, untilMs: number | null = null;
   let byDim: UsageDimension | undefined;
@@ -1966,8 +2038,9 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   // gate over a workspace's system-of-record. Handled BEFORE resolveWorkspace() for exactly that
   // reason — the bill must print anywhere, including a machine with no team at all.
   if (context) {
-    const { printContextBill } = await import("./context-bill.ts");
-    return printContextBill(asJson, parsed.projectKey);
+    const { printContextBill, printJobLaneBill } = await import("./context-bill.ts");
+    // --jobs: the job-scoped-prompt bill (per pm job-lane vs the whole-role load); --context otherwise.
+    return parsed.showJobs ? await printJobLaneBill(asJson) : printContextBill(asJson, parsed.projectKey);
   }
   const ws: Workspace = resolveWorkspace();
   // Route board reads through the DEVLOOP_HUB_DB ladder (LOOP-199). Own-db callers (hub.ts:21,29
@@ -1981,7 +2054,7 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   if (showUsage || showCost || showFlow) {
     const rows = readFireRows(wsFireLedger(ws));
     const groupBy = byDim ?? "agent";
-    const report = usageReport(rows, windowMs, { groupBy, nowMs: nowMs });
+    const report = usageReport(rows, windowMs, { groupBy, nowMs: nowMs, pricing: ws.file.team.pricing });
     // Budget-ceiling view (LOOP-229): shown only when a dailyUsd ceiling is set (so `--cost` is unchanged when
     // unset). Always the 24h rolling enforcement total (rollingSpendUsd — the same number the launch gate and
     // doctor use), independent of --window.
@@ -2130,6 +2203,27 @@ export function findConsecutiveFailures(
   }
 
   return results;
+}
+
+// Per-agent form of the same detector, for doctor/test callers that ask about ONE agent and want
+// the streak's summary fields rather than the roster-wide list: `count`, the dominant error class,
+// the streak's span, and the ts of the most recent SUCCESS inside the recency window (null when the
+// window holds no success at all). null ⇒ no qualifying streak (fewer than `minConsecutive` in a row
+// at the tail, or the tail is older than the window). Rows outside the recency window are ignored
+// on BOTH sides so a stale lane never reads as live.
+export interface ConsecutiveFailureStreak { agent: string; count: number; dominantErrorClass: string; spanMs: number; lastSuccessTs: string | null; oldestTs: string; newestTs: string }
+export function detectConsecutiveFailures(
+  rows: FireRow[],
+  agent: string,
+  minConsecutive: number = 5,
+  recencyWindowMs: number = 24 * 60 * 60 * 1000,
+  nowMs: number = Date.now(),
+): ConsecutiveFailureStreak | null {
+  const inWindow = rows.filter((r) => r.agent === agent && Number.isFinite(Date.parse(r.ts)) && Date.parse(r.ts) + recencyWindowMs >= nowMs);
+  const hit = findConsecutiveFailures(inWindow, minConsecutive, recencyWindowMs, nowMs).find((f) => f.agent === agent);
+  if (!hit) return null;
+  const successes = inWindow.filter((r) => !r.errorClass).map((r) => r.ts).sort();
+  return { agent, count: hit.count, dominantErrorClass: hit.errorClass, spanMs: hit.durationMs, lastSuccessTs: successes.length ? successes[successes.length - 1] : null, oldestTs: hit.oldestTs, newestTs: hit.newestTs };
 }
 
 if (isMainEntry(import.meta.url)) {
