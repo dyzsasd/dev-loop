@@ -71,6 +71,28 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   // metrics --cost is UNCHANGED when the ceiling is unset (no budget line) — the read-surface half of INV-1.
   ok(!/budget: rolling 24h/.test(metricsCost(ws)), "metrics --cost: no budget line when the ceiling is unset (byte-identical surface)");
 
+  // ── W28 rate: the divisor is the ledger's own span, not a fixed 7 (a young ledger is not seven days old) ──
+  // $70 billed across one hour of ledger extrapolates to $1680/day. A fixed divisor of 7 reported $10.00/day
+  // for the same ledger, and the operator sizes team.budget.dailyUsd from exactly this number.
+  seed(costRow(70, 60 * 60_000));
+  const docYoung = await doctorRun(ws);
+  const rateYoung = /~\$([0-9.]+)\/day/.exec(docYoung.out)?.[1];
+  ok(rateYoung === "1680.00", `doctor W28: a 1h-old $70 ledger reads ~$1680.00/day, not the $10.00 a /7 divisor gave (got ${rateYoung ?? "no rate"})`);
+  ok(/measured over 1h of ledger/.test(docYoung.out), "doctor W28: the line names the span it measured over");
+
+  // A ledger spanning nearly the whole window is divided by that span: $70 over 6d23h is $10.06/day, which is
+  // where the old fixed /7 divisor happened to be right — it is right only for a ledger exactly 7 days long.
+  seed(costRow(70, 6 * 86_400_000 + 23 * 3_600_000));
+  const docOld = await doctorRun(ws);
+  const rateOld = /~\$([0-9.]+)\/day/.exec(docOld.out)?.[1];
+  ok(rateOld === "10.06", `doctor W28: a 6d23h-old $70 ledger reads ~$10.06/day (got ${rateOld ?? "no rate"})`);
+
+  // Below an hour the span is clamped to an hour, so a burst of fires cannot extrapolate to an absurd figure.
+  seed(costRow(5, 60_000));
+  const docBurst = await doctorRun(ws);
+  const rateBurst = /~\$([0-9.]+)\/day/.exec(docBurst.out)?.[1];
+  ok(rateBurst === "120.00", `doctor W28: a 1-minute-old $5 ledger is clamped to the 1h span, ~$120.00/day (got ${rateBurst ?? "no rate"})`);
+
   // ── AC5 (anti-deadlock, LOAD-BEARING): dailyUsd UNSET ⇒ byte-identical — even a huge spend never gates ──
   // The failure mode we design against is a silent-refuse deadlock, so prove that with NO ceiling set, a ledger
   // far above any plausible ceiling still FIRES normally (no gate, no refusal line, a fire actually lands).

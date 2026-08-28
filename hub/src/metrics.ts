@@ -318,6 +318,24 @@ export function fireMetrics(
 // (codingAgent, model) priced history exists in the window to derive a median rate.
 const FALLBACK_RATE_PER_MS = 18.21 / 3_600_000; // ≈ 5.058e-6 $/ms (~$18.21/hr) conservative floor
 
+/**
+ * The span of ledger history the rate is measured over: from the oldest row inside the window to now,
+ * clamped to [1h, windowMs]. A ledger younger than an hour is reported as an hour so that a couple of
+ * fires cannot extrapolate to an absurd daily figure; a ledger older than the window is bounded by it,
+ * because rows outside the window were not summed.
+ */
+export function ledgerSpanMs(rows: FireRow[], windowMs: number, nowMs: number): number {
+  const cutoff = nowMs - windowMs;
+  let oldest: number | null = null;
+  for (const r of rows) {
+    const t = Date.parse(r.ts);
+    if (!Number.isFinite(t) || t < cutoff || t > nowMs) continue;
+    if (oldest === null || t < oldest) oldest = t;
+  }
+  if (oldest === null) return windowMs; // no rows in the window; the caller has already returned on zero spend
+  return Math.min(windowMs, Math.max(3_600_000, nowMs - oldest));
+}
+
 export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
   const cutoff = nowMs - windowMs;                                   // LOOP-314: closed era, both bounds
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
@@ -454,10 +472,19 @@ export function checkBudget(ws: Workspace): WsWarning[] {
     const rows = readFireRows(wsFireLedger(ws));
     const now = Date.now();
     if (dailyUsd == null) {
-      const burnPerDay = rollingSpendUsd(rows, 7 * 86_400_000, now) / 7; // 7d avg daily burn (estimate-augmented)
-      if (burnPerDay <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
+      // The daily rate is spend ÷ the span the ledger actually covers, NOT ÷ 7. A fixed divisor of 7 reads a
+      // young ledger as seven days of history: a workspace 42 minutes old that had billed $51 was reported as
+      // $7.30/day, understating the real rate by more than two orders of magnitude — and this number is the
+      // only figure an operator has to size the ceiling from. The span is clamped to [1h, 7d]: below an hour a
+      // handful of fires would extrapolate to an absurd figure, and above 7d the window itself is the bound.
+      const windowMs = 7 * 86_400_000;
+      const spend = rollingSpendUsd(rows, windowMs, now);
+      if (spend <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
+      const spanMs = ledgerSpanMs(rows, windowMs, now);
+      const burnPerDay = spend / (spanMs / 86_400_000);
+      const spanLabel = spanMs >= 86_400_000 ? `${(spanMs / 86_400_000).toFixed(1)}d` : `${Math.round(spanMs / 3_600_000)}h`;
       return [{ code: "W28", path: "team.budget.dailyUsd",
-        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured, 7d avg) with no cap; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
+        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured over ${spanLabel} of ledger) with no cap; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
     }
     const rolling = rollingSpendUsd(rows, 86_400_000, now);
     if (rolling > dailyUsd)
