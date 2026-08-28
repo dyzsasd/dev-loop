@@ -222,7 +222,7 @@ export function readCiFreshness(
       let exempt = false;
       // LOOP-365: when the delta is known AND ciIrrelevantPaths is unset, surface the knob.
       let hint = "";
-      const revResult = exec(["api", `/repos/${ghRepo}/compare/${testedHead}...${defaultBranch}`]);
+      const revResult = exec(["api", `/repos/${ghRepo}/compare/${testedHead}...${defaultBranch}`, "--jq", "{files: [.files[] | {filename}], total_commits, commits: [.commits[] | {sha}]}"]);
       if (revResult.ok) {
         try {
           const revData = JSON.parse(revResult.stdout) as { files?: Array<{ filename?: string }>; total_commits?: number; commits?: unknown[] };
@@ -279,8 +279,13 @@ export function readCiFreshness(
     }
     return { verdict: "fresh-green", behindBy: behindBy ?? 0, testedHead, currentTip, reason: "checks green and head is up to date with current tip" };
   } catch (e) {
-    return { verdict: "unknown", behindBy: null, testedHead: null, currentTip: null, reason: `unexpected error: ${(e as Error).message}` };
-  }
+    const msg = (e as Error).message;
+    // LOOP-502: classify spawn buffer overflow so the hold is readable
+    const reason = /ENOBUFS|maxBuffer/i.test(msg)
+      ? `gh compare response exceeded spawn buffer — reverse compare payload too large (rebase the PR branch to collapse the delta): ${msg}`
+      : `unexpected error: ${msg}`;
+    return { verdict: "unknown", behindBy: null, testedHead: null, currentTip: null, reason };
+}
 }
 
 // ── Allow-lists (sourced from `gh pr list --json bogus` and `gh pr view --json bogus` — offline, no network) ──
@@ -419,10 +424,11 @@ const LANDING_STALL_DAYS = 2;
 const DEFAULT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const GH_EXEC_TIMEOUT_MS = 5_000; // per-call spawnSync cap; exported for the enrich deadline
 
-export function makeGhExec(opts?: { timeoutMs?: number }): ExecFn {
+export function makeGhExec(opts?: { timeoutMs?: number; maxBuffer?: number }): ExecFn {
   const timeout = opts?.timeoutMs ?? GH_EXEC_TIMEOUT_MS;
+  const maxBuffer = opts?.maxBuffer;
   return (args) => {
-    const r = spawnSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout });
+    const r = spawnSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout, ...(maxBuffer !== undefined ? { maxBuffer } : {}) });
     if (r.error) throw r.error;
     return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", ok: (r.status ?? 1) === 0 };
   };
