@@ -9,10 +9,13 @@
 //   1. the registry has no duplicate code;
 //   2. every W-code literal anywhere in hub/src is registered — so a check cannot ship under an
 //      unregistered (and therefore possibly colliding) code.
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DOCTOR_CODES, DOCTOR_CODE_SET, nextFreeDoctorCode } from "../src/doctor-codes.ts";
+import { openDb } from "../src/db.ts";
+import { checkBlockedNoBailShape } from "../src/doctor.ts";
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 let fails = 0;
@@ -60,6 +63,41 @@ ok(!DOCTOR_CODE_SET.has(next), `LOOP-88: nextFreeDoctorCode() returns an unclaim
 
 ok(DOCTOR_CODES.every((r) => r.name.trim().length > 0 && r.source.trim().length > 0),
   "LOOP-88: every registry row carries a name and a source file");
+
+// ── Decision 1 — W46 registered + the check fires only on an unroutable block ─────────────────────
+ok(DOCTOR_CODE_SET.has("W46"), "Decision 1: W46 (unroutable block) is registered in the doctor-codes namespace");
+{
+  const ROOT = mkdtempSync(join(tmpdir(), "dl-w46-"));
+  try {
+    const db = openDb(join(ROOT, "hub.db"));
+    db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p1','loop','Loop','2026-01-01T00:00:00.000Z')").run();
+    const ins = db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at,assignee) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    const NOW = "2026-08-01T00:00:00.000Z";
+    // LOOP-1: blocked, NO bail-shape label, NO Bail-shape comment → the fail-closed hole (W46)
+    ins.run("LOOP-1", "p1", "Unroutable block", "", "Feature", "Todo", 2, JSON.stringify(["dev-loop", "Feature", "pm", "blocked", "needs-pm"]), "[]", "pm", NOW, NOW, null);
+    // LOOP-2: blocked WITH a bail-shape label → routable, silent
+    ins.run("LOOP-2", "p1", "Labelled block", "", "Feature", "Todo", 2, JSON.stringify(["dev-loop", "Feature", "pm", "blocked", "needs-pm", "decision-needed"]), "[]", "pm", NOW, NOW, null);
+    // LOOP-3: blocked, no label, but a legacy parseable Bail-shape comment → routable (sweep backfills), silent
+    ins.run("LOOP-3", "p1", "Legacy comment block", "", "Bug", "Todo", 2, JSON.stringify(["dev-loop", "Bug", "qa", "blocked", "needs-qa"]), "[]", "qa", NOW, NOW, null);
+    db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES(?,?,?,?,?)").run("c3", "LOOP-3", "qa", "Bail-shape: info-needed\nneed the repro", NOW);
+    // LOOP-4: blocked + no signal but TERMINAL → not a live routing hole, silent
+    ins.run("LOOP-4", "p1", "Terminal block", "", "Feature", "Canceled", 2, JSON.stringify(["dev-loop", "Feature", "pm", "blocked"]), "[]", "pm", NOW, NOW, null);
+    // LOOP-5: not blocked → silent
+    ins.run("LOOP-5", "p1", "Normal ticket", "", "Feature", "Todo", 2, JSON.stringify(["dev-loop", "Feature", "pm"]), "[]", "pm", NOW, NOW, null);
+
+    const warns: string[] = [];
+    const out = { pass: () => {}, fail: () => {}, warn: (m: string) => warns.push(m), info: () => {} };
+    checkBlockedNoBailShape({ db, projectKey: "loop", projectId: "p1", out } as unknown as Parameters<typeof checkBlockedNoBailShape>[0]);
+    db.close();
+
+    ok(warns.length === 1 && /\[W46\]/.test(warns[0]!), `Decision 1: W46 warns exactly once for the unroutable block (got ${warns.length})`);
+    ok(warns.length === 1 && warns[0]!.includes("LOOP-1"), "Decision 1: W46 names the blocked-with-no-signal ticket (LOOP-1)");
+    ok(warns.length === 1 && !warns[0]!.includes("LOOP-2") && !warns[0]!.includes("LOOP-3") && !warns[0]!.includes("LOOP-4") && !warns[0]!.includes("LOOP-5"),
+      "Decision 1: W46 is silent on labelled / legacy-comment / terminal / non-blocked tickets");
+  } finally {
+    rmSync(ROOT, { recursive: true, force: true });
+  }
+}
 
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nDOCTOR_CODES_OK");
 process.exit(fails ? 1 : 0);

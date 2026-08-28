@@ -11,22 +11,24 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry } from "./team-config.ts";
+import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
 import { secretsDeclaredKeys, scopeFireSecrets } from "./secrets.ts"; // Q9/LOOP-432: the per-fire secret-scoping strip set
-import { assembleBootCorpus } from "./boot-prefix.ts";
+import { assembleBootCorpus, type ResolvedFireConfig } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
+import { LANE_ACTOR, LANE_JOBS, isLane, isQaLane, type Lane } from "./agent-handles.ts"; // job-scoped prompts: the pm/qa job-lanes (scheduler fire units that fire as their owning actor)
+import { servableBacklogDepth, pmMaintenanceSlice, qaMaintenanceSlice, seniorDevModePick } from "./servable.ts"; // lane-gate board reads: Backlog depth (groom), pm/qa In-Review+unblock counts (maintenance), the senior-dev Mode pick
 import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases shared with the bundle-load validator — a zod-free leaf (roster still sourced from seed.ts AGENT_HANDLES)
-import { writeSchedulerBuild, teamDirOf } from "./scheduler-build.ts"; // LOOP-253: which build is orchestrating this loop — a zod-free leaf, same LOOP-58 reason
+import { writeSchedulerBuild, teamDirOf, breakerStatePath } from "./scheduler-build.ts"; // LOOP-253: which build is orchestrating this loop — a zod-free leaf, same LOOP-58 reason
 import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fire copy of the shared checkout — a zod-free leaf, for the same LOOP-58 reason as servable.ts below
 import { servableSlice, isDevTierActor } from "./servable.ts"; // LOOP-144: the SHARED servable predicate the queue-depth gate consumes — a zod-free leaf (NOT agentops, whose tooldefs→zod tree would break the src-only --help load, LOOP-58)
 import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
-import { breaker, formatBreakerMsg, providerOf, classifyFireError, producedNoWork, EXIT_NO_WORK } from "./breaker.ts";
+import { breaker, formatBreakerMsg, providerOf, classifyFireError, producedNoWork, EXIT_NO_WORK, readBreakerState, createBreakerPersistence, type BreakerRestoreItem } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter, makeStdoutCapture, usageFromCapture } from "./fire-usage.ts";
 import { releaseClaimedTickets } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
@@ -37,6 +39,14 @@ import type { DatabaseSync } from "node:sqlite";
 // used to fire an agent the hub refuses (G1) — tokens burned, board unwritable. Now they cannot diverge.
 const VALID_AGENTS = AGENT_HANDLES;
 type Agent = (typeof VALID_AGENTS)[number];
+
+// Job-scoped prompts (docs/design/job-scoped-prompts.md): a LANE (pm-* / qa-*) is a scheduler fire unit that
+// fires with the actor identity of a real agent. `SchedKey` is what the SCHEDULER schedules — the seed roster
+// plus the pm/qa lanes — while everything that EXECUTES a fire (SKILL read, DEVLOOP_ACTOR, breaker, ledger,
+// board slice) keys on the resolved ACTOR (a real Agent). `laneActor` maps a lane → its owning actor and every
+// real agent → itself, so a run with no lane token is byte-identical to before (the lane path is purely additive).
+type SchedKey = Agent | Lane;
+const laneActor = (a: SchedKey): Agent => (isLane(a) ? LANE_ACTOR[a] : a);
 
 // A coding-agent CLI the scheduler can drive. `claude` + `codex` are fully wired; `opencode` is
 // recognized everywhere in config (per-agent selection + per-coding-agent defaults) and launched
@@ -86,9 +96,9 @@ type EffortConfigValue = string | {
 };
 
 const AGENT_SET = new Set<string>(VALID_AGENTS);
-const GROUPS: Record<string, Agent[]> = AGENT_GROUPS; // one source, shared with bundle-load (LOOP-184)
-const DEFAULT_AGENTS: Agent[] = GROUPS.core;
-const DEFAULT_INTERVALS: Record<Agent, number> = {
+const GROUPS: Record<string, SchedKey[]> = AGENT_GROUPS; // one source, shared with bundle-load (LOOP-184); a group may list pm/qa lane tokens (job-scoped prompts)
+const DEFAULT_AGENTS: SchedKey[] = GROUPS.core;
+const DEFAULT_INTERVALS: Record<SchedKey, number> = {
   pm: 5 * 60_000,
   qa: 5 * 60_000,
   dev: 5 * 60_000,
@@ -99,13 +109,40 @@ const DEFAULT_INTERVALS: Record<Agent, number> = {
   ops: 10 * 60_000,
   architect: 24 * 60 * 60_000,
   communication: 24 * 60 * 60_000,
+  // pm job-lanes: maintenance is mechanical + frequent (share pm's 5m); groom + review are the design-ish
+  // lanes and fire slower (grooming keeps pace with the backlog; review is change-gated). team.agents.<lane>.cadence overrides.
+  "pm-maintenance": 5 * 60_000,
+  "pm-groom": 15 * 60_000,
+  "pm-review": 30 * 60_000,
+  // qa job-lanes: maintenance is mechanical + frequent (share qa's 5m); hunt is the expensive bug-hunt
+  // battery, change-gated, so it fires slower. team.agents.<lane>.cadence overrides.
+  "qa-maintenance": 5 * 60_000,
+  "qa-hunt": 30 * 60_000,
 };
 // Built-in role defaults, per coding agent — the floor beneath codingAgentDefaults{}, the back-compat
 // models{}/efforts{} maps, and agents{}. opencode model names are provider-specific and unknown to the
 // scheduler, so its built-in is empty ({} ⇒ opencode's own default) — pin one via codingAgentDefaults
 // or agents{}.
-const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<CodingAgent, CodingAgentDefault>> = {
+const DEFAULT_LAUNCH_PROFILES: Record<SchedKey, Record<CodingAgent, CodingAgentDefault>> = {
   pm: {
+    claude: { model: "opus", effort: "max" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
+  },
+  // pm job-lanes (job-scoped prompts): per-job model tiers unlocked by the split — maintenance is
+  // mechanical (verify/unblock) so it runs a CHEAPER/faster class; groom + review are judgment-scaffold
+  // (design-ish shaping / product ideation) so they run the STRONGER class. team.agents.<lane>.model overrides.
+  "pm-maintenance": {
+    claude: { model: "sonnet", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
+  },
+  "pm-groom": {
+    claude: { model: "opus", effort: "max" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
+    opencode: {},
+  },
+  "pm-review": {
     claude: { model: "opus", effort: "max" },
     codex: { model: "gpt-5.5", effort: "xhigh" },
     opencode: {},
@@ -113,6 +150,19 @@ const DEFAULT_LAUNCH_PROFILES: Record<Agent, Record<CodingAgent, CodingAgentDefa
   qa: {
     claude: { model: "sonnet", effort: "high" },
     codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
+  },
+  // qa job-lanes (job-scoped prompts): maintenance is mechanical (verify/unblock) so it runs the CHEAPER/
+  // faster class; hunt is judgment-scaffold (the bug-hunt battery) so it runs the STRONGER class.
+  // team.agents.<lane>.model overrides.
+  "qa-maintenance": {
+    claude: { model: "sonnet", effort: "high" },
+    codex: { model: "gpt-5.5", effort: "high" },
+    opencode: {},
+  },
+  "qa-hunt": {
+    claude: { model: "opus", effort: "max" },
+    codex: { model: "gpt-5.5", effort: "xhigh" },
     opencode: {},
   },
   dev: {
@@ -171,7 +221,7 @@ type ProjectsConfig = {
     // Two-level launch config (conventions §11 / config-schema):
     defaultCodingAgent?: string;                                       // project-wide level-1 default coding agent
     codingAgentDefaults?: Partial<Record<CodingAgent, CodingAgentDefault>>; // per-coding-agent default model + effort
-    agents?: Partial<Record<Agent, AgentLaunchConfig>>;               // per-agent: codingAgent + model + effort
+    agents?: Partial<Record<SchedKey, AgentLaunchConfig>>;            // per-agent + per-pm-lane: codingAgent + model + effort + cadence (a lane is an agent-roster key)
     hub?: HubBlock;                                                    // D8: agentInterface per coding agent ("cli"|"mcp"; service only)
     // Back-compat per-agent maps (still honored, below agents{} / above codingAgentDefaults):
     models?: Partial<Record<Agent, ModelConfigValue>>;
@@ -184,13 +234,13 @@ type ProjectsConfig = {
 type Options = {
   cli: RunnerCli;        // run-wide DEFAULT coding agent (from --cli / DEVLOOP_RUNNER_CLI); per-agent config can override it
   cliExplicit: boolean;  // true when --cli was passed on the command line (beats config defaultCodingAgent)
-  agents: Agent[];
-  intervals: Record<Agent, number>;
+  agents: SchedKey[];
+  intervals: Record<SchedKey, number>;
   once: boolean;
   dryRun: boolean;
   devSplit: boolean;
   plan: number;          // team mode: print the next N (agent, project) picks and exit (0 = off)
-  intervalsExplicit: Set<Agent>; // agents whose cadence came from --interval (beats config cadence)
+  intervalsExplicit: Set<SchedKey>; // agents/lanes whose cadence came from --interval (beats config cadence)
   project?: string;
   root: string;
   dataDir: string;
@@ -202,10 +252,20 @@ type Options = {
   claudeBin: string;
   codexBin: string;
   opencodeBin: string;
-  codexSafe: boolean;
+  // WS-A C4 — the codex lane is SAFE by default: the bypass flags ride only when the resolved sandbox is
+  // "bypass" (run flag --codex-unsafe > team.agents.<a>.codexSandbox > team.codex.sandbox > "safe").
+  codexSandbox?: CodexSandbox;                                 // --codex-unsafe ⇒ "bypass" (run-wide, beats config)
+  teamCodexSandbox?: CodexSandbox;                             // team.codex.sandbox (team mode)
+  agentCodexSandbox?: Partial<Record<Agent, CodexSandbox>>;    // team.agents.<a>.codexSandbox (team mode)
+  claudeAllowedTools?: string[];                               // team.claude.allowedTools → --allowedTools (absent ⇒ no flag)
+  claudePermissionMode?: string;                               // team.claude.permissionMode → --permission-mode (absent ⇒ no flag)
+  teamBootCorpus?: boolean;                                    // team.bootCorpus (team mode); undefined ⇒ ON (the WS-A default)
+  ws?: Workspace;                                              // team mode: the loaded workspace — the A6 "Resolved config" block reads it
+  dumpPrompt?: string;                                         // --dump-prompt <dir>: a dry-run writes <dir>/<agent>.prompt.txt (the byte-stable-prefix test seam)
   maxFires: number;     // 0 = unlimited; else stop after N total fires (cost guard)
+  breakerReset: boolean; // WS-C review 4: --breaker-reset — ignore the persisted breaker.json; every breaker starts closed (default: an open breaker RESUMES across a restart)
   changeGate: boolean;  // R1: skip spawning a gated inward agent when neither repo HEAD nor the board moved since its last fire (service backend only) — saves the full-turn cost of a fire that would just no-op
-  assembleBoot: boolean; // boot-prefix: append the deterministic §0a boot corpus (conventions union + lessons + backend contract) to the fire prompt — stable prefix for prompt caching; claude lane only (prompt rides stdin: Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB)
+  assembleBoot: boolean | null; // boot-prefix: the §0a boot corpus (conventions slice + resolved config + backend contract + lessons) inlined into the prompt's CONSTANT segment. true/false = an explicit run flag (--assemble-boot / --no-assemble-boot, env DEVLOOP_ASSEMBLE_BOOT=1|0); null = config decides (team.bootCorpus, default ON). Every lane; the prompt then rides stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB)
   changeGateTtlMs: number; // R1a: quiet-board TTL for the pm/qa REVIEW tiers — after this long without a fire, a gated pm/qa fire runs even on an unchanged key (0 = never; the pure gate for them too)
   fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
   stallTimeoutMs?: number; // liveness watchdog: kill a fire whose combined output has been SILENT this long (errorClass "stalled" — feeds the breaker). undefined = per-lane default: 10m on opencode (it streams tool lines; silence = a hung provider call / silent retry loop — the 2026-07 quota-429 incident wedged every fire for the full hour), 0 (off) on claude/codex (claude -p buffers output until the end, so silence is normal there)
@@ -218,8 +278,8 @@ type Options = {
   providers?: Record<string, ProviderEntry>;
   opencodePermission?: Record<string, unknown>;
   wsRoot?: string; // Q9 secret scoping: the workspace whose secrets.env-injected keys are stripped per fire
-  perAgentFireTimeoutMs?: Partial<Record<Agent, number>>;   // per-agent override; beats opts.fireTimeoutMs
-  perAgentStallTimeoutMs?: Partial<Record<Agent, number>>;  // per-agent override; beats opts.stallTimeoutMs
+  perAgentFireTimeoutMs?: Partial<Record<SchedKey, number>>;   // per-agent/-lane override; beats opts.fireTimeoutMs
+  perAgentStallTimeoutMs?: Partial<Record<SchedKey, number>>;  // per-agent/-lane override; beats opts.stallTimeoutMs
 };
 
 // The certified unattended permission policy for opencode fires (PORTABILITY §5, 2026-07-16 on 1.2.24):
@@ -279,6 +339,8 @@ Cadence is owned by this process, not by Claude/Codex /loop. Each fire shells ou
   claude -p <agent skill prompt>
   codex exec ... <agent skill prompt>
   opencode run [--variant <effort>] ... <agent skill prompt>   (certified permission policy injected via env)
+(With the boot corpus on — the default — the prompt rides STDIN on every lane: claude -p, codex exec -,
+opencode run with no positional.)
 
 Options:
   --cli claude|codex|opencode run-wide DEFAULT coding agent (default: claude). Per-agent
@@ -296,10 +358,14 @@ Options:
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
-  --assemble-boot             append the deterministic §0a boot corpus (conventions union + lessons + backend
-                              contract) to each claude fire's prompt via stdin — a byte-stable prefix so
-                              consecutive fires of one agent can hit the prompt cache; the fire skips its own
-                              boot reads (env: DEVLOOP_ASSEMBLE_BOOT=1)
+  --assemble-boot             force the §0a boot corpus ON (conventions slice + resolved config + backend
+                              contract + lessons, inlined into the prompt's byte-constant segment so consecutive
+                              fires of one agent hit the prompt cache; every lane, prompt via stdin). This is the
+                              DEFAULT (team.bootCorpus, unset ⇒ on); env DEVLOOP_ASSEMBLE_BOOT=1|0
+  --no-assemble-boot          force it OFF for this run — fires boot in §0a pull mode (team.bootCorpus:false is
+                              the persistent form)
+  --dump-prompt <dir>         with --dry-run: write each fire's fully assembled prompt to <dir>/<agent>.prompt.txt
+                              — the seam the byte-stable-prefix test reads
   --change-gate               skip spawning a gated inward agent (pm/qa/dev/senior-dev/junior-dev/architect) when
                               neither any repo HEAD nor the hub board moved since its last fire — the biggest cost
                               saver on a quiet loop (service backend only; the agents already no-op in that case,
@@ -318,10 +384,18 @@ Options:
   --background                start the scheduler DETACHED and return the shell: output appends to
                               <workspace>/.dev-loop/run.log; stop it with \`dev-loop stop\` (the operator-console flow)
   --stagger <dur>             delay between the initial slot fires so a cold boot doesn't launch every agent at once (default 20s; 0 = simultaneous)
-  --codex-safe                omit Codex's unsafe bypass flags; useful for read-only/dry runs
+  --codex-unsafe              codex lane: add --dangerously-bypass-approvals-and-sandbox to every codex fire
+                              (the pre-WS-A unattended shape). DEFAULT is SAFE — codex exec runs approval:never
+                              sandbox:read-only, so an unattended fire's write-shaped tool calls are refused and
+                              it still exits 0 — unless team.codex.sandbox:"bypass" (or agents.<a>.codexSandbox)
+                              says so. --skip-git-repo-check always rides (it only lifts the non-git-cwd refusal)
+  --codex-safe                accepted as a no-op (safe is the default since WS-A; kept for old launchers)
   --breaker <n>               failure-streak circuit breaker: N consecutive identical failures of one agent
                               trip its slot to the probe cadence until a fire succeeds (default 5; 0 = off)
   --breaker-probe <dur>       probe cadence while a breaker is open (default 1h; never faster than the slot)
+  --breaker-reset             start every breaker CLOSED. Default: an OPEN breaker persisted by the previous
+                              scheduler (.dev-loop/team/breaker.json) RESUMES when its last failure is younger
+                              than the probe cadence — a restart is not evidence the lane recovered
   --cli-arg <arg>             pass an extra arg to the selected CLI before the prompt; may repeat
                               (CLI binaries: set DEVLOOP_CLAUDE_BIN / DEVLOOP_CODEX_BIN / DEVLOOP_OPENCODE_BIN to override)
 
@@ -381,13 +455,14 @@ function formatDuration(ms: number): string {
   return `${ms}ms`;
 }
 
-function expandAgentSpec(parts: string[]): Agent[] {
-  const out: Agent[] = [];
+function expandAgentSpec(parts: string[]): SchedKey[] {
+  const out: SchedKey[] = [];
   for (const raw of parts.flatMap((p) => p.split(","))) {
     const name = raw.trim();
     if (!name) continue;
     if (GROUPS[name]) out.push(...GROUPS[name]);
     else if (AGENT_SET.has(name)) out.push(name as Agent);
+    else if (isLane(name)) out.push(name); // job-scoped prompts: a pm/qa lane is a schedulable fire unit (fires as its owning actor)
     else die(`unknown agent/group '${name}'`);
   }
   return [...new Set(out)];
@@ -411,7 +486,7 @@ function parseArgs(argv: string[]): Options {
     dryRun: false,
     devSplit: false,
     plan: 0,
-    intervalsExplicit: new Set<Agent>(),
+    intervalsExplicit: new Set<SchedKey>(),
     root: process.env.DEVLOOP_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT || defaultRoot(),
     dataDir: defaultDataDir(),
     dataDirExplicit: false,
@@ -421,10 +496,10 @@ function parseArgs(argv: string[]): Options {
     claudeBin: process.env.DEVLOOP_CLAUDE_BIN || "claude",
     codexBin: process.env.DEVLOOP_CODEX_BIN || "codex",
     opencodeBin: process.env.DEVLOOP_OPENCODE_BIN || "opencode",
-    codexSafe: false,
     maxFires: 0,
+    breakerReset: false,
     changeGate: false,
-    assembleBoot: process.env.DEVLOOP_ASSEMBLE_BOOT === "1",
+    assembleBoot: process.env.DEVLOOP_ASSEMBLE_BOOT === "1" ? true : process.env.DEVLOOP_ASSEMBLE_BOOT === "0" ? false : null,
     changeGateTtlMs: 4 * 60 * 60_000,
     fireTimeoutMs: 60 * 60_000,
     staggerMs: 20_000,
@@ -467,15 +542,19 @@ function parseArgs(argv: string[]): Options {
     }
     else if (a === "--change-gate") opts.changeGate = true;
     else if (a === "--assemble-boot") opts.assembleBoot = true;
+    else if (a === "--no-assemble-boot") opts.assembleBoot = false;
+    else if (a === "--dump-prompt") opts.dumpPrompt = resolve(next());
     else if (a === "--change-gate-ttl") { const v = next(); opts.changeGateTtlMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = pure gate for pm/qa too
     else if (a === "--fire-timeout") { const v = next(); opts.fireTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // 0 = disabled (parseDuration rejects non-positive)
     else if (a === "--stall-timeout") { const v = next(); opts.stallTimeoutMs = v.trim() === "0" ? 0 : parseDuration(v); } // explicit value applies to EVERY lane (0 = off); unset keeps the per-lane default
     else if (a === "--background") opts.background = true;
     else if (a === "--stagger") { const v = next(); opts.staggerMs = v.trim() === "0" ? 0 : parseDuration(v); }
-    else if (a === "--codex-safe") opts.codexSafe = true;
+    else if (a === "--codex-safe") { /* WS-A C4: safe IS the default now — accepted as a no-op for old launchers */ }
+    else if (a === "--codex-unsafe") opts.codexSandbox = "bypass";
     else if (a === "--cli-arg") extraArgs.push(next());
     else if (a === "--breaker") { breaker.threshold = Number(next()); if (!Number.isInteger(breaker.threshold) || breaker.threshold < 0) die("--breaker must be a non-negative integer (0 = off)"); }
     else if (a === "--breaker-probe") breaker.probeMs = parseDuration(next());
+    else if (a === "--breaker-reset") opts.breakerReset = true;
     else die(`unknown option '${a}'`);
   }
 
@@ -568,7 +647,7 @@ type ProjectCfg = NonNullable<ProjectsConfig["projects"]>[string];
 
 // Level 1: which coding agent runs THIS agent. Precedence: per-agent agents{}.codingAgent >
 // an explicit --cli flag > project defaultCodingAgent > the run default (DEVLOOP_RUNNER_CLI / claude).
-function resolveCodingAgent(opts: Options, projectCfg: ProjectCfg | undefined, agent: Agent): CodingAgent {
+function resolveCodingAgent(opts: Options, projectCfg: ProjectCfg | undefined, agent: SchedKey): CodingAgent {
   const perAgent = projectCfg?.agents?.[agent]?.codingAgent;
   if (isCodingAgent(perAgent)) return perAgent;
   if (opts.cliExplicit) return opts.cli;
@@ -579,14 +658,14 @@ function resolveCodingAgent(opts: Options, projectCfg: ProjectCfg | undefined, a
 
 // Level 1 (codingAgent) + level 2 (model + effort). Model/effort precedence, most specific first:
 // agents{} (two-level) > models{}/efforts{} (back-compat) > codingAgentDefaults{} > built-in role default.
-function resolveLaunchProfile(opts: Options, cfg: ProjectsConfig | null, project: string, agent: Agent): LaunchProfile {
+function resolveLaunchProfile(opts: Options, cfg: ProjectsConfig | null, project: string, agent: SchedKey): LaunchProfile {
   const projectCfg = cfg?.projects?.[project];
   const codingAgent = resolveCodingAgent(opts, projectCfg, agent);
   const builtin = DEFAULT_LAUNCH_PROFILES[agent][codingAgent];
   const agentCfg = projectCfg?.agents?.[agent];
   const caDefault = projectCfg?.codingAgentDefaults?.[codingAgent];
-  const modelCfg = projectCfg?.models?.[agent];
-  const effortCfg = projectCfg?.efforts?.[agent];
+  const modelCfg = isLane(agent) ? undefined : projectCfg?.models?.[agent];   // back-compat maps are per-actor; a lane routes through agents{} + its built-in default
+  const effortCfg = isLane(agent) ? undefined : projectCfg?.efforts?.[agent];
   const model =
     stringValue(agentCfg?.model)
     ?? modelOverride(modelCfg, codingAgent)
@@ -615,7 +694,21 @@ function stripFrontmatter(raw: string): string {
 // director's one message a day).
 type TeamScope = { enabledProjects: string[]; teamComms?: { provider: string; webhookEnv: string } | null };
 
-function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile, teamScope?: TeamScope): string {
+// WS-A A6 — why the scheduler launched THIS fire. The scheduler is the only party that knows (a cadence
+// tick, a non-empty servable queue, a breaker probe, `--once`); telling the agent saves it a full board
+// scan to rediscover the same fact, and makes a no-op fire explain itself in one line.
+export type FireReason = { kind: "once" | "cadence" | "queue" | "breaker-probe" | "plan"; text: string };
+
+// WS-A A2 — the prompt is TWO segments so the prompt cache has a byte-identical prefix from byte 0:
+//   CONSTANT  = one fixed header line + the SKILL body (with ${…} substitutions, per-workspace constant)
+//               [+ the boot corpus, appended by runAgent — per (agent, project, config) constant]
+//   VARIABLE  = a stable marker line, then the scheduler-context lines that differ per fire (selected
+//               agents, model/effort, DEVLOOP_DEV_SPLIT, team scope, comms, the launch reason).
+// Nothing in `constant` may carry a timestamp, a fire id, or any per-fire value — hub/test/run-agents.ts
+// asserts two fires' prompts share a prefix at least as long as the constant segment.
+export const FIRE_CONTEXT_MARKER = "<!-- devloop-fire-context -->";
+export interface PromptSegments { constant: string; tail: string }
+function readPrompt(opts: Options, agent: Agent, project: string, profile: LaunchProfile, teamScope?: TeamScope, reason?: FireReason, job?: string): PromptSegments {
   const skill = join(opts.root, "skills", `${agent}-agent`, "SKILL.md");
   if (!existsSync(skill)) die(`skill file not found for '${agent}': ${skill}. Pass --root <dev-loop checkout>.`, 1);
   const split = runtimeDevSplit(opts);
@@ -639,20 +732,83 @@ function readPrompt(opts: Options, agent: Agent, project: string, profile: Launc
     ? `- team-scope: true (this is a TEAM-level fire — iterate/route across the enabled projects below, do not act on a single project only)
 - enabled projects: ${teamScope.enabledProjects.join(", ")}\n${commsLine}${digestLine}`
     : "";
-  return `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop.
+  // Job-scoped prompts: in job mode the constant body is NOT the full SKILL — the boot corpus runAgent
+  // appends carries the resident constitution + this job's playbook + the shared playbooks it pulls. The
+  // constant here is a byte-stable-per-(actor,job) header; the whole SKILL is deliberately not loaded.
+  const constant = job
+    ? `You are launched by dev-loop's own scheduler for ONE job: '${job}'. Run exactly one fresh fire, then stop. Your resident constitution, this job's playbook, and the shared playbooks it pulls are in the boot-corpus block below; your scheduler context (project, model, split switch, and WHY you were launched) is at the END of this prompt, after the devloop-fire-context marker line (the constant part of every fire's prompt ends there).
+`
+    : `You are launched by dev-loop's own scheduler. Run exactly one fresh fire for this agent, then stop. Your scheduler context (project, selected agents, model, split switch, and WHY you were launched) is at the END of this prompt, after the devloop-fire-context marker line (the constant part of every fire's prompt ends there).
 
+${body}`;
+  const tail = `
+
+${FIRE_CONTEXT_MARKER}
 Scheduler context:
 - project: ${project || "(team scope — no single project)"}
-- agent: ${agent}
+- agent: ${agent}${job ? `\n- job-lane job: ${job}` : ""}
 ${teamLines}- selected agents: ${opts.agents.join(",")}
 - coding agent: ${profile.codingAgent}
 - launch model: ${profile.model ?? "(cli default)"}
 - launch effort: ${profile.effort ?? "(cli default)"}
 - DEVLOOP_DEV_SPLIT: ${split ? "true" : "false"}
+- why you were launched: ${reason ? `${reason.kind} — ${reason.text}` : "unspecified (a direct scheduler call)"}
 
 Treat DEVLOOP_DEV_SPLIT:true as an explicit scheduler/runtime split-dev switch for this fire, equivalent to project config devSplit:true. It is not inferred from tickets, history, or logs.
+`;
+  return { constant, tail };
+}
 
-${body}`;
+// WS-A A6 — the §0a step-2 facts the scheduler already holds, shaped for the boot corpus. Team mode reads
+// the loaded workspace (every fact the agent would otherwise walk dev-loop.json for); the legacy fixed-project
+// path reads what the projects.json entry carries. Never doc CONTENT — only where things are and which knobs
+// are set, so the block stays small and byte-constant per (config, project).
+function resolvedConfigFor(opts: Options, cfg: ProjectsConfig | null, project: string, profileProject: string, backend: string, teamScope?: TeamScope): ResolvedFireConfig | undefined {
+  const devSplit = runtimeDevSplit(opts);
+  const strategyLabel = (d: unknown): string | undefined => {
+    if (!d) return undefined;
+    if (typeof d === "string") return /linear\.app\/.*\/document\//.test(d) ? `linearDocument:${d}` : `${d} (repo file)`;
+    if (typeof d === "object") {
+      const o = d as Record<string, unknown>;
+      if (typeof o.hubDoc === "string") return `hubDoc:${o.hubDoc}`;
+      if (typeof o.linearDocument === "string") return `linearDocument:${o.linearDocument}`;
+      if (typeof o.path === "string") return `${o.path} (repo file)`;
+    }
+    return undefined;
+  };
+  const ws = opts.ws;
+  if (ws) {
+    const t = ws.file.team;
+    const repoFacts = (key: string) => reposOfProject(ws, key).map((r) => {
+      const reg = effectiveRepo(ws, r.ref);
+      return { ref: r.ref, role: r.role, landing: reg.landing, defaultBranch: reg.defaultBranch ?? t.git?.defaultBranch, autoMerge: reg.autoMerge, deployStyle: reg.deploy?.style } as ResolvedFireConfig["repos"][number];
+    });
+    if (teamScope) {
+      return {
+        projectKey: project, teamKey: t.key, backend, mode: t.mode, autonomy: t.autonomy, devSplit, docSystem: t.docSystem,
+        deployPolicy: t.deployPolicy, repos: [],
+        teamProjects: stewardProjects(ws).map((k) => ({ key: k, enabled: ws.file.projects[k]?.enabled !== false, weight: ws.file.projects[k]?.weight ?? 1, repos: reposOfProject(ws, k).map((r) => r.ref) })),
+      };
+    }
+    const p = ws.file.projects[profileProject];
+    if (!p) return undefined;
+    const eff = effectiveProject(ws, profileProject);
+    return {
+      projectKey: project, teamKey: t.key, backend, mode: eff.mode, autonomy: eff.autonomy, devSplit,
+      intakeMode: eff.intake?.mode, docSystem: eff.docSystem, deployPolicy: t.deployPolicy,
+      strategyDoc: strategyLabel(p.strategyDoc), repos: repoFacts(profileProject),
+    };
+  }
+  const p = cfg?.projects?.[profileProject] as Record<string, unknown> | undefined;
+  if (!p) return undefined;
+  const repos = Array.isArray(p.repos) && p.repos.length
+    ? (p.repos as Array<Record<string, unknown>>).map((r) => ({ ref: String(r.name ?? r.ref ?? r.path ?? "?"), role: r.role as string | undefined, landing: r.landing as string | undefined, defaultBranch: r.defaultBranch as string | undefined, autoMerge: r.autoMerge === true, deployStyle: (r.deploy as { style?: string } | undefined)?.style }))
+    : typeof p.repoPath === "string" ? [{ ref: profileProject, landing: (p.git as { landing?: string } | undefined)?.landing, defaultBranch: (p.git as { defaultBranch?: string } | undefined)?.defaultBranch }] : [];
+  return {
+    projectKey: project, backend, mode: p.mode as string | undefined, autonomy: p.autonomy as string | undefined, devSplit,
+    intakeMode: (p.intake as { mode?: string } | undefined)?.mode, deployPolicy: p.deployPolicy as Record<string, string> | undefined,
+    strategyDoc: strategyLabel(p.strategyDoc), repos,
+  };
 }
 
 function shellQuote(s: string): string {
@@ -667,6 +823,30 @@ const serverEntry = join(here, `server${EXT}`);
 const hubNode = findCompatibleNode() ?? die(`dev-loop-hub MCP needs Node >= ${MIN_NODE_VERSION} for node:sqlite. Set DEVLOOP_NODE=/absolute/path/to/node.`);
 const tomlString = (s: string): string => JSON.stringify(s);
 const tomlStringArray = (xs: string[]): string => `[${xs.map(tomlString).join(",")}]`;
+
+// WS-A C4 — the ONE resolver for the codex lane's sandbox posture: an explicit --codex-unsafe beats the
+// per-agent config, which beats the team default, which defaults to "safe" (no bypass flags at all).
+export function codexSandboxFor(opts: Pick<Options, "codexSandbox" | "teamCodexSandbox" | "agentCodexSandbox">, agent: Agent): CodexSandbox {
+  return opts.codexSandbox ?? opts.agentCodexSandbox?.[agent] ?? opts.teamCodexSandbox ?? "safe";
+}
+
+// C4 review 1 — ONE scheduler-start line about the codex lane's posture, printed only when a selected agent
+// resolves to codex on any of the projects this run can fire, and only once. The "default" arm is the one
+// that matters: a SAFE codex fire runs `codex exec` at approval:never + sandbox:read-only (codex-cli 0.147.0
+// prints exactly those two header lines), so every write-shaped shell/MCP call is refused inside the fire
+// and the process STILL exits 0 with a non-empty JSONL stream — the ledger records a success, the breaker
+// never trips, W44 never fires. An operator has to learn this before the lane dies, not from `metrics`.
+function printCodexSandboxNotice(opts: Options, cfg: ProjectsConfig | null, projectKeys: string[]): void {
+  const keys = projectKeys.length ? projectKeys : [""];
+  const codexAgents = opts.agents.filter((a) => keys.some((k) => resolveLaunchProfile(opts, cfg, k, a).codingAgent === "codex"));
+  if (!codexAgents.length) return;
+  const postures = new Set(codexAgents.map((a) => codexSandboxFor(opts, laneActor(a))));
+  const posture = postures.size === 1 ? [...postures][0] : "mixed";
+  const explicit = opts.codexSandbox ? " (--codex-unsafe)" : opts.teamCodexSandbox ? " (team.codex.sandbox)" : "";
+  const unpinned = codexAgents.filter((a) => !opts.codexSandbox && !opts.teamCodexSandbox && !opts.agentCodexSandbox?.[laneActor(a)]);
+  if (!unpinned.length) { console.log(`dev-loop run: codex sandbox=${posture}${explicit} for ${codexAgents.join(", ")}`); return; }
+  console.warn(`dev-loop run: NOTICE codex sandbox=${posture} (default) for ${unpinned.join(", ")} — codex exec runs approval:never sandbox:read-only, so an unattended fire's write-shaped tool calls are refused and it still exits 0 (recorded as a success). Pin it: dev-loop team set team.codex.sandbox bypass|safe (doctor W45), or --codex-unsafe for this run.`);
+}
 
 function commandFor(opts: Options, agent: Agent, project: string, prompt: string, profile: LaunchProfile, backend: string, iface: AgentInterface, fireId: string, promptViaStdin = false): { command: string; args: string[]; stdinPayload?: string } {
   const devSplit = runtimeDevSplit(opts) ? "true" : "false";
@@ -692,6 +872,9 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
         ...(mcpArg ? ["--mcp-config", mcpArg, "--strict-mcp-config"] : []),
         ...(profile.model ? ["--model", profile.model] : []),
         ...(profile.effort ? ["--effort", profile.effort] : []),
+        // WS-A C4 — the operator's permission surface, config-driven; absent ⇒ no flag (claude's own settings apply).
+        ...(opts.claudeAllowedTools?.length ? ["--allowedTools", opts.claudeAllowedTools.join(",")] : []),
+        ...(opts.claudePermissionMode ? ["--permission-mode", opts.claudePermissionMode] : []),
         ...claudeAdapter.extraArgs, // "--output-format json" — one terminal JSON object for token/cost + result-text capture
         ...opts.extraArgs,
         // boot-prefix fires pipe the (large) prompt via stdin: Linux MAX_ARG_STRLEN caps one
@@ -722,9 +905,21 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
       ...opts.extraArgs,
       ...hubOverrides,
     ];
-    if (!opts.codexSafe) args.push("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check");
-    args.push(prompt);
-    return { command: opts.codexBin, args };
+    // WS-A C4 — SAFE by default. The bypass flag rides only on an explicit "bypass" (config or --codex-unsafe);
+    // an unattended codex lane that relied on the old unconditional flags sets team.codex.sandbox:"bypass".
+    if (codexSandboxFor(opts, agent) === "bypass") args.push("--dangerously-bypass-approvals-and-sandbox");
+    // Review 1 of C4 — `--skip-git-repo-check` is NOT a sandbox choice and rides on EVERY codex fire. It
+    // only lifts codex's startup refusal outside a git work tree ("Not inside a trusted directory and
+    // --skip-git-repo-check was not specified.", exit 1 before auth or a single token — codex-cli 0.147.0);
+    // it widens nothing (the sandbox stays read-only under "safe"). It was bundled with the bypass flag, so
+    // the SAFE default refused every team-scope steward fire: their cwd is the workspace root, which
+    // `team init` never git-inits. Always-on rather than "only outside a git tree" because the flag is a
+    // no-op inside one, and a per-fire detection (worktrees, a repoPath below the tree root, a checkout
+    // that vanished mid-run) would add a failure mode to remove a flag that costs nothing.
+    args.push("--skip-git-repo-check");
+    // `codex exec -` reads the prompt from stdin (its documented form); the positional stays for a small prompt.
+    args.push(promptViaStdin ? "-" : prompt);
+    return { command: opts.codexBin, args, ...(promptViaStdin ? { stdinPayload: prompt } : {}) };
   }
   // opencode (certified 2026-07-16 on 1.2.24; docs/PORTABILITY.md §5). Default interface is "cli"
   // (identity rides the spawn env into the bash tool); on the "mcp" rollback opencode registers MCP via
@@ -738,9 +933,11 @@ function commandFor(opts: Options, agent: Agent, project: string, prompt: string
     ...(passEffort ? ["--variant", profile.effort as string] : []),
     ...opencodeAdapter.extraArgs, // "--format json" — raw JSONL events for token/cost capture (usage:null on shape drift). opencode STREAMS these, so echo stays live (no resultText) — the operator sees the fire, LOOP-14's regression suppressed it.
     ...opts.extraArgs,
-    prompt,
+    // `opencode run` with NO positional reads the message from a piped stdin (verified against 1.2.x: a non-TTY
+    // stdin is read with Bun.stdin.text() and becomes the message when no positional is given).
+    ...(promptViaStdin ? [] : [prompt]),
   ];
-  return { command: opts.opencodeBin, args };
+  return { command: opts.opencodeBin, args, ...(promptViaStdin ? { stdinPayload: prompt } : {}) };
 }
 
 function displayCommand(command: string, args: string[], prompt: string): string {
@@ -783,7 +980,10 @@ function hardenLedgerPerms(p: string, existedBefore: boolean, mode: number, chmo
 function recordFire(hubDb: string, project: string, agent: Agent, profile: LaunchProfile, durationMs: number, exitCode: number, timedOut: boolean, fireId: string,
   extra?: { suspectError?: boolean; interrupted?: boolean; outputTail?: string; errorClass?: string; watchdog?: WatchdogKind | null; bootBytes?: number; usage?: FireUsage; turns?: number | null }): void {
   const provider = providerOf(profile); // the metrics cost dimension (model-provider-routing)
-  breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider); // P0-1a/P0-1b — every completed fire feeds the streak
+  // P0-1a/P0-1b — every completed fire feeds the streak. LOOP-155 (WS-C review 4): an INTERRUPTED fire does
+  // not — it exits 0 because we signalled it, and record() would otherwise read that as a recovery and the
+  // persisted state at stop would say CLOSED for a breaker the operator merely restarted around.
+  breaker.record(agent, exitCode, extra?.errorClass, extra?.outputTail, provider, { interrupted: !!extra?.interrupted });
   // Backend-agnostic ledger (team mode): the GA soak success-rate metric needs a data source even on
   // linear, where there is no hub `fire.completed` event. Best-effort append; never crashes a fire.
   if (fireLedgerPath) {
@@ -898,7 +1098,7 @@ function gateRecord(state: GateState, slot: string, key: string): void { state[s
 // absent project, db busy) ⇒ null ⇒ fire anyway; never let a broken read starve the loop. Returns the skip
 // REASON (for a distinct, non-silent log line — a silent skip is indistinguishable from a crash) when the fire
 // should skip, else null.
-function devTierQueueSkip(opts: Options, agent: Agent, project: string): string | null {
+function devTierQueueSkip(opts: Options, agent: SchedKey, project: string): string | null {
   if (!isDevTierActor(agent)) return null;                    // pm/qa/architect/stewards — never queue-gated
   try {
     if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
@@ -910,6 +1110,120 @@ function devTierQueueSkip(opts: Options, agent: Agent, project: string): string 
       ? "queue empty (0 servable Todo, 0 In Progress, 0 In Review)"  // distinct from the change-gate's silent skip
       : null;
   } catch { return null; }                                    // any read error ⇒ fail open (fire)
+}
+
+// WS-A A6 — the launch reason, composed from what the scheduler already knows at the moment it fires a slot.
+// Read-only and fail-open like the gates above: a queue-count miss simply yields the cadence wording.
+const ONCE_REASON: FireReason = { kind: "once", text: "operator-invoked `dev-loop run --once` — one fire of each selected agent, then the scheduler exits" };
+function fireReasonFor(opts: Options, agent: SchedKey, project: string, gated: boolean): FireReason {
+  const every = formatDuration(opts.intervals[agent]);
+  const actor = laneActor(agent); // breaker/ledger key on the real actor; a pm lane shares pm's breaker
+  if (breaker.isOpen(actor)) {
+    breaker.markProbe(actor); // WS-C review 4: this fire IS the probe — the persisted entry reads half-open until it ends (every gate above has passed; the spawn follows)
+    return { kind: "breaker-probe", text: `breaker probe — this lane's recent fires failed identically and its breaker is OPEN; this fire probes whether the lane recovered (probe cadence ${formatDuration(breaker.probeMs)}, slot cadence ${every}). Do the smallest real unit of work that proves the lane works; a clean exit closes the breaker` };
+  }
+  if (isDevTierActor(agent)) {
+    try {
+      if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+      const projectId = fireDb ? findProject(fireDb, project) : null;
+      if (fireDb && projectId) {
+        const { todo, inProgress, inReview } = servableSlice(fireDb, projectId, agent);
+        return { kind: "queue", text: `your servable queue is non-empty — ${todo.length} servable Todo, ${inProgress.length} own In Progress, ${inReview.length} In Review to land (cadence ${every}${gated ? ", change-gate passed: a repo HEAD or the board moved since your last fire" : ""})` };
+      }
+    } catch { /* fail open — cadence wording below */ }
+  }
+  return { kind: "cadence", text: `cadence due — this agent fires every ${every}${gated ? "; the change-gate passed (a repo HEAD or the board moved since your last fire, or the quiet-board TTL elapsed)" : ""}` };
+}
+
+// ─── pm/qa job-lanes (job-scoped prompts, docs/design/job-scoped-prompts.md) ─────────────────────────────
+// The scheduler picks the JOB a lane runs from board-row predicates it already computes + the seeded
+// bail-shape labels — the same "$0 arm selection" the dev tiers prove (servableSlice + PICK_RANK). A sibling
+// of devTierQueueSkip: read-only, fails OPEN (a hub-cursor miss on linear/local, an unseeded project, or a db
+// error ⇒ the lane's FIRST job so the fire still runs). Returns the eligible job, or null = nothing to do
+// this fire (the scheduler skips the launch — except a dry-run, which previews the first job).
+//   pm-maintenance ⇒ verify if pm-owned In-Review rows exist, else unblock if blocked+(decision-needed|
+//                    scope-design|needs-pm) rows exist, else null
+//   pm-groom       ⇒ groom if non-blocked Backlog is non-empty (the todoDepthCap only governs promote-vs-groom
+//                    INSIDE the fire — a groom fire is valid at the cap), else null
+//   pm-review      ⇒ review if the change-gate tripped (a repo HEAD or the board moved / the quiet-board TTL
+//                    elapsed) — the same gate pm's review tier already rides — else null
+function pmLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): string | null {
+  const jobs = LANE_JOBS[lane as Lane];
+  try {
+    if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+    const projectId = fireDb ? findProject(fireDb, project) : null;
+    if (!fireDb || !projectId) return jobs[0]; // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
+    if (lane === "pm-maintenance") {
+      const { verify, unblock } = pmMaintenanceSlice(fireDb, projectId);
+      return verify > 0 ? "verify" : unblock > 0 ? "unblock" : null;
+    }
+    if (lane === "pm-groom") return servableBacklogDepth(fireDb, projectId).total > 0 ? "groom" : null;
+    // pm-review: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
+    return gateTripped ? "review" : null;
+  } catch { return jobs[0]; } // any read error ⇒ fail open (run the lane's primary job)
+}
+// qaLaneGate — the pm PoC applied to QA (mirror of pmLaneGate, same fail-open contract).
+//   qa-maintenance ⇒ verify if qa-owned In-Review rows exist, else unblock if needs-qa / blocked+info-needed
+//                    rows exist, else null
+//   qa-hunt        ⇒ bughunt if the change-gate tripped (a watched repo HEAD moved / the board moved / the
+//                    change-gate is off entirely), else null
+function qaLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): string | null {
+  const jobs = LANE_JOBS[lane as Lane];
+  try {
+    if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+    const projectId = fireDb ? findProject(fireDb, project) : null;
+    if (!fireDb || !projectId) return jobs[0]; // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
+    if (lane === "qa-maintenance") {
+      const { verify, unblock } = qaMaintenanceSlice(fireDb, projectId);
+      return verify > 0 ? "verify" : unblock > 0 ? "unblock" : null;
+    }
+    // qa-hunt: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
+    return gateTripped ? "bughunt" : null;
+  } catch { return jobs[0]; } // any read error ⇒ fail open (run the lane's primary job)
+}
+// The ONE lane-gate dispatcher every scheduler branch calls: routes a pm-* lane to pmLaneGate and a qa-* lane
+// to qaLaneGate, so the dispatch code stays lane-owner-agnostic (no pm-only vs qa-only branch that could drift).
+function laneGate(opts: Options, lane: Lane, project: string, gateTripped: boolean): string | null {
+  return isQaLane(lane) ? qaLaneGate(opts, lane, project, gateTripped) : pmLaneGate(opts, lane, project, gateTripped);
+}
+// The launch reason for a lane, naming the chosen job so the fire explains itself in one line
+// ("why you were launched: verify — pm-maintenance picked verify (In-Review work you own)").
+function laneReason(lane: Lane, job: string): FireReason {
+  const why: Record<string, string> = {
+    verify: "In-Review items you own await verification",
+    unblock: "blocked / info-block rows route to your unblock job",
+    groom: "the Backlog has ungroomed work to shape + promote at pace",
+    review: "the change-gate tripped (a repo HEAD or the board moved) — review the product",
+    bughunt: "the change-gate tripped (a repo HEAD or the board moved) — hunt for new bugs",
+  };
+  return { kind: "queue", text: `${job} — the ${lane} lane picked '${job}': ${why[job] ?? "scheduler-selected job"}` };
+}
+
+// ─── the per-agent JOB a real (non-lane) migrated agent's fire loads (job-scoped prompts) ─────────────────
+// Every migrated agent's fire loads its JOB corpus (constitution + the job span + pulled playbooks), never the
+// classic whole-SKILL + conventions-union boot. pm and qa route through their LANES (above); the remaining
+// migrated agents fire as themselves and this resolves the ONE job each loads:
+//   • static stewards + the legacy dev: sweep→sweep, reflect→retro, ops→poll, architect→audit,
+//     communication→article, dev→ship, junior-dev→implement — a fixed agent→job map.
+//   • senior-dev → design vs directcode, chosen from the picked ticket's `Mode:` marker (§21a) via
+//     seniorDevModePick (read-only, fail-open: zero board access ⇒ the default primary job).
+// Returns undefined for pm/qa (their lanes carry the job; the bare `pm`/`qa` actor is the whole-role fallback)
+// and for any non-migrated / unknown key. Read-only + fail-open like the lane gate: a db error yields the
+// static default so the fire still job-boots.
+const STATIC_AGENT_JOBS: Partial<Record<Agent, string>> = {
+  sweep: "sweep", reflect: "retro", ops: "poll", architect: "audit", communication: "article",
+  dev: "ship", "junior-dev": "implement",
+};
+function realAgentJob(opts: Options, agent: Agent, project: string): string | undefined {
+  if (agent === "senior-dev") {
+    try {
+      if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
+      const projectId = fireDb ? findProject(fireDb, project) : null;
+      if (fireDb && projectId) return seniorDevModePick(fireDb, projectId);
+    } catch { /* fall through to the default primary job */ }
+    return "design"; // no hub cursor / unseeded / read error ⇒ fail open to the primary (complex) path
+  }
+  return STATIC_AGENT_JOBS[agent];
 }
 
 // ─── budget-ceiling launch gate (LOOP-229 / design budget-ceiling, Child 3 of LOOP-197) ──────────────────
@@ -952,56 +1266,79 @@ function saveGateState(opts: Options, project: string, state: GateState): void {
   } catch { /* best-effort — a lost gate write just means the next fire runs (fails open) */ }
 }
 
-async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent, project: string, cwd: string, teamScope?: TeamScope): Promise<number> {
+// A prompt past this rides stdin on every lane even with the corpus OFF: Linux MAX_ARG_STRLEN caps one execve
+// argument at 128 KiB, and a SKILL body plus a long tail can approach it on its own.
+const PROMPT_ARGV_LIMIT = 96 * 1024;
+
+async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedKey, project: string, cwd: string, teamScope?: TeamScope, reason?: FireReason, job?: string): Promise<number> {
+  // Job-scoped prompts: `agent` is the scheduler fire-unit key (a real agent OR a pm lane); `actor` is the
+  // identity the fire EXECUTES as — a lane resolves to `pm` (same DEVLOOP_ACTOR, board slice, ledger, breaker),
+  // while `agent` stays the lane for per-lane model/cadence resolution + the operator-facing log/dry-run labels.
+  const actor = laneActor(agent);
   // For a team-scoped steward fire the launch profile resolves against a representative project (the first
   // enabled one) since `project` is "" / "_team"; delivery fires resolve against their own project.
   const profileProject = teamScope && teamScope.enabledProjects.length ? teamScope.enabledProjects[0] : project;
   const profile = resolveLaunchProfile(opts, cfg, profileProject, agent);
-  const rawPrompt = readPrompt(opts, agent, project, profile, teamScope);
-  // LOOP-237 — the PULL half of §0a delivery. Instead of pushing the whole union into every prompt
-  // (75% of context at a measured $4.79/fire), point the agent at the same config-pruned slice on
-  // demand. PER-AGENT and DEFAULT OFF: absent config ⇒ no directive ⇒ the prompt is byte-identical
-  // to today. It injects NO boot corpus and does not touch the push path.
-  const conventionsPull = (cfg as unknown as { team?: { agents?: Record<string, { conventionsPull?: unknown }> } } | undefined)?.team?.agents?.[agent]?.conventionsPull === true;
-  const basePrompt = conventionsPull
-    ? `${rawPrompt}\n\n<!-- devloop-conventions-pull -->\n§0a delivery for this fire is PULL, not push: no conventions corpus is attached. Read the slice you need with \`dev-loop conventions --agent ${agent}\` (add \`--json\` for the anchor/prune accounting). It returns always-read plus your cited spans, minus every span whose feature is off in this workspace — the same prune a pushed corpus would have applied.\n`
-    : rawPrompt;
   const backend = (cfg?.projects?.[profileProject] as { backend?: string } | undefined)?.backend ?? "linear";
-  // boot-prefix: a deterministic §0a corpus appended to the prompt (claude lane only — the prompt then
-  // rides stdin, see commandFor). Assembly failure fails OPEN: the fire boots in classic pull mode.
-  // LOOP-272 — the ONE predicate. Config OR the existing runtime override, so `dev-loop run` can
-  // turn the §0a push path on WITHOUT a hand-typed flag. Default OFF is unchanged: absent config and
-  // no flag resolves false. Claude-lane only, as before (the prompt rides stdin there).
-  const bootCorpusOn = ((cfg as unknown as { team?: { bootCorpus?: unknown } } | undefined)?.team?.bootCorpus === true) || !!opts.assembleBoot;
-  const boot = bootCorpusOn && profile.codingAgent === "claude"
-    ? assembleBootCorpus(opts.root, opts.dataDir, agent, project, backend,
+  // WS-A A1 — the ONE predicate: an explicit run flag (--assemble-boot / --no-assemble-boot) beats config
+  // (team.bootCorpus), which defaults ON. Every lane assembles; the prompt then rides stdin (commandFor).
+  // Before WS-A the config half never reached this function at all (the legacy view carries no `team`),
+  // so `team.bootCorpus:true` was inert and the corpus was flag-only — teamMain now threads it through.
+  const bootCorpusOn = opts.assembleBoot ?? opts.teamBootCorpus ?? ((cfg as unknown as { team?: { bootCorpus?: unknown } } | undefined)?.team?.bootCorpus !== false);
+  // Job-scoped delivery: the corpus reads the ACTOR's SKILL (a lane fires as pm) and, when a job is set,
+  // carries the constitution + that job's playbook instead of the whole SKILL + conventions union.
+  const assemble = (jobArg: string | undefined) => bootCorpusOn
+    ? assembleBootCorpus(opts.root, opts.dataDir, actor, project, backend,
         cfg?.projects?.[profileProject] as Record<string, unknown> | undefined,
         cfg?.repos as Record<string, unknown> | undefined, // config-aware selection: feature-off spans never ship
         // LOOP-275: a team-scoped steward fire spans EVERY enabled project, so the repo-shaped
         // predicates must see all of them. Passing only the representative project pruned §19 from a
         // team fire whenever the first enabled project happened to be single-repo.
-        teamScope ? teamScope.enabledProjects.slice(1).map((k) => cfg?.projects?.[k] as Record<string, unknown> | undefined).filter(Boolean) as Record<string, unknown>[] : undefined)
+        teamScope ? teamScope.enabledProjects.slice(1).map((k) => cfg?.projects?.[k] as Record<string, unknown> | undefined).filter(Boolean) as Record<string, unknown>[] : undefined,
+        // WS-A A6: §0a step 2 pre-assembled — the scheduler's resolved config facts ride the corpus.
+        resolvedConfigFor(opts, cfg, project, profileProject, backend, teamScope), jobArg)
     : null;
-  // AC(B): one notice per claude-lane fire, three DISTINGUISHABLE states. Paired with an always-
-  // numeric bootBytes, this separates "never assembled" (0 + OFF) from "assembled empty"
+  // A job-scoped fire NEEDS its corpus (it replaces the full SKILL). If the corpus is off or fails to
+  // assemble (a missing span/playbook), degrade THIS fire to the classic full-SKILL boot rather than ship
+  // a body with no procedure.
+  // Job-scoped prompts: a pm/qa LANE threads its scheduler-picked `job`; every OTHER migrated agent (dev tiers
+  // + the single-job stewards) resolves its job HERE so its fire loads the job corpus too, not classic-boot.
+  // The bare `pm`/`qa` actor (no lane) resolves to undefined ⇒ the whole-role classic boot fallback.
+  let effJob = job ?? realAgentJob(opts, actor, project);
+  let boot = assemble(effJob);
+  if (effJob && !boot) { effJob = undefined; boot = assemble(undefined); }
+  // WS-A A2 — two segments: the byte-constant prefix (header + SKILL/job body [+ corpus]) and the per-fire
+  // tail. In job mode readPrompt drops the full SKILL body (the job corpus supplies constitution + job span
+  // + playbooks); the constant SEGMENT (readPrompt.constant + boot.text) is byte-stable per (actor, job).
+  const segments = readPrompt(opts, actor, project, profile, teamScope, reason, effJob);
+  // LOOP-237 — the PULL half of §0a delivery: point the agent at the same config-pruned slice on demand.
+  // PER-AGENT and DEFAULT OFF, and only meaningful when no corpus is inlined (a pushed corpus already
+  // carries the slice, and the directive would contradict it). It rides the VARIABLE tail: per-agent config,
+  // but never part of the cacheable constant segment's contract.
+  const conventionsPull = !boot && (cfg as unknown as { team?: { agents?: Record<string, { conventionsPull?: unknown }> } } | undefined)?.team?.agents?.[agent]?.conventionsPull === true;
+  const pullDirective = conventionsPull
+    ? `\n<!-- devloop-conventions-pull -->\n§0a delivery for this fire is PULL, not push: no conventions corpus is attached. Read the slice you need with \`dev-loop conventions --agent ${agent}\` (add \`--json\` for the anchor/prune accounting). It returns always-read plus your cited spans, minus every span whose feature is off in this workspace — the same prune a pushed corpus would have applied.\n`
+    : "";
+  // AC(B): one notice per fire, three DISTINGUISHABLE states (every lane since WS-A). Paired with an
+  // always-numeric bootBytes, this separates "never assembled" (0 + OFF) from "assembled empty"
   // (0 + unavailable) from outside, without reading dist/.
-  if (profile.codingAgent === "claude") {
-    if (!bootCorpusOn) console.log(`[${agent}] boot corpus: OFF — §0a pull mode`);
-    else if (boot) console.log(`[${agent}] boot corpus: ON — ${boot.bytes} B`);
-    else console.warn(`[${agent}] --assemble-boot: corpus assembly unavailable — firing in §0a pull mode`);
-  }
-  const prompt = boot ? basePrompt + boot.text : basePrompt;
+  if (!bootCorpusOn) console.log(`[${agent}] boot corpus: OFF — §0a pull mode`);
+  else if (boot) console.log(`[${agent}] boot corpus: ON — ${boot.bytes} B`);
+  else console.warn(`[${agent}] boot corpus: assembly unavailable — firing in §0a pull mode`);
+  const constantSegment = segments.constant + (boot ? boot.text : "");
+  const prompt = constantSegment + pullDirective + segments.tail;
   // D8 agent interface (service only; meaningless elsewhere): "cli" fires get no hub MCP injection.
   const iface = agentInterfaceFor((cfg?.projects?.[profileProject] as { hub?: HubBlock } | undefined)?.hub, profile.codingAgent);
   const fireId = randomUUID();
-  const { command, args, stdinPayload } = commandFor(opts, agent, project, prompt, profile, backend, iface, fireId, !!boot);
+  const promptViaStdin = !!boot || Buffer.byteLength(prompt, "utf8") > PROMPT_ARGV_LIMIT;
+  const { command, args, stdinPayload } = commandFor(opts, actor, project, prompt, profile, backend, iface, fireId, promptViaStdin);
   // This env block IS the identity transport for interface="cli" fires (D8): the `dev-loop` write layer
   // resolves the actor from DEVLOOP_ACTOR, the project from DEVLOOP_PROJECT, the SoR from DEVLOOP_HUB_DB,
   // and treats DEVLOOP_DEV_SPLIT/DEVLOOP_TEAM_SCOPE as the fire markers behind its operator-write guard —
   // the same values both MCP injections carry. Removing any of these strands every "cli" fire (exit 4).
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    DEVLOOP_ACTOR: agent,
+    DEVLOOP_ACTOR: actor,
     DEVLOOP_PROJECT: project,
     DEVLOOP_HUB_DB: opts.hubDb,
     DEVLOOP_DEV_SPLIT: runtimeDevSplit(opts) ? "true" : "false",
@@ -1084,11 +1421,22 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   const rendered = displayCommand(command, args, prompt) + (stdinPayload ? ` <stdin:${stdinPayload.length} chars>` : "");
   if (opts.dryRun) {
     if (boot) console.log(`[dry-run] ${agent}: boot corpus ${Math.round(boot.bytes / 1024)}KB (conventions ${Math.round(boot.conventionsBytes / 1024)}KB; lessons ${boot.lessonsBytes}B${boot.pruned.length ? `; config-pruned §${boot.pruned.join(" §")}` : ""}) hash=${boot.hash} — prompt via stdin`);
+    // WS-A A2 — the segment accounting: the constant prefix length is what a prompt-cache hit is worth.
+    console.log(`[dry-run] ${agent}: prompt ${Buffer.byteLength(prompt, "utf8")}B = constant ${Buffer.byteLength(constantSegment, "utf8")}B (skill ${Buffer.byteLength(segments.constant, "utf8")}B + corpus ${boot ? boot.bytes : 0}B) + tail ${Buffer.byteLength(pullDirective + segments.tail, "utf8")}B; marker \`${FIRE_CONTEXT_MARKER}\` at ${prompt.indexOf(FIRE_CONTEXT_MARKER)}${promptViaStdin ? "; via stdin" : "; via argv"}`);
+    if (opts.dumpPrompt) {
+      const out = join(opts.dumpPrompt, `${agent}.prompt.txt`);
+      try { mkdirSync(opts.dumpPrompt, { recursive: true }); writeFileSync(out, prompt); console.log(`[dry-run] ${agent}: prompt written to ${out}`); }
+      catch (e) { console.error(`[dry-run] ${agent}: --dump-prompt failed: ${(e as Error).message}`); }
+    }
     const intakeMode = (cfg?.projects?.[project] as { intake?: { mode?: string } } | undefined)?.intake?.mode;
     const dryProvider = providerOf(profile);
     const fireStr = effectiveFireTimeoutMs > 0 ? formatDuration(effectiveFireTimeoutMs) : "off";
     const stallStr = effectiveStallMs > 0 ? formatDuration(effectiveStallMs) : "off";
-    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""} fireTimeout=${fireStr} stallTimeout=${stallStr}`);
+    // C4 review 1 — a codex fire names its sandbox posture on the info line, so an operator reading a
+    // dry-run sees "safe" BEFORE an unattended lane silently does nothing (the command line's absence of
+    // a flag is not something a reader notices).
+    const sandboxStr = profile.codingAgent === "codex" ? ` sandbox=${codexSandboxFor(opts, actor)}` : "";
+    console.log(`[dry-run] ${agent}: cwd=${cwd} cli=${profile.codingAgent}${sandboxStr} model=${profile.model ?? "(cli default)"} effort=${profile.effort ?? "(cli default)"}${dryProvider ? ` provider=${dryProvider}` : ""}${backend === "service" ? ` interface=${iface}` : ""}${agent === "pm" && intakeMode === "passive" ? " intake=passive" : ""} fireTimeout=${fireStr} stallTimeout=${stallStr}`);
     console.log(`[dry-run] ${agent}: ${rendered}`);
     // §16: key NAMES only — this line exists so the operator can see which declared credentials a fire
     // actually holds, and rendering any VALUE here would defeat the strip it is reporting on.
@@ -1103,7 +1451,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   if (providerEnvMissing) {
     const prefix = profile.model?.split("/")[0];
     console.error(`[${agent}] provider '${prefix}' auth env ${providerEnvMissing} unresolvable — put ${providerEnvMissing}=<key> in <workspace>/.dev-loop/secrets.env or export it; failing this fire pre-spawn (doctor W13 surfaces this before the loop)`);
-    recordFire(opts.hubDb, project, agent, profile, 0, 4, false, fireId, { errorClass: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
+    recordFire(opts.hubDb, project, actor, profile, 0, 4, false, fireId, { errorClass: "provider-env-missing", outputTail: `provider '${prefix}' auth env ${providerEnvMissing} unresolvable` });
     return 4;
   }
 
@@ -1301,7 +1649,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       clearTimeout(budgetTimer);
       // A spawn failure (missing/broken CLI bin) never reached the ledger — invisible to metrics AND to
       // the P0-1a breaker, whose canonical trigger (a wedged bin fast-failing identically forever) it is.
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, 1, false, fireId, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
+      recordFire(opts.hubDb, project, actor, profile, Date.now() - startedAt, 1, false, fireId, { errorClass: "spawn-failed", outputTail: e.message.slice(-400) });
       endLog(() => resolveExit(1));
     });
     // Resolve on 'exit', not 'close': 'close' additionally waits for the stdio pipes, which a grandchild
@@ -1418,9 +1766,9 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
       // where byAgent.failures finally ranks a dead lane as dead. `resolveExit(exitCode)` below is
       // deliberately left on the child's real status: this changes what the loop RECORDS about the
       // fire, never what `--once` reports to the shell that invoked it.
-      recordFire(opts.hubDb, project, agent, profile, Date.now() - startedAt, noWork ? EXIT_NO_WORK : exitCode, timedOut, fireId,
+      recordFire(opts.hubDb, project, actor, profile, Date.now() - startedAt, noWork ? EXIT_NO_WORK : exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
-      if (timedOut || stalled || budgetKilled) releaseClaimedTickets(fireDb, project, agent, fireId, budgetKilled ? "budget" : timedOut ? "timeout" : "stall"); // a budget kill must free its claim too (reclaimable next fire)
+      if (timedOut || stalled || budgetKilled) releaseClaimedTickets(fireDb, project, actor, fireId, budgetKilled ? "budget" : timedOut ? "timeout" : "stall"); // a budget kill must free its claim too (reclaimable next fire)
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
@@ -1438,7 +1786,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: Agent,
   });
 }
 
-type Slot = { agent: Agent; nextAt: number; running: boolean };
+type Slot = { agent: SchedKey; nextAt: number; running: boolean };
 type RunnerChild = ChildProcessByStdio<Writable | null, Readable, Readable>; // stdio: [pipe|ignore,"pipe","pipe"] — stdin is a pipe only on boot-prefix fires
 const activeChildren = new Set<RunnerChild>();
 
@@ -1455,7 +1803,7 @@ const activeChildren = new Set<RunnerChild>();
 // The output asymmetry IS the bug's whole surface: an applied cadence is confirmed on stdout, a
 // malformed one is warned about, and a DROPPED one said nothing at all — the one case where the
 // operator's intent was discarded silently.
-function applyConfigCadence(opts: Options, cadenceFor: (agent: Agent) => string | undefined, configured: readonly string[] = []): void {
+function applyConfigCadence(opts: Options, cadenceFor: (agent: SchedKey) => string | undefined, configured: readonly string[] = []): void {
   for (const agent of opts.agents) {
     if (opts.intervalsExplicit.has(agent)) continue;              // --interval wins
     const cad = cadenceFor(agent);
@@ -1481,7 +1829,7 @@ function agentsWithCadence(agents: Record<string, { cadence?: string }> | undefi
 
 // Config-driven per-agent fire/stall timeouts: per-agent config > explicit CLI flag > per-lane default.
 // Schema validation in team-config.ts (E17) guarantees values are well-formed; parseDuration is safe here.
-function applyConfigTimeouts(opts: Options, timeoutFor: (agent: Agent) => { fireTimeout?: string; stallTimeout?: string } | undefined): void {
+function applyConfigTimeouts(opts: Options, timeoutFor: (agent: SchedKey) => { fireTimeout?: string; stallTimeout?: string } | undefined): void {
   if (!opts.perAgentFireTimeoutMs) opts.perAgentFireTimeoutMs = {};
   if (!opts.perAgentStallTimeoutMs) opts.perAgentStallTimeoutMs = {};
   for (const agent of opts.agents) {
@@ -1517,6 +1865,31 @@ function wireBreakerEvents(ws: Workspace | null): void {
     console.error(`[breaker] ${msg}`);
     schedulerNotify(ws, ev === "open" ? "error" : "info", msg);
   };
+}
+
+// WS-C review 4 — breaker persistence. The scheduler is the only process that KNOWS the breaker state
+// (`dev-loop status` used to guess it by replaying the ledger), so it writes it — `<ws>/.dev-loop/team/
+// breaker.json`, or beside the run lock on the workspace-less path — on every change and at start/stop,
+// and RESUMES it on restart (breaker.restore's rules: open entries younger than the probe cadence come
+// back; --breaker-reset starts fresh). breaker.ts stays the single state machine; this only subscribes.
+// Persistent schedulers only: --once / --dry-run never take the run lock and never write, the same rule
+// scheduler-build.json follows (LOOP-459) — a pid that is stale seconds later must not be recorded.
+function wireBreakerPersistence(opts: Options, path: string): void {
+  const now = Date.now();
+  const prior = readBreakerState(path);
+  // An age, coarsely: formatDuration prints exact units only, and "3604159ms ago" is not a sentence.
+  const rough = (ms: number): string => { const unit = ms >= 3_600_000 ? 3_600_000 : ms >= 60_000 ? 60_000 : 1_000; return formatDuration(Math.max(unit, Math.round(ms / unit) * unit)); };
+  const fmt = (i: BreakerRestoreItem) => `${i.kind === "provider" ? "provider " : ""}${i.name} (${i.reason ?? "?"} ×${i.streak}, last failure ${rough(i.ageMs)} ago)`;
+  if (opts.breakerReset) {
+    if (prior) console.log(`dev-loop run: --breaker-reset — ignoring the persisted breaker state at ${path} (pid ${prior.scheduler.pid}, updated ${prior.updatedAt}); every breaker starts CLOSED`);
+  } else if (prior) {
+    const r = breaker.restore(prior, now);
+    if (r.resumed.length) console.log(`dev-loop run: breaker RESUMED from ${path}: ${r.resumed.map(fmt).join("; ")} — a restart does not close a breaker; the first fire on each lane is its probe (--breaker-reset starts fresh)`);
+    if (r.stale.length) console.log(`dev-loop run: breaker state not resumed for ${r.stale.map(fmt).join("; ")} — older than the probe cadence ${formatDuration(breaker.probeMs)}, so the previous scheduler would have re-probed by now; those lanes start fresh`);
+  }
+  const p = createBreakerPersistence({ path, startedAt: new Date(now).toISOString() });
+  p.flush("start");
+  process.on("exit", () => { p.stop(); }); // the final snapshot carries stoppedAt — a reader distinguishes a stop from a crash
 }
 
 // Schema v2: a discoverable workspace is authoritative for BOTH config and state paths (hub db, data dir,
@@ -1594,18 +1967,31 @@ async function main(): Promise<void> {
   if (gateActive) console.log(`dev-loop run: change-gate ON for ${[...GATED_AGENTS].filter((g) => opts.agents.includes(g)).join(", ") || "(no gated agents selected)"} (pm/qa quiet-board TTL ${opts.changeGateTtlMs > 0 ? formatDuration(opts.changeGateTtlMs) : "off — pure gate"})`);
   console.log(`dev-loop run: cli=${opts.cli} project=${project} cwd=${cwd}`);
   console.log(`dev-loop run: root=${opts.root} data=${opts.dataDir} hubDb=${opts.hubDb}`);
+  printCodexSandboxNotice(opts, cfg, [project]); // C4 review 1 — the legacy fixed-project path gets the same one-line notice
   const cfgDevSplit = cfg?.projects?.[project]?.devSplit === true;
   const runtimeSplit = runtimeDevSplit(opts);
   if (runtimeSplit || cfgDevSplit) console.log(`dev-loop run: devSplit=${runtimeSplit ? "runtime" : "config"}${cfgDevSplit ? " (config:true)" : ""}`);
   console.log(`dev-loop run: agents=${opts.agents.map((a) => `${a}@${formatDuration(opts.intervals[a])}`).join(", ")}`);
   console.log(`dev-loop run: launch=${opts.agents.map((a) => {
     const p = resolveLaunchProfile(opts, cfg, project, a);
-    breaker.seedProvider(a, providerOf(p)); // LOOP-72: close the cold-start window before any fire runs
+    breaker.seedProvider(laneActor(a), providerOf(p)); // LOOP-72: close the cold-start window before any fire runs
     return `${a}:${p.codingAgent}:${p.model ?? "cli-default"}/${p.effort ?? "cli-default"}`;
   }).join(", ")}`);
 
   if (opts.once) {
-    const results = await Promise.all(opts.agents.map((a) => runAgent(opts, cfg, a, project, cwd)));
+    const results = await Promise.all(opts.agents.map((a) => {
+      // Job-scoped prompts: --once fires each selected unit ONCE (no gate-skip). For a pm/qa lane the scheduler
+      // still picks the job from the board (+ the change-gate for review/hunt), falling back to the lane's
+      // primary job when nothing is eligible, so the single fire always has a job to run. Every other migrated
+      // agent resolves its job inside runAgent (realAgentJob), so a bare `--once` call still job-boots.
+      if (isLane(a)) {
+        const key = gateActive ? changeKey(opts, cfg, project) : null;
+        const tripped = !(gateActive && gateSkips(opts, gateState, a, laneActor(a), key));
+        const job = laneGate(opts, a, project, tripped) ?? LANE_JOBS[a][0];
+        return runAgent(opts, cfg, a, project, cwd, undefined, laneReason(a, job), job);
+      }
+      return runAgent(opts, cfg, a, project, cwd, undefined, ONCE_REASON);
+    }));
     await flushStdio();
     process.exit(results.every((c) => c === 0) ? 0 : 1);
   }
@@ -1626,6 +2012,7 @@ async function main(): Promise<void> {
       takeLock();
     }
     process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
+    wireBreakerPersistence(opts, join(process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb), `breaker-${project}.json`)); // WS-C review 4: no workspace ⇒ no team dir; beside the run lock, per project like it
   }
 
   // Boot stagger: every slot used to start at nextAt=now, so a cold `core` boot fired 5 CLI processes
@@ -1696,10 +2083,24 @@ async function main(): Promise<void> {
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
         continue;
       }
-      // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
-      // entirely (the agent would just no-op) — except a pm/qa review fire past the quiet-board TTL (R1a).
-      // fails open: a null key (no hub / git error) never skips.
-      if (gateActive && GATED_AGENTS.has(slot.agent)) {
+      // Job-scoped prompts: a pm/qa lane owns its OWN gate — the scheduler picks the lane's job from board
+      // rows (+ the change-gate for review/hunt). null ⇒ nothing eligible this fire ⇒ skip (a dry-run still
+      // previews the lane's primary job). The generic change/queue gates below are for real agents only.
+      let laneJob: string | undefined;
+      if (isLane(slot.agent)) {
+        const actor = laneActor(slot.agent);
+        const key = gateActive ? changeKey(opts, cfg, project) : null;
+        const tripped = !(gateActive && gateSkips(opts, gateState, slot.agent, actor, key));
+        const picked = laneGate(opts, slot.agent, project, tripped);
+        if (picked === null && !opts.dryRun) {
+          slot.nextAt = now + breaker.intervalFor(actor, opts.intervals[slot.agent]);
+          continue; // nothing eligible for this lane this fire (no-op avoided, no token burn)
+        }
+        laneJob = picked ?? LANE_JOBS[slot.agent][0];
+      } else if (gateActive && GATED_AGENTS.has(slot.agent)) {
+        // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
+        // entirely (the agent would just no-op) — except a pm/qa review fire past the quiet-board TTL (R1a).
+        // fails open: a null key (no hub / git error) never skips.
         const key = changeKey(opts, cfg, project);
         if (gateSkips(opts, gateState, slot.agent, slot.agent, key)) {
           slot.nextAt = now + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]);
@@ -1717,17 +2118,23 @@ async function main(): Promise<void> {
       }
       slot.running = true;
       fired++;
-      runAgent(opts, cfg, slot.agent, project, cwd)
+      const fireReason = isLane(slot.agent)
+        ? laneReason(slot.agent, laneJob!)
+        : fireReasonFor(opts, slot.agent, project, gateActive && GATED_AGENTS.has(slot.agent));
+      runAgent(opts, cfg, slot.agent, project, cwd, undefined, fireReason, laneJob)
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); return 1; })
         .finally(() => {
           slot.running = false;
-          slot.nextAt = Date.now() + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
+          slot.nextAt = Date.now() + breaker.intervalFor(laneActor(slot.agent), opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
           // Record the POST-fire change-key (+ the fire time, the R1a TTL anchor) so the next tick compares
           // against the state this fire left behind (an agent's own writes bump the key once, then it
-          // settles → skips until the NEXT external change or, for pm/qa, the TTL).
+          // settles → skips until the NEXT external change or, for pm/qa, the TTL). pm-review rides the same
+          // change-gate (its own slot key), so it records too; pm-maintenance/pm-groom and qa-maintenance gate
+          // on board rows and recording is a harmless no-op they never read.
           // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
           // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
-          if (gateActive && GATED_AGENTS.has(slot.agent) && !opts.dryRun) {
+          const gateRecorded = isLane(slot.agent) ? gateActive : (gateActive && GATED_AGENTS.has(slot.agent));
+          if (gateRecorded && !opts.dryRun) {
             const key = changeKey(opts, cfg, project);
             if (key !== null) { gateRecord(gateState, slot.agent, key); saveGateState(opts, project, gateState); }
           }
@@ -1797,6 +2204,19 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   opts.providers = ws.file.team.providers ?? {};
   opts.opencodePermission = ws.file.team.opencodePermission;
   opts.wsRoot = ws.root; // Q9: fire env strips this workspace's secrets.env-injected keys
+  // WS-A — the team-level knobs that never reached runAgent before (the legacy view carries no `team`):
+  // the boot-corpus switch (A1), the codex sandbox posture + claude permission surface (C4), and the
+  // workspace itself for the resolved-config block (A6). Read once at boot, like providers above.
+  opts.ws = ws;
+  opts.teamBootCorpus = ws.file.team.bootCorpus;
+  opts.teamCodexSandbox = ws.file.team.codex?.sandbox;
+  opts.agentCodexSandbox = Object.fromEntries(Object.entries(ws.file.team.agents ?? {}).flatMap(([a, c]) => c?.codexSandbox ? [[a, c.codexSandbox]] : [])) as Partial<Record<Agent, CodexSandbox>>;
+  opts.claudeAllowedTools = ws.file.team.claude?.allowedTools;
+  opts.claudePermissionMode = ws.file.team.claude?.permissionMode;
+  // C4 review 1 — the notice used to resolve against the FIRST project only, so a codex lane routed by a
+  // second project's config (or by a project-scope agents{} block) printed nothing. Every enabled project
+  // is consulted; the line prints ONCE at boot, never per fire.
+  printCodexSandboxNotice(opts, cfg, Object.keys(ws.file.projects).filter((k) => !isTeamProject(k) && ws.file.projects[k]?.enabled !== false));
   wireBreakerEvents(ws); // P0-1a notices ride team comms when configured
 
   // `--project` filter: restrict DELIVERY rotation to a single named project. It must exist + be enabled;
@@ -1811,7 +2231,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const candidates = opts.project ? allCandidates.filter((c) => c.key === opts.project) : allCandidates;
   // weight:0 = maintenance mode (T3.2): delivery rotation pauses but stewards keep covering the project —
   // so an all-weight:0 team still runs its selected stewards. Refuse only when NOTHING could ever fire.
-  const stewardsSelected = opts.agents.some((a) => STEWARD_AGENTS.has(a));
+  const stewardsSelected = opts.agents.some((a) => STEWARD_AGENTS.has(laneActor(a)));
   if (!candidates.length) {
     const scope = opts.project ? `--project '${opts.project}' is weight:0` : `no enabled, positively-weighted project in team '${ws.file.team.key}' (all disabled or weight:0?)`;
     if (!stewardsSelected || !stewardProjects(ws).length) die(`${scope} — nothing to fire (weight:0 pauses delivery; only stewards keep covering it)`, 2);
@@ -1841,7 +2261,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // A local WRR picker over just the (possibly filtered) candidate set, persisting the shared cursor.
   let schedState: SchedulerState = loadSchedulerState(ws);
-  const pickProject = (agent: Agent): string => {
+  const pickProject = (agent: SchedKey): string => {
     // pickAndAdvance uses rotationCandidates(ws); to honor a --project filter we run the step on `candidates`.
     const { pick, cur } = smoothWRRStep(candidates, schedState[agent] ?? {});
     schedState[agent] = cur as CursorMap;
@@ -1884,7 +2304,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   if (opts.changeGate && !gateActive) console.warn(`dev-loop run: --change-gate ignored on backend:"${backend}" (needs the service hub board cursor)`);
   if (gateActive) console.log(`dev-loop run: change-gate ON (pm/qa quiet-board TTL ${opts.changeGateTtlMs > 0 ? formatDuration(opts.changeGateTtlMs) : "off — pure gate"})`);
   const gateState: GateState = gateActive ? loadGateState(opts, "team") : {};
-  const gateKey = (agent: Agent, project: string) => `${agent}:${project}`;
+  const gateKey = (agent: SchedKey, project: string) => `${agent}:${project}`;
 
   // The project list a steward fire iterates over (it also drives the launch-profile representative):
   // every ENABLED project at ANY weight — weight:0 pauses DELIVERY only (T3.2) — and never narrowed by
@@ -1904,7 +2324,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     if (!fireDb) return true;
     try { return !!findProject(fireDb, project); } catch { return true; }
   };
-  const warnUnseeded = (agent: Agent, project: string): void => {
+  const warnUnseeded = (agent: SchedKey, project: string): void => {
     if (unseededWarned.has(project)) return;
     unseededWarned.add(project);
     console.error(`[${agent}] project '${project}' is backend:"service" but not seeded in ${opts.hubDb} — ${opts.dryRun ? "real fires would get no hub tools" : "skipping its fires (siblings keep rotating)"}; seed it once: dev-loop seed ${project} "<Project Name>" <UNIQUE_PREFIX>`);
@@ -1912,20 +2332,30 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
   // pick a project (skipping gated-unchanged + unseeded ones up to one full rotation), resolve its cwd, and run.
-  const fireAgentOnce = async (agent: Agent): Promise<void> => {
-    if (STEWARD_AGENTS.has(agent)) {
+  const fireAgentOnce = async (agent: SchedKey, reason?: FireReason): Promise<void> => {
+    const actor = laneActor(agent); // a pm lane executes as pm; steward/gate membership tests key on the actor
+    if (STEWARD_AGENTS.has(actor)) {
       // teamComms reads through `ws` at fire time so a hot-reloaded comms block takes effect next fire.
-      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: stewardScope(), teamComms: ws.file.team.comms ?? null });
+      await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: stewardScope(), teamComms: ws.file.team.comms ?? null }, reason ?? fireReasonFor(opts, agent, stewardProject, false));
       return;
     }
     let project: string | null = null;
+    let laneJob: string | undefined; // job-scoped prompts: the job the pm/qa lane runs in the picked project
     for (let attempt = 0; attempt < candidates.length; attempt++) {
       const p = pickProject(agent); // advances the shared cursor every attempt (skip-advance)
       if (!seededInHub(p)) {
         warnUnseeded(agent, p);
         if (!opts.dryRun) continue; // skip the token burn; a dry-run previews on (same shape as the legacy preflight)
       }
-      if (gateActive && GATED_AGENTS.has(agent)) {
+      if (isLane(agent)) {
+        // A pm/qa lane owns its own gate: the scheduler picks the lane's job from THIS project's board rows
+        // (+ the change-gate for review/hunt). null ⇒ nothing eligible here ⇒ try the next candidate project.
+        const key = gateActive ? changeKey(opts, cfg, p) : null;
+        const tripped = !(gateActive && gateSkips(opts, gateState, gateKey(agent, p), actor, key));
+        const picked = laneGate(opts, agent, p, tripped);
+        if (picked === null && !opts.dryRun) continue;
+        laneJob = picked ?? LANE_JOBS[agent][0];
+      } else if (gateActive && GATED_AGENTS.has(agent)) {
         const key = changeKey(opts, cfg, p);
         if (gateSkips(opts, gateState, gateKey(agent, p), agent, key)) continue; // unchanged (and inside the pm/qa TTL) ⇒ skip, try next candidate
         // R1b (LOOP-144): a dev tier with an empty servable slice in THIS project would no-op — skip to the next
@@ -1938,10 +2368,13 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     if (project === null) return; // every candidate gated-unchanged / unseeded this round ⇒ no fire
     const cwd = cwdFor(project);
     if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
-    await runAgent(opts, cfg, agent, project, cwd);
+    const fr = isLane(agent) ? laneReason(agent, laneJob!) : (reason ?? fireReasonFor(opts, agent, project, gateActive && GATED_AGENTS.has(agent)));
+    await runAgent(opts, cfg, agent, project, cwd, undefined, fr, laneJob);
     // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
     // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
-    if (gateActive && GATED_AGENTS.has(agent) && !opts.dryRun) {
+    // A pm/qa lane records under its lane:project slot (pm-review/qa-hunt read it; the mechanical lanes never do).
+    const gateRec = isLane(agent) ? gateActive : (gateActive && GATED_AGENTS.has(agent));
+    if (gateRec && !opts.dryRun) {
       const key = changeKey(opts, cfg, project);
       if (key !== null) { gateRecord(gateState, gateKey(agent, project), key); saveGateState(opts, "team", gateState); }
     }
@@ -1954,7 +2387,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, Date.now());
     for (const a of opts.agents) {
       if (budgetReason !== null) { console.log(`[${a}] launch refused: ${budgetReason}`); continue; } // refuse, loudly (AC3)
-      await fireAgentOnce(a);
+      await fireAgentOnce(a, ONCE_REASON);
     }
     process.exit(0);
   }
@@ -1977,7 +2410,17 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // One scheduler per team: the run lock is team-scoped (two schedulers for one team double-fire everything).
   const lockPath = wsLockPath(ws, "run");
-  if (!opts.dryRun) acquireRunLock(lockPath, ws.file.team.key);
+  if (!opts.dryRun) {
+    acquireRunLock(lockPath, ws.file.team.key);
+    // LOOP-72 in TEAM mode (WS-C review 4): seed each lane's provider at boot so an open provider breaker —
+    // resumed below, or tripped later by a sibling — caps every lane on that provider before any of them
+    // has fired. The legacy path seeds from its `launch=` line; this one never did, so a long-cadence
+    // lane stayed invisible to the provider breaker until its own first fire. Resolved against the first
+    // rotation candidate (the representative a steward fire's profile uses too); record() overwrites it
+    // with the fired profile's provider on every fire end.
+    for (const a of opts.agents) breaker.seedProvider(laneActor(a), providerOf(resolveLaunchProfile(opts, cfg, candidates[0]?.key ?? stewardProject, a)));
+    wireBreakerPersistence(opts, breakerStatePath(teamDirOf(wsStateRoot(ws))));
+  }
 
   // Hot-reload dev-loop.json on mtime change: enabled/weight edits take effect without a restart. A parse
   // failure keeps the last-good config (never run with a half-written file).
@@ -2024,7 +2467,12 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
   // Graceful stop: forward SIGINT to the DIRECT child only (not the process group) — see the LOOP-23
   // decision at the other scheduler entrypoint above for why the graceful path stays non-forceful.
-  const interrupt = () => { const first = !stopping; drain(); if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes"); for (const child of activeChildren) child.kill("SIGINT"); };
+  // LOOP-155 latch (WS-C review 4): the legacy scheduler set `schedulerInterrupted` here and this one never
+  // did, so a team-mode `dev-loop stop` charged the fire it killed to the agent — as a suspectError, as
+  // "no-output" (EXIT_NO_WORK, a breaker FAILURE), or, when the agent managed a clean exit, as a SUCCESS
+  // that closed an open breaker seconds before the state was persisted. The operator's own stop is
+  // evidence of nothing; classify it as such on both schedulers.
+  const interrupt = () => { const first = !stopping; schedulerInterrupted = true; drain(); if (first) console.log("dev-loop run: stopping; forwarding SIGINT to active agent processes"); for (const child of activeChildren) child.kill("SIGINT"); };
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
 
@@ -2074,7 +2522,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
         .finally(() => {
           slot.running = false;
-          slot.nextAt = Date.now() + breaker.intervalFor(slot.agent, opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
+          slot.nextAt = Date.now() + breaker.intervalFor(laneActor(slot.agent), opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
           if (stopping && activeChildren.size === 0) process.exit(0);
         });
       if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }

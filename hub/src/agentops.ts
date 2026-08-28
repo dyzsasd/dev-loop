@@ -26,7 +26,7 @@ import { actorExists, listActorHandles, logEvent, unifiedDiff, STATES, type Stat
 import { ticketSearchClause } from "./ticket-search.ts"; // LOOP-97: the ONE search predicate, shared with views/board.ts
 import { isDevTierActor, servableSlice, servableTodoDepth } from "./servable.ts"; // LOOP-144/LOOP-251: shared dev-tier servable predicate + todoDepth from the same predicate
 import { designParentIds, isDesignParent, TERMINAL_STATES } from "./design-parent.ts"; // LOOP-344: ONE definition, shared with the write layer's verify gate (LOOP-345)
-import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection } from "./ticketwrite.ts";
+import { insertTicket, updateTicketRow, insertComment, loadRelease, verifyCreateGateRejection, rulingCommentPolicy, recordRuling } from "./ticketwrite.ts";
 // DL-62 doc/event family — the doc WRITES (docSave/docPublish, incl. the CAS + the single operator-publish
 // gate) + the docstore-error→HTTP-status map are reused VERBATIM from the shared, side-effect-free docstore
 // (exactly as the 5 ticket ops reuse ticketwrite.ts), so both transports share one publish gate + one CAS.
@@ -345,7 +345,8 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
     const id = insertTicket(db, projectId, actor,
       { title: a.title, description: a.description ?? "", type: a.type ?? "Feature", state: (a.state as State) ?? "Todo",
         assignee: tierAssignee, priority: a.priority ?? 0, labels,
-        duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [] },
+        duplicateOf: a.duplicateOf ?? null, relatedTo: a.relatedTo ?? [],
+        waiting_on: a.waitingOn ?? null }, // WS-C review 3: was dropped on create — a park created straight into Human-Blocked lost its discriminator
       { title: a.title, type: a.type });
     return okR(toTicket(getRow(db, projectId, id)!));
   }
@@ -383,12 +384,28 @@ function opSaveIssue(db: DatabaseSync, projectId: string, projectKey: string, ac
 }
 
 // `db` MUST be a WRITABLE connection (the comment INSERT + comment.add event go through insertComment).
+// WS-C review 3: a `Ruling:`-shaped body runs the shared ruling policy (ticketwrite.ts) — refused from an
+// agent identity (403) or when malformed (400); from a human it is RECORDED: an issue.ruling event and,
+// on a Human-Blocked ticket, the waiting_on clear, all in one txn with the comment. The response then
+// carries `ruling: { verdict, state, waitingOnCleared }` so a caller can see what the write did. State
+// is never moved here — that stays the operator's explicit verb (`dev-loop rule` runs both in one shot).
 function opSaveComment(db: DatabaseSync, projectId: string, actor: string, a: { issueId?: string; body?: string }): OpResult {
   if (a.issueId === undefined) return errR(400, "issueId required"); // === undefined, NOT falsy (DL-69): a zod-valid empty-string issueId must fall through to the not-found lookup, byte-identical to the pre-refactor native handler
   if (typeof a.body !== "string") return errR(400, "body required");
   if (!getRow(db, projectId, a.issueId)) return errR(404, `no such ticket ${a.issueId}`);
-  const { id, createdAt } = insertComment(db, projectId, actor, a.issueId, a.body);
-  return okR({ id, ticket_id: a.issueId, author: actor, body: a.body, created_at: createdAt });
+  const pol = rulingCommentPolicy(db, actor, a.body);
+  if (pol.error !== null) return errR(pol.status, pol.error);
+  if (!pol.ruling) {
+    const { id, createdAt } = insertComment(db, projectId, actor, a.issueId, a.body);
+    return okR({ id, ticket_id: a.issueId, author: actor, body: a.body, created_at: createdAt });
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const { id, createdAt } = insertComment(db, projectId, actor, a.issueId, a.body);
+    const rec = recordRuling(db, projectId, actor, a.issueId, pol.ruling);
+    db.exec("COMMIT");
+    return okR({ id, ticket_id: a.issueId, author: actor, body: a.body, created_at: createdAt, ruling: { verdict: rec.verdict, state: rec.state, waitingOnCleared: rec.waitingOnCleared } });
+  } catch (e) { try { db.exec("ROLLBACK"); } catch { /* */ } throw e; }
 }
 
 function opListComments(db: DatabaseSync, projectId: string, projectKey: string, a: { issueId?: string }): OpResult {

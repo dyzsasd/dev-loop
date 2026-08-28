@@ -20,7 +20,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { activeFireMarker } from "./destructive-guard.ts"; // LOOP-367: ONE fire-marker list, owned there
 import { readFileSync } from "node:fs";
+import { isMainEntry } from "./is-entry.ts";
 import { openDb, actorExists, listActorHandles, STATES } from "./db.ts";
+import { isRulingShaped } from "./ticketwrite.ts"; // WS-C review 3: the ONE ruling grammar (the op layer parses it; this layer only needs the shape)
 import { resolveIdentity } from "./resolve-project.ts";
 import { ensureActors, findProject } from "./seed.ts";
 import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
@@ -141,12 +143,15 @@ function readFileArg(flag: string, path: string): string {
 // ─── the hub connection + the server.ts identity pipeline (G1/G2 → exit 4; a busy db → exit 5) ──────────────
 // `attachBase` (one-click §6.0): DEVLOOP_HUB_URL is set — the home is REMOTE. No local db opens, no
 // local G1/G2 guards (the daemon runs its own), every op POSTs over the token-authed op-API.
-interface Hub { db?: DatabaseSync; projectId?: string; projectKey: string; actor: string; daemonTransport: boolean; attachBase?: URL }
+export interface Hub { db?: DatabaseSync; projectId?: string; projectKey: string; actor: string; daemonTransport: boolean; attachBase?: URL }
 const isBusy = (e: unknown): boolean => {
   const err = e as { errcode?: number; message?: string };
   return err.errcode === 5 || err.errcode === 6 || /SQLITE_BUSY|database is locked/i.test(err.message ?? ""); // 5=SQLITE_BUSY 6=SQLITE_LOCKED
 };
-function openHub(): Hub {
+// Exported (WS-C review 3) as the ONE transport seam: rule-cli.ts composes its one-shot from the same
+// openHub + runOp every sugar verb uses, so a ruling routes identically at home, over hub.transport:
+// "daemon", and over an attach — never a second copy of the identity pipeline.
+export function openHub(): Hub {
   // ── ATTACH (§6.0): the remote hub is the SoR — skip every local open/guard. Identity still rides
   // DEVLOOP_ACTOR (default operator: the console's posture); the project may stay unresolved (the
   // daemon's boot project applies, or args.project targets one — the operator override).
@@ -195,7 +200,22 @@ function openHub(): Hub {
 // 'operator' inside one means DEVLOOP_ACTOR was stripped/lost and the write would be MIS-ATTRIBUTED to the
 // human. Refuse (exit 4) unless --i-am-the-operator says otherwise. Cooperative like G1 (§18) — not anti-spoof.
 let iAmTheOperator = false; // set from the parsed --i-am-the-operator of the active verb
-async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Promise<OpResult> {
+// WS-C review 3: a `Ruling:` comment inside a fire is refused with NO bypass — the approvals-cli
+// posture (design approvals §2), not the cooperative one above. `--i-am-the-operator` exists so a
+// human whose shell inherited a marker can still write; a RULING is the one comment whose whole value
+// is that a fire could not have written it, so the flag must not reach it. The op layer additionally
+// refuses any non-human actor (ticketwrite.ts rulingCommentPolicy); this guard is the marker half,
+// which only the process that owns the env can see. Checked on the op, so `op save_comment` and
+// `comment add` (and `rule`, which checks earlier) all meet it.
+export function rulingFireRefusal(body: unknown, marker: string | null = activeFireMarker()): string | null {
+  if (!marker || typeof body !== "string" || !isRulingShaped(body)) return null;
+  return `refusing a Ruling: comment inside an agent fire (${marker} is set). A ruling is the human's act — the record is only worth reading because a fire cannot write one. Nothing has been written. To ask for a ruling, park the ticket Human-Blocked with a Bail-shape comment; the operator rules from their own console: dev-loop rule <id> approve|reject|defer --reason "<why>"`;
+}
+export async function runOp(hub: Hub, op: AgentOp, args: Record<string, unknown>): Promise<OpResult> {
+  if (op === "save_comment") {
+    const refusal = rulingFireRefusal(args.body);
+    if (refusal) { console.error(`dev-loop: ${refusal}`); process.exit(4); }
+  }
   if (AGENT_WRITE_OPS.has(op) && hub.actor === "operator" && !iAmTheOperator) {
     const marker = activeFireMarker();
     if (marker) {
@@ -709,4 +729,6 @@ async function main(): Promise<never> {
   return handler(rest);
 }
 
-await main();
+// Guarded (WS-C review 3) because rule-cli.ts imports openHub/runOp from here; every existing spawn
+// (`cli.ts` → this file, `node src/cli-agentops.ts` in the tests) still enters main() — argv[1] is this file.
+if (isMainEntry(import.meta.url)) await main();

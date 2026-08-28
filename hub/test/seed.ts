@@ -59,9 +59,17 @@ ok(bare.status === 0 && projectCount(bare.db) === 1, "bare `seed` still seeds th
   const pid = ensureSeed(db, "bf", "BF", "BF");
   const count = (name: string) => (db.prepare("SELECT COUNT(*) c FROM labels WHERE project_id=? AND name=?").get(pid, name) as { c: number }).c;
   ok(count("external-prereq") === 1 && count("external-code") === 1 && count("external-access") === 1, "the §9c external labels are seeded on create");
+  // Decision 1: the four remaining bail-shape labels seed on create (kind=workflow, like external-prereq)
+  ok(count("decision-needed") === 1 && count("info-needed") === 1 && count("scope-design") === 1 && count("fix-exhausted") === 1,
+    "Decision 1: the bail-shape labels (decision-needed/info-needed/scope-design/fix-exhausted) are seeded on create");
+  const kindOf = (name: string) => (db.prepare("SELECT kind FROM labels WHERE project_id=? AND name=?").get(pid, name) as { kind: string } | undefined)?.kind;
+  ok(["decision-needed", "info-needed", "scope-design", "fix-exhausted"].every((n) => kindOf(n) === "workflow"),
+    "Decision 1: each bail-shape label is kind=workflow");
   db.prepare("DELETE FROM labels WHERE project_id=? AND name=?").run(pid, "external-prereq"); // simulate a pre-taxonomy project
+  db.prepare("DELETE FROM labels WHERE project_id=? AND name=?").run(pid, "decision-needed");  // simulate a pre-Decision-1 project
   ensureSeed(db, "bf", "BF", "BF");                                                          // re-seed hits the EXISTING branch
   ok(count("external-prereq") === 1, "re-running seed BACKFILLS a missing label on an existing project (no early-return skip)");
+  ok(count("decision-needed") === 1, "Decision 1: re-running seed BACKFILLS a bail-shape label onto an existing (pre-Decision-1) project");
   db.close();
 }
 

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  dev-loop hub daemon login item (macOS). `dev-loop daemon install-autostart` writes this exact shape
+  with the real node + entry paths for you; this template is the hand-managed path. Install:
+    cp com.dyzsasd.dev-loop.daemon.plist ~/Library/LaunchAgents/
+    edit NODE_PATH / DAEMON_ENTRY / WORKSPACE_ROOT, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dyzsasd.dev-loop.daemon.plist
+  NODE_PATH    = `command -v node` (a node >= 23.6)
+  DAEMON_ENTRY = "$(npm prefix -g)/lib/node_modules/@dyzsasd/dev-loop/dist/daemon.js"
+  The binding is WRITTEN (WorkingDirectory + DEVLOOP_WORKSPACE name ONE workspace). Never carry
+  DEVLOOP_HOME / DEVLOOP_PROJECTS_JSON / DEVLOOP_HUB_DB / DEVLOOP_RUN_DIR from a shell into it.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.dyzsasd.dev-loop.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>NODE_PATH</string>
+    <string>DAEMON_ENTRY</string>
+    <string>up-all</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>WorkingDirectory</key><string>WORKSPACE_ROOT</string>
+  <key>StandardOutPath</key><string>WORKSPACE_ROOT/.dev-loop/daemon-autostart.out.log</string>
+  <key>StandardErrorPath</key><string>WORKSPACE_ROOT/.dev-loop/daemon-autostart.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+      <key>DEVLOOP_WORKSPACE</key><string>WORKSPACE_ROOT</string>
+      <key>DEVLOOP_NODE</key><string>NODE_PATH</string>
+      <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

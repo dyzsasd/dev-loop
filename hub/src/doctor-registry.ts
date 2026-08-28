@@ -18,7 +18,7 @@ import {
   checkConfigValidate, checkRepoRegistered, checkStrategyDocPointer, checkLinearMcpScope,
   checkFiresTaxonomy, checkCommsWebhook, checkProviderAuth, checkOpencodeDrift,
   checkOpencodeVersion, checkOwnerLiveness, checkDecisionQueueStall, checkSensitiveMistier,
-  checkStaleClaim,
+  checkStaleClaim, checkCodexSandboxDefault,
 } from "./doctor.ts";
 
 // ── Contracts (design §4) ────────────────────────────────────────────────────
@@ -253,6 +253,15 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     scope: "workspace",
     bestEffort: true,
     run: (ctx) => { checkOpencodeVersion(ctx.ws, ctx.out.pass, ctx.out.warn); },
+  },
+  // Row 9b — W45 (codex lane on the SAFE default, WS-A C4 review 1). Config-only like W15, and in the
+  // synchronous prefix beside it for the same reason (see the import note above).
+  {
+    codes: ["W45"],
+    id: "w45-codex-sandbox-default",
+    scope: "workspace",
+    bestEffort: true,
+    run: (ctx) => { checkCodexSandboxDefault(ctx.ws, ctx.out.pass, ctx.out.warn); },
   },
   // Row 9a — W43 (stale claim — In Progress ticket with no activity, owner still firing) — board scope.
   // Registered here rather than at the tail because the W16 row below reads the same project board
@@ -558,6 +567,20 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     run: async (ctx) => {
       const { checkConsecutiveFailures } = await import("./doctor.ts");
       await checkConsecutiveFailures(ctx.ws, ctx.out.warn);
+    },
+  },
+  // Row 34 — W46 (unroutable block, Decision 1). Board scope: a blocked ticket with no bail-shape
+  // label and no parseable Bail-shape comment cannot be routed to an unblock owner. NEW check, so it
+  // carries no design §7 number and does not renumber the rows above.
+  {
+    codes: ["W46"],
+    id: "w46-blocked-no-bailshape",
+    scope: "board",
+    applies: boardApplies,
+    bestEffort: true,
+    run: async (ctx) => {
+      const { checkBlockedNoBailShape } = await import("./doctor.ts");
+      checkBlockedNoBailShape(ctx as BoardCtx);
     },
   },
 ];

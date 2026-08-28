@@ -152,8 +152,20 @@ Use manual `codex exec` only for attended tests or one-off debugging. For the lo
 dev-loop run --cli codex --agents core,communication
 ```
 
-Unattended Codex runs need the default unsafe executor mode so shell/MCP tool calls are not cancelled
-for approval. Use `--codex-safe` only for attended runs where you want to approve each tool call.
+Codex fires run in Codex's SAFE executor mode by default (no `--dangerously-bypass-approvals-and-sandbox`).
+In that mode `codex exec` runs at **`approval: never` + `sandbox: read-only`** (its own non-interactive
+defaults — codex-cli 0.147.0 prints exactly those header lines), so an **unattended** fire's write-shaped
+shell/MCP calls are refused inside the fire, the model ends its turn, and the process **still exits 0** with
+a non-empty JSONL stream: the ledger records a success, the breaker never trips, W44 never fires. Unattended
+lanes therefore opt in to the bypass explicitly: `team.codex.sandbox: "bypass"` (`dev-loop team set
+team.codex.sandbox bypass`; per agent `agents.<h>.codexSandbox`), or `--codex-unsafe` for one run.
+`--codex-safe` is accepted as a no-op. While the posture is unset and a handle routes to codex, `dev-loop
+doctor` warns `W45` and `dev-loop run` prints one `NOTICE codex sandbox=safe (default)` line at boot.
+
+`--skip-git-repo-check` is NOT part of the sandbox choice and rides on every codex fire: it only lifts
+codex's startup refusal outside a git work tree (`Not inside a trusted directory and --skip-git-repo-check
+was not specified.`, exit 1 before auth), which a team-scope steward fire would otherwise hit — its cwd is the
+workspace root, and `team init` never git-inits that.
 
 ## 5. opencode
 

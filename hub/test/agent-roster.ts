@@ -8,16 +8,22 @@ let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const eq = (a: unknown, b: unknown, m: string) => ok(JSON.stringify(a) === JSON.stringify(b), `${m} (got ${JSON.stringify(a)})`);
 
-// group aliases expand to the documented rosters
-eq(parseAgentSpec("core"), ["pm", "qa", "senior-dev", "junior-dev", "sweep"], "core expands to the split roster");
-eq(parseAgentSpec("legacy"), ["pm", "qa", "dev", "sweep"], "legacy expands to the single-dev roster");
+// group aliases expand to the documented rosters. Job-scoped prompts: pm/qa expand to their LANES
+// (pm-maintenance/pm-groom/pm-review, qa-maintenance/qa-hunt) so the default run job-boots them; the
+// bare `pm`/`qa` tokens stay valid as EXPLICIT inputs (below), just not in the default groups.
+const CORE = ["pm-maintenance", "pm-groom", "pm-review", "qa-maintenance", "qa-hunt", "senior-dev", "junior-dev", "sweep"];
+const LEGACY = ["pm-maintenance", "pm-groom", "pm-review", "qa-maintenance", "qa-hunt", "dev", "sweep"];
+eq(parseAgentSpec("core"), CORE, "core expands to the split roster (pm/qa as lanes)");
+eq(parseAgentSpec("legacy"), LEGACY, "legacy expands to the single-dev roster (pm/qa as lanes + dev)");
 ok(parseAgentSpec("all")?.length === AGENT_GROUPS.all.length, "all expands to every agent");
 
-// bare handles + comma lists + dedup + whitespace tolerance (mirrors the run --agents parser)
-eq(parseAgentSpec("pm,qa"), ["pm", "qa"], "comma list of bare handles");
+// bare pm/qa are STILL valid explicit tokens (the whole-role classic-boot / comparison), and a bare
+// lane token is accepted too (parity with run-agents.ts expandAgentSpec).
+eq(parseAgentSpec("pm,qa"), ["pm", "qa"], "comma list of bare handles — the whole-role tokens stay valid");
+eq(parseAgentSpec("pm-maintenance,qa-hunt"), ["pm-maintenance", "qa-hunt"], "bare pm/qa lane tokens are accepted explicit inputs");
 eq(parseAgentSpec("senior-dev"), ["senior-dev"], "a hyphenated handle is one token, never read as a flag");
-eq(parseAgentSpec("core,pm,pm"), ["pm", "qa", "senior-dev", "junior-dev", "sweep"], "overlapping tokens de-dup");
-eq(parseAgentSpec(" core , qa "), ["pm", "qa", "senior-dev", "junior-dev", "sweep"], "surrounding whitespace + trailing tolerance");
+eq(parseAgentSpec("core,pm-maintenance,pm-maintenance"), CORE, "overlapping tokens de-dup (pm-maintenance already in core)");
+eq(parseAgentSpec(" core , qa-hunt "), CORE, "surrounding whitespace + trailing tolerance (qa-hunt already in core)");
 
 // fail-closed rejects (LOOP-184): every one returns null so the caller REFUSES the load
 ok(parseAgentSpec("bogus-agent") === null, "unknown agent ⇒ null");

@@ -40,6 +40,14 @@ const LABELS: Array<{ name: string; kind: string }> = [
   // (another repo/team must change code) vs `external-access` (credentials/billing/legal/permission).
   { name: "external-prereq", kind: "workflow" },
   { name: "external-code", kind: "subtype" }, { name: "external-access", kind: "subtype" },
+  // Decision 1 — the remaining §9 bail-shape labels (external-prereq above was the first). Each is the
+  // machine-routable form of the `Bail-shape: <x>` comment first line: the scheduler cannot cheaply
+  // read comment bodies, so routing a blocked ticket to its owner's unblock job (decision-needed →
+  // PM, info-needed → QA) reads these LABELS. DERIVED from the comment at the write choke point
+  // (ticketwrite.ts), so label and comment cannot disagree. Ride this INSERT-OR-IGNORE backfill, same
+  // as external-prereq — no migration (bail-shape.ts BAIL_SHAPES is the shared vocabulary).
+  { name: "decision-needed", kind: "workflow" }, { name: "info-needed", kind: "workflow" },
+  { name: "scope-design", kind: "workflow" }, { name: "fix-exhausted", kind: "workflow" },
   // §21b sensitive-work routing: auth/permissions, payment/money, PII, secrets, data migration —
   // forces the senior design tier; set by the FILER, never removed by hygiene.
   { name: "sensitive", kind: "subtype" },

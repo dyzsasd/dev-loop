@@ -85,6 +85,68 @@ export function servableSlice(db: DatabaseSync, projectId: string, actor: string
   return { todo, inProgress, inReview };
 }
 
+// pm job-lanes (job-scoped prompts, docs/design/job-scoped-prompts.md) — the two counts the pm-maintenance
+// lane gate reads to pick its job (verify vs unblock) without a full agentops board scan. `verify` = pm-owned
+// In Review rows (owner label `pm`); `unblock` = rows routable to pm's unblock job: any `needs-pm` row (the
+// SKILL's "blocked+needs-pm OR needs-pm without blocked"), plus a `blocked` row carrying a pm-shaped bail
+// label (`decision-needed`/`scope-design`). Terminal states are excluded. Same leaf as servableSlice so the
+// scheduler consumes it WITHOUT the agentops (zod) tree (LOOP-58).
+const TERMINAL_STATES = new Set(["Done", "Canceled", "Duplicate"]);
+export function pmMaintenanceSlice(db: DatabaseSync, projectId: string): { verify: number; unblock: number } {
+  const rows = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY created_at").all(projectId) as unknown as TicketRow[]).map(toTicket);
+  let verify = 0, unblock = 0;
+  for (const t of rows) {
+    if (TERMINAL_STATES.has(t.state)) continue;
+    const L = t.labels;
+    if (t.state === "In Review" && L.includes("pm")) verify++;
+    if (L.includes("needs-pm") || (L.includes("blocked") && (L.includes("decision-needed") || L.includes("scope-design")))) unblock++;
+  }
+  return { verify, unblock };
+}
+
+// qa job-lanes (job-scoped prompts) — the two counts the qa-maintenance lane gate reads to pick its job
+// (verify vs unblock) without a full agentops board scan, mirroring pmMaintenanceSlice. `verify` = qa-owned
+// In Review rows (owner label `qa`); `unblock` = rows routable to qa's unblock job: any `needs-qa` row, plus
+// a `blocked` row carrying qa's `info-needed` bail shape (§9). Terminal states are excluded. Same leaf so the
+// scheduler consumes it WITHOUT the agentops (zod) tree (LOOP-58).
+export function qaMaintenanceSlice(db: DatabaseSync, projectId: string): { verify: number; unblock: number } {
+  const rows = (db.prepare("SELECT * FROM tickets WHERE project_id=? ORDER BY created_at").all(projectId) as unknown as TicketRow[]).map(toTicket);
+  let verify = 0, unblock = 0;
+  for (const t of rows) {
+    if (TERMINAL_STATES.has(t.state)) continue;
+    const L = t.labels;
+    if (t.state === "In Review" && L.includes("qa")) verify++;
+    if (L.includes("needs-qa") || (L.includes("blocked") && L.includes("info-needed"))) unblock++;
+  }
+  return { verify, unblock };
+}
+
+// senior-dev Mode pick (job-scoped prompts, §21a) — which JOB corpus a senior-dev fire loads: `design`
+// (author the module design, stage junior children) vs `directcode` (ship an escalation itself). Read from
+// the picked ticket's `Mode:` marker, deterministically:
+//   • the deciding ticket = the one senior-dev works THIS fire — an In Progress orphan it resumes (Step 0),
+//     else the top of its §5-ranked servable Todo (a fresh pick).
+//   • `Mode: direct-code` at the description head ⇒ `directcode`; `Mode: design` ⇒ `design`.
+//   • no marker ⇒ a follow-up (a non-empty `relatedTo`, i.e. it supersedes a Canceled predecessor per §21a)
+//     defaults to `directcode`; otherwise `design`.
+//   • nothing to pick ⇒ `design` (the normal complex path). Zero board access / read error is handled by the
+//     caller's fail-open (it defaults the job), never here.
+// Same leaf as servableSlice so the scheduler consumes it WITHOUT the agentops (zod) tree (LOOP-58).
+export function seniorDevModePick(db: DatabaseSync, projectId: string): "design" | "directcode" {
+  const byState = (state: string): Ticket[] =>
+    (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
+  const inProgress = byState("In Progress").filter((t) => t.assignee === "senior-dev");
+  const todo = byState("Todo")
+    .filter((t) => isTodoServableFor(t, "senior-dev"))
+    .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at));
+  const picked = inProgress[0] ?? todo[0] ?? null;
+  if (!picked) return "design"; // nothing to pick ⇒ the normal complex path
+  const head = (picked.description ?? "").trimStart();
+  if (head.startsWith("Mode: direct-code")) return "directcode";
+  if (head.startsWith("Mode: design")) return "design";
+  return picked.relatedTo.length > 0 ? "directcode" : "design"; // no marker ⇒ follow-up is direct-code, else design
+}
+
 /**
  * The BACKLOG side, per tier (LOOP-329) — the count no surface reported.
  *

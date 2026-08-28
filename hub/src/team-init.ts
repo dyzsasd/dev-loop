@@ -172,6 +172,9 @@ export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } 
     console.log("");
     console.log("Next: in a coding CLI (claude/codex), run  /dev-loop:add-project  to create your first project,");
     console.log("then  /dev-loop:add-repo  to clone + register a repo. `dev-loop doctor` checks the workspace.");
+    // WS-A C4 review 1 — the one default that silently kills an unattended lane, named at the moment the
+    // workspace is born rather than by the first `metrics` read that shows nothing landing.
+    console.log("Codex lane? Fires run SAFE by default (approval:never, sandbox:read-only) — an unattended codex lane needs: dev-loop team set team.codex.sandbox bypass");
   }
   return 0;
 }

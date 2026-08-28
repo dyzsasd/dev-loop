@@ -443,6 +443,30 @@ function mkWs(f: TeamFile): Workspace { return { root: "/ws", filePath: "/ws/dev
 { const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUsd: 50, extraKey: 1 }; ok(has(f, "E18"), "E18: unknown extra budget key is rejected"); }
 { const f = base(); (f.team as unknown as Record<string, unknown>).budget = { dailyUsd: 50, perFireUsd: 5 }; ok(!has(f, "E18"), "E18: known keys dailyUsd + perFireUsd are valid"); }
 
+// ── WS-A C4 / A7: team.codex.sandbox, team.claude.*, team.pricing, agents.<a>.codexSandbox ──
+{
+  const withTeam = (extra: Record<string, unknown>) => { const f = base(); Object.assign(f.team as unknown as Record<string, unknown>, extra); return f; };
+  ok(!has(withTeam({ codex: { sandbox: "bypass" } }), "E18"), "WS-A C4: team.codex.sandbox:\"bypass\" is valid");
+  ok(!has(withTeam({ codex: { sandbox: "safe" } }), "E18"), "WS-A C4: team.codex.sandbox:\"safe\" is valid");
+  ok(!has(withTeam({ codex: {} }), "E18"), "WS-A C4: an empty team.codex block is valid (default safe)");
+  ok(has(withTeam({ codex: { sandbox: "yolo" } }), "E18"), "WS-A C4: an unknown sandbox token is refused (E18)");
+  ok(has(withTeam({ codex: { sandbox: true } }), "E18"), "WS-A C4: a boolean sandbox is refused — it is an enum, not a switch");
+  ok(has(withTeam({ codex: { bypass: true } }), "E18"), "WS-A C4: an unknown team.codex key is refused (a typo must not read as safe)");
+  ok(!has(withTeam({ claude: { allowedTools: ["Read", "Bash(git log:*)"], permissionMode: "acceptEdits" } }), "E18"), "WS-A C4: team.claude allowedTools + permissionMode are valid");
+  ok(has(withTeam({ claude: { allowedTools: [] } }), "E18"), "WS-A C4: an EMPTY allowedTools list is refused (it would pass an empty --allowedTools)");
+  ok(has(withTeam({ claude: { allowedTools: "Read" } }), "E18"), "WS-A C4: allowedTools must be an array");
+  ok(has(withTeam({ claude: { permissionMode: "yolo" } }), "E18"), "WS-A C4: an unknown permissionMode is refused");
+  ok(has(withTeam({ claude: { tools: ["Read"] } }), "E18"), "WS-A C4: an unknown team.claude key is refused");
+  ok(!has(withTeam({ pricing: { claude: { inputUsdPerMTok: 15 }, codex: { inputUsdPerMTok: 2, outputMultiplier: 4 } } }), "E18"), "WS-A A7: a per-lane price table is valid");
+  ok(has(withTeam({ pricing: { gemini: { inputUsdPerMTok: 1 } } }), "E18"), "WS-A A7: an unknown lane is refused");
+  ok(has(withTeam({ pricing: { claude: { inputUsdPerMTok: -1 } } }), "E18"), "WS-A A7: a negative price is refused");
+  ok(has(withTeam({ pricing: { claude: { input: 15 } } }), "E18"), "WS-A A7: a misspelled pricing key is refused");
+  ok(has(withTeam({ pricing: { claude: {} } }), "E18"), "WS-A A7: inputUsdPerMTok is required per lane");
+  const agents = (cfg: Record<string, unknown>) => withTeam({ agents: { pm: cfg } });
+  ok(!has(agents({ codexSandbox: "bypass" }), "E17"), "WS-A C4: agents.pm.codexSandbox:\"bypass\" is valid");
+  ok(has(agents({ codexSandbox: "unsafe" }), "E17"), "WS-A C4: agents.pm.codexSandbox with an unknown token is refused (E17)");
+}
+
 // ── E18 team.backup validation (LOOP-339) ──
 // The cadence is the only thing standing between this board and the next cascade delete, so a
 // malformed value has to be REFUSED at load rather than silently disabling it. Each case below is a
@@ -545,6 +569,13 @@ ok(has(cip(["docs/**/*.md"]), "E08"), "E08: a glob is rejected — a glob langua
   const good = base();
   good.team.agents = { "junior-dev": { fireTimeout: "30m" }, pm: { model: "claude-opus-5" } };
   ok(!warnCodes(good).includes("W04"), "LOOP-82: every real agent name is accepted silently");
+
+  // job-scoped prompts: pm AND qa job-lane keys are valid team.agents.<lane> config keys (per-lane
+  // model/effort/cadence/timeouts), even though a lane is not an actor in the seed roster.
+  const lanes = base();
+  lanes.team.agents = { "pm-maintenance": { model: "sonnet" }, "pm-groom": { cadence: "20m" },
+    "qa-maintenance": { model: "sonnet" }, "qa-hunt": { model: "opus" } };
+  ok(!warnCodes(lanes).includes("W04"), "job-scoped prompts: pm-* AND qa-* lane keys are accepted config keys (not flagged W04)");
 
   const projTypo = base();
   projTypo.projects.devplatform.agents = { "qaa": { model: "m" } };

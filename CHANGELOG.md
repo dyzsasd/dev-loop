@@ -5,6 +5,300 @@ experience** — a real failure observed while the agents ran, then hardened int
 
 ## Unreleased
 
+### Job-scoped PoC — constitution + pm playbooks
+
+- **A resident constitution — `skills/_constitution.md` (8.48 KB, within the 8.5 KB ceiling).** The
+  irreducible invariants that gate EVERY fire regardless of job, extracted from `conventions.md` and written
+  tight + tabular + imperative with zero rationale: the fresh-fire posture + the 6-step boot (steps only),
+  the `dev-loop` firewall (§2), the state machine (7 states + a legal-transition table + verify-fail⇒close+
+  follow-up + "blocked is a label" + the Topology one-liners "verify against the running product/diff not
+  the claim", "inconclusive ≠ pass", "block ≠ cancel"), the label ontology (§4), write hazards (§10),
+  isolation (§7 — incl. "shared working copy ≠ isolation"), the dry-run gate (§12), autonomy (§12a), the
+  deploy ceiling HARD-BAIL (§12d), security (§16), the governing-file firewall (§17), the report contract
+  (§22), an **explicit no-force-push / no-history-rewrite line** (today only implicit inside push-guard),
+  and identity/project resolution (§11). Every block carries a hidden `<!-- from §… -->` provenance tag —
+  nothing is invented. The file is generated-adjacent and governed by §17 (never agent-edited in a fire).
+
+- **The pm SKILL restructured into sliceable job spans.** PM's four jobs are wrapped in the locked job
+  markers so a slicer can extract each independently: `<!-- job:verify:begin -->…:end -->` (Job A),
+  `<!-- job:unblock… -->` (Job B), `<!-- job:groom… -->` (Job B2), `<!-- job:review… -->` (Job C). Each span
+  is self-contained (preconditions → ordered steps → exact `dev-loop` verbs → exit → the "when blocked"
+  branch → a `pulls:` line) and carries a `kind:` header — `mechanical` for verify/unblock, `judgment-scaffold`
+  for groom/review (which fix the ENVELOPE and FRAME the judgment step rather than scripting it). Material
+  outside the spans shrank to a role header + a JOB INDEX (job-lane trigger → job slug). The `name`/
+  `description` front-matter, the RUNBOOK identity (role/mission/boot), the `Sections:` line (set-equal to
+  the restructured prose's citations), and the GENERATED CLI cheat-sheet block are preserved.
+
+- **Shared playbooks — `skills/playbooks/*.md`.** The fixed procedures pm's job spans reference by path
+  instead of inlining, authored once (a per-SKILL copy is a protocol fork): `boot.md` (SH-boot, §0a),
+  `report.md` (SH-report, §22), `verify-close.md` (SH-verify-close, §3 verify→Done/close+follow-up + §21a
+  escalation), `block-park.md` (SH-block-park, §9 bail-shapes — referencing the new
+  `decision-needed`/`info-needed`/`scope-design`/`fix-exhausted` labels by name), `file-ticket.md`
+  (SH-file-ticket, §6/§5a/§21b/§19/§4). Each is `kind:`-tagged with a `pulls:` line; a `SKILL.md` index
+  documents the library (it is a reference library, not a launchable loop agent).
+
+- **Exposition extracted for humans — `docs/design/loop-model-for-humans.md`.** The "how/why the platform
+  works" narrative (what the loop is, the inward/outward model, the three-tier prompt architecture, the
+  backend-abstraction rationale, the portability story) — deleted from the agent surface — rewritten as a
+  human orientation doc. `conventions.md` is NOT thinned in this PoC (that is a later rollout step).
+
+- **Harness follow-ups for the mechanism workstream.** The new `skills/playbooks/` directory needs a
+  `BUDGETS` row in `hub/src/context-bill.ts` and an allowlist entry in `hub/test/consistency.ts` +
+  `hub/test/context-budget.ts` (it currently trips their "exactly the skills/ dirs" checks — the sole
+  expected reds); `hub/test/skill-refs.ts` is green. See the workstream handoff for the exact marker
+  strings and file paths.
+
+### WS-B operator skill & daemon install
+
+- **`dev-loop-operator/` is the first-class distributable — harness-neutral.** A new top-level
+  directory (shipped inside the npm package: `hub/package.json` `files` + the `build` copy list,
+  with `security/source_integrity.py`'s byte-exact `build` pin updated in the same commit) holding
+  `SKILL.md` (install → init → daemon/scheduler → daily read → pause/drain/edit/resume → upgrade →
+  fault handbook → system proposals), `scripts/ensure-install.sh` (idempotent: node ≥ 23.6 with
+  `DEVLOOP_NODE`, a coding CLI with login hints, a 3-tier engine source — `DEVLOOP_INSTALL_SOURCE`
+  tarball/checkout → `npm i -g @dyzsasd/dev-loop@<pin> --ignore-scripts` → git clone + build —, the
+  source-integrity check when a tree is at hand, the npm-bin PATH hint, `dev-loop doctor`, a
+  `环境就绪 ✔ / ready` line) and per-user `systemd`/`launchd` templates for BOTH the daemon and the
+  scheduler. Any agent that can run a shell — Claude Code, Codex, opencode, a plain terminal — can
+  now install and operate dev-loop; the Claude plugin mechanism was never load-bearing for fires
+  (the scheduler inlines skills from the package) and the docs now present it as the optional
+  convenience it is. Pinned by `hub/test/operator-skill.ts` (frontmatter, every `dev-loop <verb>`
+  the handbook names resolves in `cli.ts` ROUTES or sits on the named landing-elsewhere list,
+  `bash -n`, hermetic fake-PATH dry runs of the install script, template readability) and by
+  `build-artifact.ts` (the directory is in the packed tarball).
+
+- **`dev-loop daemon install-autostart` works on Linux.** It writes a `systemd --user` unit
+  `~/.config/systemd/user/dev-loop-daemon@<team-key>.service` (oneshot + RemainAfterExit running
+  `<node> <daemon entry> up-all`, bound by `WorkingDirectory` + `DEVLOOP_WORKSPACE` exactly like the
+  LaunchAgent, no ambient workspace-selecting vars) and runs `systemctl --user daemon-reload &&
+  enable --now`; `uninstall-autostart [--workspace|--all]` is symmetric (`disable --now`, unlink,
+  reload). macOS keeps the LaunchAgent; `--dry-run` renders on any OS and `--format plist|systemd`
+  forces a shape; `daemon status` prints the binding line on Linux too. `autostart-binding.ts` gains
+  the Linux arm (fake HOME + a fake `systemctl` recording argv — the real user systemd is never
+  touched). Note: doctor's autostart line on Linux still says no login item is installed by dev-loop
+  on this OS (doctor.ts is outside this workstream).
+
+- **Behavior change — the Claude SessionStart hook is opt-in.** `hooks/hooks.json` stays
+  registered (a plugin manifest needs it) but `hook-session-start` now exits 0 immediately unless
+  `DEVLOOP_SESSION_HOOK=1` is set or the resolved workspace's `dev-loop.json` has
+  `team.sessionStartHook: true` (read leniently here; validation belongs to team-config.ts). When it
+  acts it appends one line to `<workspace>/.dev-loop/hook.log` (`~/.dev-loop/hook.log` without a
+  workspace) instead of swallowing everything. Operators who relied on a Claude session starting
+  the board daemon should enable the flag or use `dev-loop run` / `daemon install-autostart`.
+
+- **Upgrade discipline documented.** `docs/DAEMON.md` → Upgrading and SKILL §6: never `npm i -g`
+  over a running scheduler; `pause --drain` → `stop` → install → `doctor` (W36/W28) → `daemon up-all`
+  → `run` + `resume`. `install-claude-plugin` and `init-service` print the new guidance.
+
+### WS-C harness control
+
+- **The operator seat no longer belongs to one harness.** `skills/operator-console/SKILL.md` is
+  rewritten harness-neutral: it presumes neither `dev-loop up` nor an `--append-system-prompt`
+  brief, its first step is `export DEVLOOP_ACTOR=operator` + one `dev-loop status --json` read, and
+  every job is a `dev-loop` verb with exact argv, with reading rules for each status field. `dev-loop
+  up --print-brief` prints the same env block + brief for Codex / opencode / a shell agent to paste;
+  the Claude launch is now a thin convenience over the same text (`consoleBrief()` in up.ts).
+- **`dev-loop status [--json] [--project <key>]` — ONE read model (hub/src/status.ts).** Before, an
+  operator stitched `hub status` + `doctor` + `metrics` + `queue` + `approvals` together by hand.
+  Now one read-only object with a fixed key set — `workspace scheduler decisionQueue fires daemon
+  board cost24h next` — where every section fails soft (`{error}` never blocks its siblings). The
+  scheduler section reads the run lock, the pause row, breaker state (a replay of the ledger through
+  breaker.ts's own `record()` from the scheduler's start), and the fires IN FLIGHT from the runner
+  logs the scheduler already writes (a spawn header with no exit marker). Fire health, the queue and
+  cost reuse metrics.ts (`findConsecutiveFailures`, `decisionQueue`, `fireMetrics`); daemon build
+  skew reuses `sameDaemonCode` (W36). Text mode ends with a NEXT line on doctor's precedence ladder.
+  - **Review 4 — the breaker state is persisted, not replayed.** The scheduler now writes its
+    breaker singleton to `.dev-loop/team/breaker.json` (atomic tmp+rename, 0600, beside
+    `scheduler-build.json`; `<run dir>/breaker-<project>.json` on the workspace-less path) on every
+    state change and at start/stop: schema, writer pid + startedAt/stoppedAt, the actual `--breaker`
+    / `--breaker-probe` values, per-agent and per-provider entries (`open|closed|half-open`,
+    consecutiveFailures, openedAt, lastFailureAt, lastErrorClass, lastReason, probeInFlight,
+    cooldownUntil) and the lane→provider map. `status` reads it when its writer is the live scheduler
+    (pid probe + not stopped + the lock holder) and reports `scheduler.breakers.source: "live"`;
+    otherwise it replays the ledger as before and says `source: "replay"` with a caveat (the replay
+    cannot know the flags, the half-open state, the next probe time, or an unclassified failure's
+    identity, and a restart or the 90-day ledger prune moves its start). **Restart semantics:** an
+    OPEN breaker whose last failure is younger than the probe cadence RESUMES across a scheduler
+    restart (one log line says so) — a restart is not evidence the lane recovered, and the previous
+    "restart resets the safety" behaviour is what let the LOOP-543 no-work outage re-arm full cadence
+    on every restart; stale open entries and partial streaks start fresh; `dev-loop run
+    --breaker-reset` starts everything closed. Two disagreements found on the way were fixed at the
+    source: an operator-interrupted fire (exit 0 because we signalled it) no longer reads as a
+    recovery that closes the breaker (LOOP-155, now on the team scheduler too — its SIGINT path never
+    latched `interrupted`), and the team scheduler now seeds each lane's provider at boot so an open
+    provider breaker caps unfired lanes (LOOP-72 was legacy-only). §16: an unclassified failure's key
+    is the fire's last output line and reaches the file only as a hash.
+- **`dev-loop pause --drain [--timeout <s>]`.** Sets the pause, then blocks until no fire is in flight
+  (the same reader `status` renders as `draining`), printing progress; exit 0 drained, exit 1 on
+  timeout with the pause still set. The safe window for a config change or an upgrade is now a verb.
+- **`references/operator-rulings.md` — the fixed ruling grammar.** `dev-loop comment add <id> --body
+  "Ruling: approve|reject|defer — <reason>"` then the state verb, with a table of queue item type →
+  verb → what the loop does next. Leaving Human-Blocked is the `waiting_on` clear (documented
+  two-step; no automatic clearing was added).
+  - **Review 3 (C5) — the two-step was not safe, and the clear was a claim the code did not make.**
+    Four failure modes: a ruling comment with no state move parks the ticket forever with an answer
+    nobody acts on; a state move with no comment is a silent override PM's next fire repairs as its own
+    mistake; `waiting_on` was carried forward on EVERY transition (`updateTicketRow`), so a re-park for
+    a different reason showed the stale kind (status.ts only masked it on display; `save_issue` CREATE
+    dropped `waitingOn` outright); and a comment body was pure data at the write, so any agent could
+    post `Ruling: approve` and be read as the operator. Mechanism, all at the ONE write choke point:
+    (a) `ticketwrite.ts waitingOnFor` — every exit from Human-Blocked clears `waiting_on`, every entry
+    with nothing set defaults it to `human-decision` (explicit wins); create honors `waitingOn`.
+    (b) The ruling grammar has ONE parser (`parseRuling`) and ONE policy (`rulingCommentPolicy`) applied
+    by both comment writers (`save_comment` on every transport, the daemon's web form): refused from an
+    agent identity (403) or when malformed (400); from a human it is RECORDED — an `issue.ruling` event
+    and the `waiting_on` clear on a parked ticket, in one txn with the comment — and never moves state.
+    The CLI additionally refuses a `Ruling:` body under a fire marker (exit 4) with no bypass:
+    `--i-am-the-operator` does not reach a ruling. (c) **`dev-loop rule <id> approve|reject|defer
+    --reason "<words>" [--to <state>] [--waiting-on human-action|external]`** (hub/src/rule-cli.ts) —
+    the validated comment AND the table's transition as ONE call through cli-agentops' openHub/runOp
+    seam (home, daemon transport and attach alike; approve → Todo, or Done from In Review, reopen from
+    Done/Canceled with `reopen:`; reject → Canceled; defer → stays/becomes Human-Blocked with
+    `waiting_on` set; a Todo/Backlog target is un-assigned from the operator so the dev pick set sees
+    it). An approval-id delegates to `approve --request` / `revoke` (home-only; refuses over attach);
+    proposals keep `system resolve`. Operator-only: refused under a fire marker before anything is read.
+    `references/operator-rulings.md` now leads with the one-shot (two-step kept as the fallback),
+    operator-console §JOBS 1 uses it, `references/backend-service.md` states the op semantics for agents.
+    Tests: `hub/test/rule-cli.ts` (new), `ticketwrite.ts`, `agent-api.ts`.
+- **`dev-loop system propose|list|show|resolve` — the §17 firewall's sanctioned route
+  (hub/src/system-propose.ts).** A file inbox at `.dev-loop/system-inbox/<ts>-<slug>.md` with
+  frontmatter (id, from, fireId, target, severity, status, created). `propose` is agent-callable;
+  `resolve` is operator-only and refuses under a fire marker (exit 4). Open proposals count in
+  `status` → `decisionQueue.proposals`. The conventions §17 pointer lands after merge.
+
+### WS-A prompt economy
+
+- **BREAKING for unattended codex lanes — the codex lane is SAFE by default.** `dev-loop run` no longer
+  adds `--dangerously-bypass-approvals-and-sandbox` to every `codex exec` unconditionally. The flag rides
+  only when `team.codex.sandbox` is `"bypass"` (per agent: `team.agents.<h>.codexSandbox`), or the run
+  passes the new `--codex-unsafe`. A codex lane that ran unattended before this change will now run at
+  codex's own non-interactive policy (`approval: never`, `sandbox: read-only`) — **restore it with
+  `dev-loop team set team.codex.sandbox bypass`**. `--codex-safe` is accepted as a no-op. The claude
+  lane gains the matching config surface: `team.claude.allowedTools` → `--allowedTools`,
+  `team.claude.permissionMode` → `--permission-mode` (absent ⇒ no flag, unchanged). Both validated (`E18`).
+  - **Review 1** (independent review of the C4 decision; the SAFE default STANDS). Findings, verified
+    against codex-cli 0.147.0 on this machine: **(a) confirmed** — under the default `codex exec` prints
+    `approval: never` / `sandbox: read-only`, so an unattended fire's write-shaped tool calls are refused
+    inside the fire, the model ends its turn, and the process exits 0 with a non-empty JSONL stream. The
+    ledger records a SUCCESS: `errorClass` null, `suspectError` false, the breaker's exit-0 arm CLOSES
+    breakers, W44 never fires. The LOOP-543 `no-output` arm does NOT catch it — codex `--json` always
+    streams events, so the tail is never empty (a fire that prints nothing and exits 0 IS still ledgered
+    `EXIT_NO_WORK`/`no-output`; both shapes are pinned by a stub-`codex` arm in `run-agents-live.ts`). The
+    only honest detector is config, so: doctor **`W45`** warns when any enabled project (or the team block)
+    routes a handle to codex while `team.codex.sandbox` is unset and the handle has no
+    `agents.<h>.codexSandbox` — naming the handle, where its routing comes from, the key and both `team set`
+    choices; `dev-loop run` prints ONE `NOTICE codex sandbox=safe (default)` line at boot (every enabled
+    project consulted, not just the first; the legacy fixed-project path too); the dry-run info line shows
+    `sandbox=safe|bypass`; `team set team.agents.<a>.codingAgent codex` / `team set-model --coding-agent
+    codex` print the NOTE when the posture is unset; `team init` names the default. **(b) confirmed and
+    fixed** — `--skip-git-repo-check` was bundled with the bypass flag, so under the SAFE default every
+    team-scope steward fire (cwd = the workspace root, which `team init` never git-inits) would have died
+    at codex startup: `Not inside a trusted directory and --skip-git-repo-check was not specified.`, exit
+    1 before auth or a token (reproduced). The flag now rides on EVERY codex fire; it lifts only that
+    refusal and widens nothing. **(c) found and fixed** — the restore path this entry documents,
+    `dev-loop team set team.codex.sandbox bypass`, exited 2 as "not an operator-settable path":
+    `team.codex.sandbox` and `team.agents.<a>.codexSandbox` are now settable (enum-checked at the gate).
+    **(d) open, out of this review's scope** — `team.agents.<a>.codingAgent` / `.model` (settable since
+    LOOP-327) are not read by the scheduler's launch-profile resolver: a dry-run with
+    `team.agents.sweep.codingAgent: "codex"` still renders sweep as `cli=claude` (only cadence, timeouts
+    and `codexSandbox` are read from `team.agents`). W45 deliberately does not count that key as a
+    routing source, so it never warns about a lane that does not fire; the `team set` NOTE keys on the
+    operator's intent instead. Needs its own ticket.
+- **The §0a boot corpus is ON by default, on every lane (A1).** `team.bootCorpus` now defaults to `true`
+  (`false` is the explicit opt-out; `--no-assemble-boot` per run) and `assembleBootCorpus` runs for claude,
+  codex AND opencode fires — the prompt rides stdin on all three (`claude -p`, `codex exec -`,
+  `opencode run` with no positional; Linux caps one execve argument at 128 KiB). Finding while wiring it:
+  `team.bootCorpus: true` never reached `runAgent` before — the legacy projection the scheduler reads
+  carries no `team` block — so the corpus was effectively flag-only; `teamMain` threads it through now.
+  §0a step 1 says the inline block is AUTHORITATIVE when the prompt *contains* a `devloop-boot` block.
+- **A byte-stable prompt prefix (A2).** `readPrompt()` used to put the per-fire scheduler lines (selected
+  agents, model, effort, `DEVLOOP_DEV_SPLIT`) at the TOP of the prompt, which broke prompt caching from
+  line 1. The prompt is now `[fixed header + SKILL body + boot corpus]` then a
+  `<!-- devloop-fire-context -->` marker and the variable tail. `dev-loop run --dry-run --dump-prompt <dir>`
+  exposes the bytes; the suite asserts two fires with different agent sets/models share a prefix at least
+  as long as the constant segment and that nothing before the marker carries a timestamp or fire id.
+- **Conventions slice ≤ 64 KB per agent, enforced (A3).** 26 section bodies of `references/conventions.md`
+  moved VERBATIM to pointer files under `references/conventions/<slug>.md` (reports, human-intake,
+  external-prereq-tracker, blocked-protocol, two-tier-dev, strategy-doc, multi-repo, worktree-landing,
+  landing-pr, auto-merge, backend, querying, labels, verification, intake-mode, lessons-curation,
+  outward-agents, self-evolution, modes, project-config, codex, workspace-model, team-digest,
+  human-park-notify), each leaving a resident-rules stub under the SAME §-heading that names the file and
+  the trigger moment at which it must be read (the §0a pointer-stub mechanism; a stub read is cited
+  material, never a `Sections:` gap). `CONVENTIONS_BUDGETS` is one 64 KB target for every lane instead of a
+  per-agent ratchet; the lint fails the moment a slice regrows past it. Config-pruned slice bytes on the
+  single-repo/autoMerge fixture, before → after: pm 129,073 → 64,256 · qa 121,289 → 63,276 ·
+  sweep 116,057 → 58,425 · senior-dev 109,117 → 55,077 · junior-dev 107,314 → 57,957 · ops 100,659 → 55,327 ·
+  reflect 80,449 → 41,165 · architect 77,843 → 42,425 · communication 63,931 → 34,678 (conventions.md itself
+  166,900 → 89,296 B). `dev-loop metrics --context` per-fire totals (unpruned, no workspace): pm 190,570 →
+  118,104 · senior-dev 185,646 → 121,606 · junior-dev 182,483 → 123,129 · qa 169,871 → 106,153 ·
+  dev 169,544 → 112,887 · sweep 165,927 → 102,951 · ops 147,314 → 96,641 · reflect 128,559 → 83,934 ·
+  architect 127,670 → 84,800 · communication 100,806 → 72,418.
+  - **Review 2 — stub fidelity audit (`docs/design/conventions-stubs-fidelity.md`).** Every stub was checked
+    rule-by-rule against the pre-move section (506 normative statements: 440 preserved in the stub, 58 deferred
+    behind a trigger, 8 dropped → restored). Fixed: `project-config.md` was NOT verbatim (reordered, and its
+    project-resolution item was a paraphrase pointing at itself) — restored; §4's pointer had no trigger moment;
+    the `incident` Urgent threshold lost "/ a core flow is broken" (§4, §21); §3 lost "junior retries
+    transient errors"; §20a's doc-set rule was in neither stub nor pointer; §22 lost the `<agent>` = full skill
+    name path rule, what "finalize the prior daily" means, and the daily entry shape; §14 now carries the
+    multi-writer lock mechanics (they lived only in `reports.md`); §9b got an explicit trigger. Funded by
+    moving rationale-only text (the §9 `blockedStateName` blockquote, §12b's closing paragraph) into the
+    pointer files and dropping two meta asides (§18, §10). Slices after: pm 65,052 · qa 63,451 · sweep 58,831 ·
+    junior-dev 58,628 · senior-dev 55,723 · ops 55,527 · architect 43,034 · reflect 41,855 · communication
+    35,207 — every lane under 64 KB, no budget row raised.
+- **Lessons billed at actual bytes (A4).** `lessonsSlice` moved to `lessons.ts` (one authority for the
+  assembler and the bill); `metrics --context` charges the bytes the fire's corpus really inlines (INDEX +
+  shard, sliced to the agent) when a workspace resolves, and the W03 caps — labelled `(cap)` — only when none
+  does. W03's budgets stay the ceiling; its "corpus OFF" notice now fires only on an explicit `false`.
+- **Cheat blocks render only the verbs an agent uses (A5).** `gen-cheatsheets.ts` derives each sheet from
+  an always-on core (`queue`, `ticket`, `tickets`, `comment add`, `notify`, `conventions`) ∪ every
+  `dev-loop <verb>` / §18 op name the SKILL's prose mentions ∪ a small per-agent job floor; the suite asserts
+  the prose-named verbs are on the sheet and nothing outside the union leaks in. Entries drop their blank
+  separator so the core fits the 95-line ceiling. Decision to review: SKILL prose names verbs by op or by
+  job far more than by `dev-loop <verb>`, so a purely prose-derived allowlist would have stripped
+  `ticket create`/`ticket update` from most sheets — the hand-kept job floor stays for that reason.
+- **§0a steps 1–4 pre-assembled; the fire knows why it was launched (A6).** The corpus carries a
+  **Resolved config** block (project, backend, repos with landing mode + default branch + merge/deploy
+  facts, mode/autonomy, deploy policy, devSplit, strategyDoc form, and the enabled projects on a team-scope
+  fire) so step 2 is a read, and the variable tail ends with `why you were launched:` (`once` / `cadence`
+  / `queue` with the servable counts / `breaker-probe`).
+- **Metering by cache channel (A7).** `dev-loop metrics --usage` (and `--json`'s `usage.byLane`) split
+  each lane's tokens into input / cacheRead / cacheWrite / output with `cacheWriteShare =
+  cacheWrite ÷ (input + cacheRead + cacheWrite)` — the number that says whether the stable prefix is
+  hitting — plus a cost-by-channel estimate from `team.pricing.<lane>.inputUsdPerMTok` with Anthropic-style
+  default multipliers (cache write 1.25×, cache read 0.1×, output 5×); a lane with no price says `unpriced`.
+- Also: `detectConsecutiveFailures` (the per-agent form the W44 suite imported but nothing exported) is
+  exported from `metrics.ts`, and `renderHuman` no longer throws on a workspace projection without a root
+  (the metrics suite was red on main for both reasons).
+### Decision 1 — bail-shape labels
+
+- **A blocked ticket's bail-shape was machine-parseable only inside a comment body, which the
+  scheduler cannot cheaply read.** When Dev blocks a ticket (§9) it sets `blocked` + an owner
+  routing label (rows the scheduler reads) and writes a comment whose first line is
+  `Bail-shape: <info-needed | decision-needed | scope-design | external-prereq | fix-exhausted>`.
+  Routing that block to the right owner's unblock job (`decision-needed` → PM, `info-needed` → QA)
+  is the one genuinely content-dependent selection call in the loop, yet the signal lived only in
+  the comment. This promotes the four remaining bail-shapes to seeded `workflow` **labels** (the
+  §9c `external-prereq` tracker had already promoted the fifth), so the routable signal is a label
+  the scheduler reads directly — the comment stays the human-readable record carrying the reason.
+- **The label is DERIVED from the comment, so the two can never disagree.** Exactly as Review 3
+  made `waiting_on` a single-source derived column, the bail-shape label is recomputed from the
+  `Bail-shape:` comment first line at the ticket-write choke point (`ticketwrite.ts`): when such a
+  comment lands on a blocked ticket the matching label is set and any stale bail-shape label is
+  stripped (exactly one at a time, newest wins); when `blocked` is cleared every bail-shape label
+  is stripped. The canonical vocabulary and first-line parser live once, in `bail-shape.ts`
+  (mirroring `blocked-by.ts`), folded by the derivation, the doctor check, and the sweep backfill —
+  no second parser.
+- **Doctor W46 (fail-closed):** a non-terminal `blocked` ticket carrying neither a bail-shape label
+  nor a parseable `Bail-shape:` comment reaches no unblock owner; doctor now warns and names the
+  §9 fix. A block that still carries a parseable comment is routable (the sweep backfills its
+  label) and is not warned.
+- **Sweep backfill:** a new Sweep job (Job 3d) sets the bail-shape label on legacy `blocked`
+  tickets from their parseable `Bail-shape:` comment, within Sweep's existing prose budget.
+- Seed adds `decision-needed` / `info-needed` / `scope-design` / `fix-exhausted` (`workflow`,
+  same as `external-prereq`); they ride the existing INSERT-OR-IGNORE label backfill onto existing
+  projects — no migration. Documented in conventions §4 (label taxonomy) and §9 (the Blocked
+  protocol).
+
 - **An opencode fire's recorded cost was one turn of it (LOOP-476).** `opencodeAdapter.parse()` took
   the LAST `step_finish` as the fire's total, which is right only if opencode's per-event numbers are
   cumulative — a premise the adapter's own comment recorded as unverified. Measured on this

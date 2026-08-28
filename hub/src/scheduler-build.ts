@@ -42,6 +42,10 @@ export function pkgVersionOf(root: string = join(here, "..")): string {
 }
 
 export const schedulerBuildPath = (teamDir: string): string => join(teamDir, "scheduler-build.json");
+// WS-C review 4 — the scheduler's persisted breaker state (breaker.ts writes it, status.ts reads it).
+// Same directory and lifetime as scheduler-build.json; the two are the process's identity and its safety
+// state, and a reader that finds one knows where the other is.
+export const breakerStatePath = (teamDir: string): string => join(teamDir, "breaker.json");
 
 /** Record this process's build identity. Best-effort: a failure must never stop the loop starting. */
 export function writeSchedulerBuild(teamDir: string, now = new Date()): SchedulerBuild | null {

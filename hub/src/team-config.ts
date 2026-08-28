@@ -7,7 +7,7 @@
 // config through here, and legacy consumers get an unchanged view via `toLegacyView` (the M1 de-risk).
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { AGENT_HANDLES, AGENT_HANDLE_SET } from "./agent-handles.ts";
+import { AGENT_HANDLES, AGENT_HANDLE_SET, LANES, LANE_SET } from "./agent-handles.ts";
 import { actionClasses } from "./approvals.ts"; // LOOP-394 — the ONE action-class registry (design §4)
 
 // ─── Types (impl §2.1) ───────────────────────────────────────────────────────
@@ -19,7 +19,22 @@ export interface AgentLaunchConfig { codingAgent?: string; model?: string; effor
   // LOOP-237 — point THIS agent at the on-demand conventions slice instead of pushing the corpus.
   // Per-agent and default OFF: with it off the fire prompt is byte-identical to today.
   conventionsPull?: boolean;
+  // WS-A C4 — per-agent codex sandbox posture; beats team.codex.sandbox for this agent's fires.
+  codexSandbox?: CodexSandbox;
 }
+
+// WS-A C4 — the codex lane's sandbox posture. "safe" (the default) passes NO bypass flags; "bypass" adds
+// `--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check` (the pre-WS-A unconditional shape).
+export const CODEX_SANDBOX_MODES = ["safe", "bypass"] as const;
+export type CodexSandbox = (typeof CODEX_SANDBOX_MODES)[number];
+// WS-A C4 — the claude lane's `--permission-mode` vocabulary (claude-code's own enum, validated strictly so a
+// typo is refused at load rather than passed to a CLI that would reject the whole fire).
+export const CLAUDE_PERMISSION_MODES = ["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] as const;
+export type ClaudePermissionMode = (typeof CLAUDE_PERMISSION_MODES)[number];
+// WS-A A7 — a per-lane price table for `dev-loop metrics --usage` cost-by-channel. `inputUsdPerMTok` is the
+// price of one million UNCACHED input tokens; the channel multipliers default to the Anthropic-style
+// 1.25× (cache write) / 0.1× (cache read) / 5× (output) when absent.
+export interface LanePricing { inputUsdPerMTok: number; cacheWriteMultiplier?: number; cacheReadMultiplier?: number; outputMultiplier?: number }
 
 // The hub block (D8): `agentInterface` maps a coding agent → how its fires reach the hub board on
 // backend:"service" — "cli" (the dev-loop write-layer verbs; identity rides the fire env) or "mcp"
@@ -108,9 +123,14 @@ export interface TeamBlock {
   opencodePermission?: Record<string, unknown>;
   git?: { defaultBranch?: string }; // top-level default (§19 fallback chain — per-repo wins, else this, else "main")
   agentReviewers?: string[]; // GitHub logins excluded from forge-review merge-guard trips (§3.2); set via `dev-loop team set team.agentReviewers`
-  // LOOP-272 — the §0a PUSH path (assembleBootCorpus). Team-level, default OFF: today it is
-  // reachable only by a hand-typed --assemble-boot, so it never runs from config at all.
+  // LOOP-272 — the §0a PUSH path (assembleBootCorpus). Team-level. WS-A (2026-08-27): default ON for
+  // every lane; `false` is the explicit opt-out (a fire then boots in §0a pull mode).
   bootCorpus?: boolean;
+  // WS-A C4 — codex sandbox posture (default "safe") and the claude permission surface (absent ⇒ no flag).
+  codex?: { sandbox?: CodexSandbox };
+  claude?: { allowedTools?: string[]; permissionMode?: ClaudePermissionMode };
+  // WS-A A7 — optional per-lane pricing (`claude` / `codex` / `opencode`) for the cost-by-channel estimate.
+  pricing?: Record<string, LanePricing>;
   backup?: BackupBlock;                                       // LOOP-339: board-snapshot cadence/retention (everyHours 0 = OFF)
   budget?: { dailyUsd?: number | null; perFireUsd?: number }; // cost-governance ceilings (design budget-ceiling); dailyUsd = rolling 24h cap (null/unset = OFF), perFireUsd = per-fire cap
   // LOOP-394 (design approvals §8) — the ONE approvals switch: a per-action-class ENFORCEMENT enable
@@ -365,8 +385,10 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
     // applyConfigTimeouts, the per-fire codingAgent/model/effort resolution) looks the REAL name up,
     // so a misspelled key is simply never consulted. A warning, not an error — a config carrying a
     // retired agent name must not lock the operator out of the commands that repair it (the E09 shape).
-    if (W && !AGENT_HANDLE_SET.has(agent))
-      W("W04", apath, `'${agent}' is not a known agent — this block is never applied (known: ${AGENT_HANDLES.join(", ")}). Check the spelling.`);
+    // pm/qa job-lanes (job-scoped prompts) are valid config keys too: a lane is an agent-roster key the
+    // scheduler reads for per-lane model/effort/cadence/timeouts (it fires as its owning actor).
+    if (W && !AGENT_HANDLE_SET.has(agent) && !LANE_SET.has(agent))
+      W("W04", apath, `'${agent}' is not a known agent — this block is never applied (known: ${[...AGENT_HANDLES, ...LANES].join(", ")}). Check the spelling.`);
     if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) { E("E17", apath, "agent config must be an object"); continue; }
     const a = cfg as Record<string, unknown>;
     for (const field of ["fireTimeout", "stallTimeout"] as const) {
@@ -399,6 +421,9 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
     }
     if (isProjectScope && a.cadence !== undefined)
       E("E17", `${apath}.cadence`, `projects.<key>.agents.<agent>.cadence is not honoured in team mode — the team runs one scheduler that rotates across projects by weight; set cadence under team.agents instead, or express per-project frequency with the project's rotation weight`);
+    // WS-A C4 — the per-agent codex sandbox override shares the team-level vocabulary.
+    if (a.codexSandbox !== undefined && !(CODEX_SANDBOX_MODES as readonly unknown[]).includes(a.codexSandbox))
+      E("E17", `${apath}.codexSandbox`, `agents.${agent}.codexSandbox must be "safe" or "bypass" (got ${JSON.stringify(a.codexSandbox)})`);
   }
 }
 
@@ -514,6 +539,42 @@ function validateTeamBlock(team: TeamBlock, E: Emit, W: Emit): void {
   }
   if (team.budget !== undefined) validateBudget(team.budget, E);
   if (team.approvals !== undefined) validateApprovals((team as { approvals?: unknown }).approvals, E); // LOOP-394
+  // WS-A C4 / A7 — codex sandbox, claude permission surface, lane pricing. Strict: each of these changes what a
+  // fire is ALLOWED to do (or what the operator is told it cost), so a typo must fail at load, not resolve to a
+  // silent default.
+  if (team.codex !== undefined) {
+    const c = team.codex as { sandbox?: unknown } | null;
+    if (c === null || typeof c !== "object" || Array.isArray(c)) E("E18", "team.codex", "team.codex must be an object ({ sandbox?: \"safe\"|\"bypass\" })");
+    else {
+      for (const k of Object.keys(c)) if (k !== "sandbox") E("E18", `team.codex.${k}`, `unknown team.codex key '${k}' (expected sandbox)`);
+      if (c.sandbox !== undefined && !(CODEX_SANDBOX_MODES as readonly unknown[]).includes(c.sandbox))
+        E("E18", "team.codex.sandbox", `team.codex.sandbox must be "safe" or "bypass" (got ${JSON.stringify(c.sandbox)}) — "bypass" restores the pre-WS-A --dangerously-bypass-approvals-and-sandbox lane`);
+    }
+  }
+  if (team.claude !== undefined) {
+    const c = team.claude as { allowedTools?: unknown; permissionMode?: unknown } | null;
+    if (c === null || typeof c !== "object" || Array.isArray(c)) E("E18", "team.claude", "team.claude must be an object ({ allowedTools?: string[], permissionMode?: string })");
+    else {
+      for (const k of Object.keys(c)) if (k !== "allowedTools" && k !== "permissionMode") E("E18", `team.claude.${k}`, `unknown team.claude key '${k}' (expected allowedTools, permissionMode)`);
+      if (c.allowedTools !== undefined && !(Array.isArray(c.allowedTools) && c.allowedTools.length > 0 && c.allowedTools.every((t) => typeof t === "string" && t.trim())))
+        E("E18", "team.claude.allowedTools", "team.claude.allowedTools must be a non-empty array of non-empty tool strings (e.g. [\"Read\", \"Bash(git log:*)\"]) — passed to claude as --allowedTools");
+      if (c.permissionMode !== undefined && !(CLAUDE_PERMISSION_MODES as readonly unknown[]).includes(c.permissionMode))
+        E("E18", "team.claude.permissionMode", `team.claude.permissionMode must be one of ${CLAUDE_PERMISSION_MODES.join("|")} (got ${JSON.stringify(c.permissionMode)}) — passed to claude as --permission-mode`);
+    }
+  }
+  if (team.pricing !== undefined) {
+    const p = team.pricing as Record<string, unknown> | null;
+    if (p === null || typeof p !== "object" || Array.isArray(p)) E("E18", "team.pricing", "team.pricing must be an object mapping lane (claude|codex|opencode) → { inputUsdPerMTok, cacheWriteMultiplier?, cacheReadMultiplier?, outputMultiplier? }");
+    else for (const [lane, raw] of Object.entries(p)) {
+      const path = `team.pricing.${lane}`;
+      if (!CODING_AGENT_KEYS.has(lane)) E("E18", path, `unknown lane '${lane}' (expected claude, codex, or opencode)`);
+      const e = raw as Record<string, unknown> | null;
+      if (e === null || typeof e !== "object" || Array.isArray(e)) { E("E18", path, "lane pricing must be an object"); continue; }
+      for (const k of Object.keys(e)) if (!["inputUsdPerMTok", "cacheWriteMultiplier", "cacheReadMultiplier", "outputMultiplier"].includes(k)) E("E18", `${path}.${k}`, `unknown pricing key '${k}'`);
+      if (typeof e.inputUsdPerMTok !== "number" || !(e.inputUsdPerMTok >= 0)) E("E18", `${path}.inputUsdPerMTok`, `inputUsdPerMTok must be a non-negative number (USD per million uncached input tokens)`);
+      for (const k of ["cacheWriteMultiplier", "cacheReadMultiplier", "outputMultiplier"]) if (e[k] !== undefined && (typeof e[k] !== "number" || !(e[k] as number >= 0))) E("E18", `${path}.${k}`, `${k} must be a non-negative number (a multiplier on the input price)`);
+    }
+  }
 }
 
 const PROVIDER_KEYS = "kind, baseUrl, authTokenEnv, models, extraOptions, effortMode";
@@ -762,6 +823,42 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
       },
     } : {}),
   };
+}
+
+// WS-A C4 review 1 — which agent handles the CONFIG routes to the codex lane, and where that routing
+// comes from. From config alone (doctor cannot see a run's --cli; `team set` runs with no scheduler).
+// This mirrors run-agents' resolveCodingAgent EXACTLY — per-agent project override, else the project's
+// (team-merged) defaultCodingAgent — and consults only the projects a fire can launch on (enabled, not
+// scratch). Steward fires resolve their profile against the first enabled project, so the per-project
+// walk covers them too. `team.agents.<h>.codingAgent` is deliberately NOT a source: the scheduler reads
+// team.agents for cadence, timeouts and codexSandbox but the launch-profile resolver never grew a reader
+// for codingAgent/model (LOOP-327 made the path settable; a dry-run with team.agents.sweep.codingAgent=
+// codex still renders sweep as cli=claude — verified 2026-08-27). Counting it would make W45 warn about
+// a lane that does not fire. `handles` is passed in rather than imported from seed.ts so this module
+// keeps its zero-dependency shape.
+export interface CodexRoute { handle: string; via: string }
+export function codexRoutedHandles(ws: Workspace, handles: readonly string[]): CodexRoute[] {
+  const out = new Map<string, string>();
+  const add = (h: string, via: string) => { if (!out.has(h)) out.set(h, via); };
+  for (const key of deliveryProjects(ws)) {
+    const eff = effectiveProject(ws, key);
+    const agents = (eff.agents ?? {}) as Record<string, { codingAgent?: unknown } | undefined>;
+    for (const [h, a] of Object.entries(agents)) if (a?.codingAgent === "codex") add(h, `projects.${key}.agents.${h}.codingAgent`);
+    if (eff.defaultCodingAgent === "codex") {
+      const via = ws.file.projects[key]?.defaultCodingAgent === "codex" ? `projects.${key}.defaultCodingAgent` : "team.defaultCodingAgent";
+      for (const h of handles) if (typeof agents[h]?.codingAgent !== "string") add(h, via);
+    }
+  }
+  return [...out.entries()].map(([handle, via]) => ({ handle, via }));
+}
+
+// The routed handles whose sandbox posture is NOT pinned anywhere — i.e. the ones riding the "safe"
+// default. Empty when team.codex.sandbox is set (it covers every handle) or when every routed handle
+// carries its own agents.<h>.codexSandbox. This is the one predicate doctor (W45), `team set` and the
+// scheduler-start notice share, so the three can never disagree about who is on the default.
+export function codexSandboxUnpinned(ws: Workspace, handles: readonly string[]): CodexRoute[] {
+  if (ws.file.team.codex?.sandbox !== undefined) return [];
+  return codexRoutedHandles(ws, handles).filter((r) => ws.file.team.agents?.[r.handle]?.codexSandbox === undefined);
 }
 
 export function reposOfProject(ws: Workspace, key: string): Array<{ ref: string; role?: string; absPath: string }> {

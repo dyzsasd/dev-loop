@@ -40,19 +40,24 @@ try {
   const ws = loadWorkspace(wsRoot);
 
   // ── AC1: the slice is always-read + cited spans MINUS the config-off anchors ──────────────────
+  // The job-scoped rollout slimmed the SKILL Sections lines: senior-dev no longer declares §12c/§12d
+  // (its ship path pulls the shared dev playbooks instead), so the §12c-autoMerge DISCRIMINATOR now
+  // rides `ops`, which still declares §12c AND §19 — the selective-prune intent is unchanged, only the
+  // agent that carries both anchors changed. senior-dev still declares §19/§24 (both config-off here).
   const senior = conventionsSlice(root, "senior-dev", ws, "p");
   ok(senior.anchors.length > 0, `LOOP-237 AC1: senior-dev declares ${senior.anchors.length} anchors`);
-  for (const off of ["12d", "19", "24"]) {
-    ok(senior.pruned.includes(off), `LOOP-237 AC1: §${off} is config-pruned (no deploy / single repo / no codex)`);
+  for (const off of ["19", "24"]) {
+    ok(senior.pruned.includes(off), `LOOP-237 AC1: §${off} is config-pruned (single repo / no codex)`);
     ok(!senior.kept.includes(off), `LOOP-237 AC1: …and absent from the kept set`);
   }
-  // THE DISCRIMINATOR: §12c's feature (autoMerge) is ON in this fixture, so it must be KEPT. Without
-  // it, "prune everything" passes every assertion above — which is exactly what happened on CI when
-  // the fixture was the ambient workspace and nothing resolved.
-  ok(senior.anchors.includes("12c") && senior.kept.includes("12c") && !senior.pruned.includes("12c"),
-    "LOOP-237 AC1: §12c is KEPT because autoMerge is on here — the prune is SELECTIVE, not total");
-  ok(senior.kept.length > 0 && senior.kept.length < senior.anchors.length,
-    `LOOP-237 AC1: the prune removes SOME anchors, not none and not all (${senior.kept.length} of ${senior.anchors.length})`);
+  // THE DISCRIMINATOR: §12c's feature (autoMerge) is ON in this fixture, so it must be KEPT while §19
+  // (config-off) is pruned in the SAME slice. Without a kept anchor "prune everything" passes every
+  // assertion above — which is exactly what happened on CI when nothing resolved. Carried by ops now.
+  const ops = conventionsSlice(root, "ops", ws, "p");
+  ok(ops.anchors.includes("12c") && ops.kept.includes("12c") && !ops.pruned.includes("12c"),
+    "LOOP-237 AC1: §12c is KEPT because autoMerge is on here — the prune is SELECTIVE, not total (ops slice)");
+  ok(ops.pruned.includes("19") && ops.kept.length > 0 && ops.kept.length < ops.anchors.length,
+    `LOOP-237 AC1: the prune removes SOME anchors (§19) not all — §12c kept beside it (${ops.kept.length} of ${ops.anchors.length})`);
 
   // ── AC2: byte-consistent with the span math + the pruned set ─────────────────────────────────
   // Recompute the union independently from the same inputs. A slice that disagreed with
@@ -171,13 +176,13 @@ try {
   }
   // ── LOOP-371 AC3: a resolvable workspace whose config genuinely has a feature off still prunes it
   // The fail-open path must not blanket-disable pruning. Already covered by AC1 above:
-  // the synthetic workspace prunes §12d/§19/§24, and AC1 confirmed the outside-cwd path matches.
-  // Explicit confirmation here:
+  // the synthetic workspace prunes §19/§24 (senior) and keeps §12c while pruning §19 (ops), and AC1
+  // confirmed the outside-cwd path matches. Explicit confirmation here:
   {
-    ok(senior.pruned.includes("12d"), `LOOP-371 AC3: §12d pruned (no deploy configured)`);
     ok(senior.pruned.includes("19"), `LOOP-371 AC3: §19 pruned (single repo)`);
     ok(senior.pruned.includes("24"), `LOOP-371 AC3: §24 pruned (no codex)`);
-    ok(senior.kept.includes("12c"), `LOOP-371 AC3: §12c kept (autoMerge enabled)`);
+    ok(ops.pruned.includes("19"), `LOOP-371 AC3: §19 pruned in the ops slice (single repo)`);
+    ok(ops.kept.includes("12c"), `LOOP-371 AC3: §12c kept (autoMerge enabled)`);
   }
   // ── LOOP-398 AC5: error inputs produce exit 1 with one-line message, no stack trace ────
   // Both a malformed Sections line and an unknown agent must produce exit 1 with the composed

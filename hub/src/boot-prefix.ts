@@ -16,7 +16,9 @@ import { selfDriftLine, installedRootOf } from "./self-drift.ts"; // LOOP-249: d
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { devInheritedSlices, parseConventions, parseSectionsLine, splitSkill, splitLines } from "./context-bill.ts";
+import { parseConventions, parseSectionsLine, splitSkill, jobSlice, cheatSlice, readConstitution, type JobSpan } from "./context-bill.ts";
+import { lessonsSlice } from "./lessons.ts";
+export { lessonsSlice, LESSONS_SECTION } from "./lessons.ts"; // the slicer moved to lessons.ts (one authority for the assembler AND the bill); re-exported for existing importers
 
 export interface BootCorpus {
   text: string;        // the full marker-wrapped block to append to the prompt
@@ -101,32 +103,6 @@ export const CONDITIONAL_SECTIONS: Record<string, { why: string; active: (cfg: P
   },
 };
 
-// §14 layout: one `## <Section>` per role + `## Shared`. The agent-id → section-name map
-// mirrors the init scaffold order in conventions §14.
-const LESSONS_SECTION: Record<string, string> = {
-  pm: "PM", qa: "QA", dev: "Dev", "senior-dev": "senior-dev", "junior-dev": "junior-dev",
-  sweep: "Sweep", reflect: "Reflect", ops: "Ops", architect: "Architect",
-  communication: "Communication",
-};
-
-// Extract `## <name>` sections from a lessons file, preserving file order. Missing
-// sections are skipped silently (a young lessons file may not carry every heading yet).
-export function lessonsSlice(text: string, agent: string): string {
-  const want = new Set<string>(["Shared"]);
-  const own = LESSONS_SECTION[agent];
-  if (own) want.add(own);
-  if (agent === "senior-dev" || agent === "junior-dev") want.add("Dev");
-  const lines = splitLines(text);
-  const out: string[] = [];
-  let keep = false;
-  for (const l of lines) {
-    const m = /^## (.+?)\s*$/.exec(l);
-    if (m) keep = want.has(m[1]);
-    if (keep) out.push(l);
-  }
-  return out.join("\n");
-}
-
 // The conventions union as TEXT: always-read + cited spans, each line once, in file
 // order; uncited gaps collapse to one thin marker line so the model knows the ToC has
 // more and the §0a on-demand escape hatch still applies.
@@ -167,6 +143,130 @@ export function conventionsUnionText(convText: string, anchors: readonly string[
   return { text, bytes: Buffer.byteLength(text, "utf8"), contentBytes, effectiveSpans };
 }
 
+// ── WS-A A6: the "Resolved config" block — §0a step 2, pre-assembled ───────────────────────────
+// The scheduler already resolved every fact step 2 asks the agent to derive (project, backend, repos
+// with their landing mode + default branch, autonomy/mode, deploy policy, devSplit, strategyDoc). Shipping
+// them in the corpus makes step 2 a read, not a config walk. Byte-constant per (workspace config, project):
+// nothing here is per-fire.
+export interface ResolvedRepoFact { ref: string; role?: string; landing?: string; defaultBranch?: string; autoMerge?: boolean; deployStyle?: string }
+export interface ResolvedFireConfig {
+  projectKey: string;          // "" / "_team" on a team-scope fire
+  teamKey?: string;
+  backend: string;
+  mode?: string; autonomy?: string; devSplit?: boolean; intakeMode?: string; docSystem?: string;
+  deployPolicy?: Record<string, string>;
+  strategyDoc?: string;        // the resolved form label ("docs/STRATEGY.md" / "hubDoc:strategy" / "linearDocument:…") — never doc CONTENT
+  repos: ResolvedRepoFact[];
+  teamProjects?: Array<{ key: string; enabled: boolean; weight: number; repos: string[] }>; // team-scope fires only
+}
+export function renderResolvedConfig(r: ResolvedFireConfig): string {
+  const kv = (k: string, v: unknown): string | null => (v === undefined || v === null || v === "" ? null : `${k}: ${String(v)}`);
+  const head = [kv("project", r.projectKey || "(team scope — no single project)"), kv("team", r.teamKey), kv("backend", r.backend)].filter(Boolean).join(" · ");
+  const lines: string[] = [`### Resolved config (§0a step 2, pre-assembled) — ${head}`];
+  const knobs = [kv("mode", r.mode), kv("autonomy", r.autonomy), kv("devSplit", r.devSplit === undefined ? undefined : r.devSplit ? "true" : "false"), kv("intake.mode", r.intakeMode), kv("docSystem", r.docSystem)].filter(Boolean);
+  if (knobs.length) lines.push(`- ${knobs.join(" · ")}`);
+  const dp = r.deployPolicy && Object.keys(r.deployPolicy).length ? Object.entries(r.deployPolicy).map(([e, v]) => `${e}=${v}`).join(", ") : null;
+  lines.push(`- deployPolicy: ${dp ?? "(none — no ceiling)"}`);
+  lines.push(`- strategyDoc: ${r.strategyDoc ?? "(none configured)"}`);
+  if (r.repos.length) {
+    lines.push(`- repos (${r.repos.length}${r.repos.length > 1 ? " — multi-repo, §19" : " — single-repo, the target is implicit"}):`);
+    for (const x of r.repos) {
+      const facts = [x.role ? `role ${x.role}` : null, `landing ${x.landing ?? "direct (default)"}`, `defaultBranch ${x.defaultBranch ?? "main (default)"}`, x.autoMerge ? "autoMerge on" : null, x.deployStyle ? `deploy.style ${x.deployStyle}` : null].filter(Boolean).join("; ");
+      lines.push(`  - ${x.ref} — ${facts}`);
+    }
+  } else lines.push("- repos: (none)");
+  if (r.teamProjects) {
+    lines.push(`- enabled projects (team scope): ${r.teamProjects.map((p) => `${p.key}×${p.weight}${p.repos.length ? ` [${p.repos.join(", ")}]` : ""}`).join(", ") || "(none)"}`);
+  }
+  return lines.join("\n");
+}
+
+// ── the corpus lessons slice — ONE dir resolution + slice for BOTH the classic and job-scoped paths ──
+// §14 cross-fire learning: the workspace lessons INDEX + this project's shard (+ the legacy v1 path),
+// sliced to this agent's sections (own + ## Shared, + ## Dev for the split dev tiers — lessonsSlice).
+// `dataDir` is the fire's state root (opts.dataDir = wsStateRoot(ws)), so join(dataDir,"lessons") is the
+// same dir the context bill reads. No dataDir (no workspace resolved) ⇒ "" — the "no workspace ⇒ nothing"
+// rule the bill mirrors with its W03 caps. Absent files are not errors (fail open per convention).
+function corpusLessonsSlice(dataDir: string | undefined, project: string | undefined, agent: string): string {
+  if (!dataDir) return "";
+  const lessonsDir = join(dataDir, "lessons");
+  const lessonsParts: string[] = [];
+  const indexPath = join(lessonsDir, "INDEX.md");
+  if (existsSync(indexPath)) lessonsParts.push(readFileSync(indexPath, "utf8"));
+  if (project) {
+    const shardPath = join(lessonsDir, `${project}.md`);
+    if (existsSync(shardPath)) lessonsParts.push(readFileSync(shardPath, "utf8"));
+    const legacyPath = join(dataDir, project, "lessons.md");
+    if (existsSync(legacyPath)) lessonsParts.push(readFileSync(legacyPath, "utf8"));
+  }
+  const lessonsCombined = lessonsParts.join("\n\n");
+  return lessonsCombined.trim() ? lessonsSlice(lessonsCombined, agent) : "";
+}
+
+// Job-scoped corpus (docs/design/job-scoped-prompts.md): when the scheduler picks a job for a fire, the
+// fire loads the resident kernel (skills/_constitution.md, VERBATIM) + ONE job playbook (the marked span
+// in the agent's SKILL) + the shared playbooks that span `pulls:` — NOT the whole SKILL and the 64 KB
+// conventions union. Byte-stable per (agent, job): two pm/verify fires share this exact block, pm/verify
+// vs pm/groom differ (correct — different work). One span authority (context-bill.jobSlice), so a pushed
+// corpus and a `dev-loop playbook` pull are byte-identical. Fail-open: a missing span/file ⇒ null, and
+// runAgent degrades to the classic full-SKILL boot. EXPORTED so the `dev-loop playbook` pull verb prints
+// the byte-identical slice (same function, so pushed and pulled cannot drift — the "one authority" rule).
+// `dataDir`/`project` (optional so the bill and existing callers keep their bytes): when given, the corpus
+// carries this project's §14 lessons slice — the loop's cross-fire learning mechanism (§14), which a job
+// fire DROPPED entirely before. Same resolution + lessonsSlice as the classic path (corpusLessonsSlice, one
+// authority). A pushed fire passes them; the `dev-loop playbook` pull verb resolves the same workspace, so
+// pushed ≡ pulled holds byte-for-byte on the same (agent, job, workspace-config).
+export function assembleJobCorpus(root: string, agent: string, job: string, dataDir?: string, project?: string): BootCorpus | null {
+  const skillRaw = readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8");
+  const span: JobSpan | null = jobSlice(skillRaw, job);
+  if (!span) return null; // this agent's SKILL declares no such job — fail open
+  const parts: string[] = [];
+  parts.push("### skills/_constitution.md — the resident kernel (loaded VERBATIM, gates every action)", readConstitution(root));
+  parts.push(`### skills/${agent}-agent/SKILL.md — job:${job} playbook${span.kind ? ` (kind: ${span.kind})` : ""} (this fire's ONE job)`, span.text);
+  // Inline ONLY the shared playbooks the span pulls (skills/playbooks/*), deduped, in order. The
+  // reference stubs it also names (references/…) stay tier-3 — read on demand at their trigger, per the
+  // span's own `pulls:` line (which rides span.text above).
+  const inlined = span.pulls.filter((p) => p.startsWith("skills/playbooks/"));
+  for (const rel of inlined) {
+    const p = join(root, rel);
+    if (!existsSync(p)) return null; // a pulled playbook the span promises is missing ⇒ fail open
+    parts.push(`### ${rel} — shared playbook pulled by job:${job} (pre-read)`, readFileSync(p, "utf8"));
+  }
+  // The agent's CLI cheat-sheet (exact `dev-loop` verb forms + flags + the exit-code table) lives in the
+  // SKILL FRAME, which job-boot drops — so migrated agents lost their exact verb syntax. It is small,
+  // agent-specific and every job runs CLI verbs, so it rides the corpus VERBATIM (byte-identical to the
+  // block cli-cheatsheet.ts byte-checks). A SKILL with no cheat block ⇒ skipped gracefully.
+  const cheat = cheatSlice(skillRaw);
+  if (cheat.trim()) parts.push("### CLI cheat-sheet (exact verb forms + exit codes)", cheat);
+  // §14 lessons (§0a step 4) — the loop's cross-fire learning mechanism, which a job fire dropped before.
+  // Same dir resolution + slice as the classic corpus (corpusLessonsSlice). No workspace ⇒ nothing.
+  const lessonsSliced = corpusLessonsSlice(dataDir, project, agent);
+  let lessonsBytes = 0;
+  if (lessonsSliced.trim()) {
+    parts.push(`### lessons — your section + ## Shared (§0a step 4, pre-read)`, lessonsSliced);
+    lessonsBytes = Buffer.byteLength(lessonsSliced, "utf8");
+  }
+  const stubs = span.pulls.filter((p) => !p.startsWith("skills/playbooks/"));
+  const body = parts.join("\n\n");
+  const hash = createHash("sha256").update(body).digest("hex").slice(0, 12);
+  const text = [
+    "", "",
+    `<!-- devloop-boot:begin agent=${agent} job=${job} hash=${hash} -->`,
+    `[JOB CORPUS — pre-assembled by the scheduler for the '${job}' job. AUTHORITATIVE: the resident`,
+    "constitution, this job's playbook, the shared playbooks it pulls, your CLI cheat-sheet and your",
+    "lessons slice are ALL below — do NOT re-read the full SKILL or the conventions union this fire.",
+    "Board reads and the opening summary still run",
+    stubs.length ? `fresh. Reference stubs (${stubs.join(", ")}) stay on-demand — read one only at its trigger, per §0a.]`
+                 : "fresh. The §0a on-demand escape hatch is unchanged.]",
+    "",
+    body,
+    "",
+    `<!-- devloop-boot:end hash=${hash} -->`,
+    "",
+  ].join("\n");
+  return { text, bytes: Buffer.byteLength(text, "utf8"), hash, conventionsBytes: 0, lessonsBytes, pruned: [] };
+}
+
 export function assembleBootCorpus(
   root: string, dataDir: string, agent: string, project: string, backend: string,
   projectCfg?: ProjectCfg, reposRegistry?: ReposRegistry,
@@ -182,8 +282,17 @@ export function assembleBootCorpus(
   // against the representative project; widening those is a different question about which
   // project's settings govern a team fire, and this ticket does not answer it.
   teamScopeCfgs?: ProjectCfg[],
+  // WS-A A6: the scheduler-resolved config facts (§0a step 2). Optional so every existing caller and
+  // fixture keeps its bytes; when present the block rides between the conventions slice and lessons.
+  resolved?: ResolvedFireConfig,
+  // Job-scoped prompts (docs/design/job-scoped-prompts.md): when set, the fire loads the constitution +
+  // this ONE job's playbook + the shared playbooks it pulls, and the conventions union / config / lessons
+  // are DROPPED (the constitution is resident, the job span names what to pull). Absent ⇒ today's behavior
+  // byte-for-byte unchanged. A pm lane threads its scheduler-picked job here.
+  job?: string,
 ): BootCorpus | null {
   try {
+    if (job) return assembleJobCorpus(root, agent, job, dataDir, project); // job-scoped path — everything else below is the classic §0a corpus
     const skillRaw = readFileSync(join(root, "skills", `${agent}-agent`, "SKILL.md"), "utf8");
     const sec = parseSectionsLine(splitSkill(skillRaw.replace(/^---\n[\s\S]*?\n---\n/, "")).prose);
     if (sec.errors.length) return null; // malformed Sections line ⇒ pull mode
@@ -207,20 +316,12 @@ export function assembleBootCorpus(
       conv.text,
     );
 
-    // Lessons: read from the workspace lessons dir (INDEX + project shard) plus the legacy v1 path.
-    // All three sources contribute when present; absent files are not errors (fail open per convention).
-    const lessonsDir = join(dataDir, "lessons");
-    const lessonsParts: string[] = [];
-    const indexPath = join(lessonsDir, "INDEX.md");
-    if (existsSync(indexPath)) lessonsParts.push(readFileSync(indexPath, "utf8"));
-    if (project) {
-      const shardPath = join(lessonsDir, `${project}.md`);
-      if (existsSync(shardPath)) lessonsParts.push(readFileSync(shardPath, "utf8"));
-      const legacyPath = join(dataDir, project, "lessons.md");
-      if (existsSync(legacyPath)) lessonsParts.push(readFileSync(legacyPath, "utf8"));
-    }
-    const lessonsCombined = lessonsParts.join("\n\n");
-    const lessonsSliced = lessonsCombined.trim() ? lessonsSlice(lessonsCombined, agent) : "";
+    if (resolved) parts.push(renderResolvedConfig(resolved));
+
+    // Lessons: the workspace lessons dir (INDEX + project shard) + the legacy v1 path, sliced to this
+    // agent (corpusLessonsSlice — the ONE resolution the job-scoped path also uses). Absent files are not
+    // errors (fail open per convention).
+    const lessonsSliced = corpusLessonsSlice(dataDir, project, agent);
     let lessonsBytes = 0;
     if (lessonsSliced.trim()) {
       parts.push(`### lessons — your section + ## Shared (§0a step 4, pre-read)`, lessonsSliced);
@@ -244,27 +345,10 @@ export function assembleBootCorpus(
     }
     }
 
-    // Split tiers inherit dev's ship sequence (§21c) — ship the marker-delimited slice IN the
-    // corpus so the inheritance is deterministic instead of a ~21KB mid-fire pull. Marker pair
-    // missing ⇒ skip silently (the SKILL's pull-mode instruction still covers the fire).
-    if (agent === "senior-dev" || agent === "junior-dev") {
-      const devSkill = readFileSync(join(root, "skills", "dev-agent", "SKILL.md"), "utf8");
-      // LOOP-553: the tiers are told to run Step 0.5 "exactly as dev-agent spells out" — ship it,
-      // not just the ship sequence, or the instruction references text the corpus never carries.
-      // The extractor is shared with the bill (context-bill.ts) so shipped and billed cannot drift.
-      // The fire-start slice rides the SAME predicate that keeps §12c: a project with neither
-      // autoMerge nor release-pr prunes the pass from conventions, so it must not pay for the
-      // slice either (codex review, PR #313).
-      const fireStartActive = CONDITIONAL_SECTIONS["12c"].active(projectCfg, backend, repos, maxPerProject);
-      const slices = devInheritedSlices(devSkill).filter((sl) => sl.label !== "Step 0.5" || fireStartActive);
-      if (slices.length > 0) {
-        const what = slices.map((sl) => sl.label).join(" + ");
-        parts.push(
-          `### skills/dev-agent/SKILL.md — ${what} (your inherited fire-start + ship sequence, §21c, pre-read)`,
-          slices.map((sl) => sl.text).join("\n\n"),
-        );
-      }
-    }
+    // (The retired LOOP-553 split-tier inheritance lived here: senior-dev/junior-dev classic-boot used to
+    // append dev-agent's fire-start + ship-sequence marker spans. That content moved into the shared dev
+    // playbooks the dev/senior/junior JOB spans pull, so the tiers now job-boot; this classic-boot path is
+    // only the fail-open fallback and no longer re-derives an inherited slice.)
 
     const body = parts.join("\n\n");
     const hash = createHash("sha256").update(body).digest("hex").slice(0, 12);
@@ -272,11 +356,12 @@ export function assembleBootCorpus(
       "",
       "",
       `<!-- devloop-boot:begin agent=${agent} hash=${hash} -->`,
-      "[BOOT CORPUS — pre-assembled by the scheduler. This block IS your §0a boot reading:",
-      "the conventions selective read (step 1), the lessons read (step 4), and the backend",
-      "contract read are ALREADY below — do NOT re-read those files this fire. Every other",
-      "boot step (config, report start, board state) still executes fresh. The §0a",
-      "uncited-section escape hatch is unchanged.]",
+      "[BOOT CORPUS — pre-assembled by the scheduler; this inline block is AUTHORITATIVE for §0a",
+      "steps 1–4: the conventions selective read (step 1), the resolved config (step 2), the",
+      "backend contract (step 3) and the lessons read (step 4) are ALREADY below — do NOT re-read",
+      "those files or re-derive that config this fire. Steps 5–6 (report start, the opening",
+      "summary) and every board read still execute fresh. The §0a uncited-section escape hatch and",
+      "the pointer-stub reads (references/conventions/<slug>.md at their trigger moment) are unchanged.]",
       "",
       body,
       "",

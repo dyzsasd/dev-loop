@@ -1,0 +1,31 @@
+# dev-loop scheduler (`dev-loop run` — the process that fires agents) — per-USER systemd unit, one
+# instance per workspace. %i = the workspace's team key. The scheduler ensures the hub daemon itself on
+# a service backend (`hub ensure`), so on a machine that runs the loop this is the ONE unit you need.
+# Install:
+#   cp dev-loop-scheduler@.service ~/.config/systemd/user/
+#   edit the two "edit:" lines (and --agents / --change-gate to taste), then:
+#   systemctl --user daemon-reload && systemctl --user enable --now dev-loop-scheduler@<team-key>
+#   loginctl enable-linger "$USER"
+# Pause/drain before config edits or upgrades (SKILL.md §5/§6): `dev-loop pause --drain`, edit,
+# `systemctl --user restart dev-loop-scheduler@<team-key>`, `dev-loop resume`.
+[Unit]
+Description=dev-loop scheduler for workspace %i (fires the agent team)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# edit: the workspace root (the directory holding dev-loop.json) — both lines, same path.
+WorkingDirectory=%h/work/my-team
+Environment=DEVLOOP_WORKSPACE=%h/work/my-team
+Environment=DEVLOOP_ACTOR=operator
+Environment=PATH=%h/.npm-global/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env dev-loop run --agents core --change-gate
+# SIGTERM: the scheduler forwards it to in-flight fires and exits when they drain.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

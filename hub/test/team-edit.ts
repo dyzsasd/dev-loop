@@ -620,6 +620,30 @@ try {
     const sBadEnum = run("team", ["set", "team.agents.sweep.codingAgent", "gemini"], { cwd: ws327 });
     ok(sBadEnum.code !== 0, "LOOP-327: codingAgent outside {claude,codex,opencode} is refused");
   }
+  // ══ WS-A C4 review 1: team.codex.sandbox + team.agents.<a>.codexSandbox are settable; the codex-routing hint ══
+  {
+    const wsC4 = join(tmp, "ws-c4");
+    run("team", ["init", "--dir", wsC4, "--key", "wc4", "--backend", "service", "--yes"]);
+    const cfgC4 = () => readJson(join(wsC4, "dev-loop.json"));
+    // Routing a handle to codex while the posture is unset ⇒ the hint names the default, the key and W45.
+    const routeOps = run("team", ["set", "team.agents.ops.codingAgent", "codex"], { cwd: wsC4 });
+    ok(routeOps.code === 0 && /NOTE: team\.codex\.sandbox is unset — ops will fire on codex's SAFE default/.test(routeOps.out) && /team set team\.codex\.sandbox bypass \(doctor W45\)/.test(routeOps.out),
+      "C4 review 1: `team set team.agents.<a>.codingAgent codex` with the posture unset prints the SAFE-default NOTE naming the key and doctor W45");
+    // The CHANGELOG's own restore line — it exited 2 as "not an operator-settable path" before this review.
+    const sBypass = run("team", ["set", "team.codex.sandbox", "bypass"], { cwd: wsC4 });
+    ok(sBypass.code === 0 && cfgC4().team.codex?.sandbox === "bypass", `C4 review 1: team.codex.sandbox is settable (got ${sBypass.code}: ${sBypass.out.replace(/\n/g, " | ").slice(0, 160)})`);
+    ok(/restart the scheduler to pick it up/.test(sBypass.out) && /read once at boot/.test(sBypass.out), "C4 review 1: setting the posture says it is read once at scheduler boot (a running loop does not see it)");
+    const sBadSandbox = run("team", ["set", "team.codex.sandbox", "yolo"], { cwd: wsC4 });
+    ok(sBadSandbox.code !== 0 && /must be one of safe\|bypass/.test(sBadSandbox.out) && cfgC4().team.codex?.sandbox === "bypass", "C4 review 1: a token outside safe|bypass is refused at the set gate and the file is untouched");
+    // Once pinned, routing another handle to codex prints no NOTE.
+    const routePm = run("team", ["set", "team.agents.pm.codingAgent", "codex"], { cwd: wsC4 });
+    ok(routePm.code === 0 && !/team\.codex\.sandbox is unset/.test(routePm.out), "C4 review 1: with team.codex.sandbox pinned, routing another handle to codex prints no NOTE");
+    const sAgent = run("team", ["set", "team.agents.pm.codexSandbox", "safe"], { cwd: wsC4 });
+    ok(sAgent.code === 0 && cfgC4().team.agents?.pm?.codexSandbox === "safe" && cfgC4().team.agents?.pm?.codingAgent === "codex",
+      `C4 review 1: team.agents.<a>.codexSandbox is settable and merges into the existing agent block (got ${JSON.stringify(cfgC4().team.agents?.pm)})`);
+    const helpC4 = run("team", ["set", "--help"], { cwd: wsC4 });
+    ok(/codex\.sandbox/.test(helpC4.out) && /codexSandbox/.test(helpC4.out), "C4 review 1: `team set --help` lists codex.sandbox and agents.<a>.codexSandbox in the settable-paths summary");
+  }
 
   // ══ LOOP-307 (LOOP-302 ③): a deleted project leaves a tombstone; no silent resurrection ══════
   {

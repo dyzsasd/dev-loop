@@ -13,8 +13,10 @@ let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 // Helper: create a fire row
+// errorClass is OMITTED (not null) on a success: FireRow types it `string | undefined`, and the
+// ledger writes no key for a clean fire — the fixture mirrors the real row shape.
 const fire = (agent: string, ts: string, errorClass: string | null = null): FireRow => ({
-  ts, agent, project: "test", errorClass,
+  ts, agent, project: "test", ...(errorClass ? { errorClass } : {}),
 });
 
 // Helper: parse ISO string to ms since epoch

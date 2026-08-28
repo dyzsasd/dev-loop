@@ -22,18 +22,19 @@ import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ON
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { platform } from "node:os";
-import { sameDaemonCode, readAutostartBinding, describeAutostartBinding } from "./daemon-lifecycle.ts";
+import { sameDaemonCode, readAutostartBinding, describeAutostartBinding, listSystemdBindings } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
-import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
+import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, codexRoutedHandles, codexSandboxUnpinned, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { projectRowDivergences } from "./project-row-sync.ts"; // LOOP-410: W42 shares the ONE "diverged" definition with the projection that repairs it
 import { listSnapshots, resolveBackupConfig } from "./board-snapshot.ts"; // LOOP-340: W32 reads the same artifact convention Child B writes
 import { loadWorkspaceSecrets, loosePermsFinding, secretsInjectedKeys, wsSecretsPath } from "./secrets.ts";
 import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
-import { findProject as findHubProject } from "./seed.ts";
+import { findProject as findHubProject, AGENT_HANDLES } from "./seed.ts"; // AGENT_HANDLES: W45 expands a codex default across every handle
+import { BAIL_SHAPE_SET, latestBailShape } from "./bail-shape.ts"; // Decision 1: W46 reads the same canonical bail-shape vocabulary/parser as the derivation
 import { detectRepoFacts } from "./team-edit.ts";
 import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./team-init.ts";
 import * as metricsMod from "./metrics.ts";
@@ -581,6 +582,29 @@ export function checkOpencodeVersion(ws: Workspace, pass: (m: string) => void, w
 }
 
 /**
+ * Row 9b — W45: the codex lane's sandbox posture is on the SAFE default (WS-A C4, review 1). Since WS-A the
+ * scheduler no longer adds `--dangerously-bypass-approvals-and-sandbox` unless `team.codex.sandbox` (or
+ * `agents.<h>.codexSandbox`) says "bypass". Under the default, `codex exec` runs approval:never +
+ * sandbox:read-only: every write-shaped shell/MCP call inside an unattended fire is refused, the model ends
+ * its turn, the process exits 0 with a non-empty JSONL stream — so the ledger records a SUCCESS, the breaker
+ * never trips and W44 never fires. The lane is dead and nothing says so. This check says so, from config
+ * alone (doctor cannot see a run's --cli), and only when the config actually routes a handle to codex.
+ * Silent otherwise, like W15. "safe" pinned explicitly is a pass — the operator chose it.
+ */
+export function checkCodexSandboxDefault(ws: Workspace, pass: (m: string) => void, warn: (m: string) => void): void {
+  const routed = codexRoutedHandles(ws, AGENT_HANDLES);
+  if (!routed.length) return;
+  const unpinned = codexSandboxUnpinned(ws, AGENT_HANDLES);
+  if (!unpinned.length) {
+    const how = ws.file.team.codex?.sandbox !== undefined ? `team.codex.sandbox="${ws.file.team.codex.sandbox}"` : `agents.<h>.codexSandbox on every routed handle`;
+    pass(`codex sandbox posture pinned (${how}) for ${routed.map((r) => r.handle).join(", ")}`);
+    return;
+  }
+  const who = unpinned.map((r) => `${r.handle} (via ${r.via})`).join(", ");
+  warn(`[W45] codex lane on the SAFE default — team.codex.sandbox is unset for ${who}: codex exec runs approval:never sandbox:read-only, so an unattended fire's write-shaped tool calls are refused and it still exits 0 (recorded as a success; the breaker and W44 never see it). Pin the posture: dev-loop team set team.codex.sandbox bypass (the pre-WS-A unattended lane) or dev-loop team set team.codex.sandbox safe (attended / read-only by choice); per handle: team.agents.<h>.codexSandbox`);
+}
+
+/**
  * Row 10 (board scope) — W16 owner-liveness (P1-4, the field's MP-156): an owner label whose actor
  * never fires strands its Todo/In Review tickets forever, and nothing notices.
  * agents.<h>.manual:true (team or project) downgrades the finding to an info line ("awaiting a human").
@@ -703,6 +727,37 @@ export function checkTreeLeaksRepo(ctx: RepoCtx): void {
 export function checkNullAssigneeRow(ctx: BoardCtx): void {
   const { ws, db, projectKey: key, projectId: pid, out } = ctx;
   checkNullAssigneeStranded(db, pid, effectiveProject(ws, key).devSplit ?? false, (m) => out.warn(`[W27] [${key}] ${m}`));
+}
+
+/**
+ * Row 10b (board scope) — W46 unroutable block (Decision 1): a non-terminal ticket carrying the
+ * `blocked` label but NO bail-shape label AND no parseable `Bail-shape:` comment. This is the ONE
+ * genuinely fail-closed hole in blocked-ticket routing: the scheduler reads labels (not comment
+ * bodies) to send a blocked ticket to its owner's unblock job, so a block with neither the label nor
+ * the legacy comment reaches no owner. A block that still carries a parseable comment is NOT warned —
+ * it is routable (legacy form) and the sweep backfills its label. Rows only (tickets + comments), no
+ * fs/forge — same board-scope contract as W27/W43.
+ */
+export function checkBlockedNoBailShape(ctx: BoardCtx): void {
+  const { db, projectKey: key, projectId: pid, out } = ctx;
+  try {
+    const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
+    const rows = db.prepare("SELECT id, state, labels FROM tickets WHERE project_id=?").all(pid) as { id: string; state: string; labels: string }[];
+    const unroutable: string[] = [];
+    for (const r of rows) {
+      if (TERMINAL.has(r.state)) continue;
+      let labels: string[];
+      try { labels = JSON.parse(r.labels) as string[]; } catch { continue; }
+      if (!labels.includes("blocked")) continue;
+      if (labels.some((l) => BAIL_SHAPE_SET.has(l))) continue;                                    // has the routable label
+      const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid").all(r.id) as { body: string }[];
+      if (latestBailShape(comments.map((c) => c.body))) continue;                                 // legacy parseable comment ⇒ routable, sweep backfills
+      unroutable.push(r.id);
+    }
+    if (unroutable.length) {
+      out.warn(`[W46] [${key}] ${unroutable.length} blocked ticket(s) carry no bail-shape label and no parseable 'Bail-shape:' comment — the scheduler routes blocked tickets by LABEL, so these reach no unblock owner: ${unroutable.join(", ")}. Re-block via §9 (set 'blocked' + owner + a 'Bail-shape: <info-needed|decision-needed|scope-design|external-prereq|fix-exhausted>' comment; the label is derived from it), or clear 'blocked' if it is resolved.`);
+    }
+  } catch { /* best-effort — never fails doctor */ }
 }
 
 /**
@@ -2024,8 +2079,16 @@ function reconcileSessionStartHook(pass: (m: string) => void): void {
 // binding reader in daemon-lifecycle.ts, so doctor and `daemon status` cannot report different
 // bindings; the whole classification lives here rather than inline in doctorWorkspace (CRAP ratchet).
 function reconcileAutostart(pass: (m: string) => void, warn: (m: string) => void): void {
+  if (platform() === "linux") {
+    // WS-B: Linux binds via `systemd --user` units, one per workspace — read through the same reader
+    // `daemon status` uses, so the two can never disagree about what is installed.
+    const units = listSystemdBindings();
+    if (!units.length) { pass(describeAutostartBinding({ installed: false, plist: "~/.config/systemd/user/", workspace: null, kind: "systemd" })); return; }
+    for (const b of units) { const line = describeAutostartBinding(b); if (b.installed && !b.workspace) warn(line); else pass(line); }
+    return;
+  }
   if (platform() !== "darwin") {
-    pass("daemon autostart — dev-loop installs no login item on this OS; run `dev-loop daemon up-all` from systemd/cron/your process manager if you want one");
+    pass("daemon autostart — dev-loop installs no login item on this OS; run `dev-loop daemon up-all` from your process manager if you want one (see dev-loop-operator/templates/)");
     return;
   }
   const binding = readAutostartBinding();

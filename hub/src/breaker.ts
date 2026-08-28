@@ -1,9 +1,22 @@
 // P0-1a/P0-1b circuit breaker — extracted so tests can import it without triggering main().
 // run-agents.ts is an entry-point (main() is unconditional) and cannot be imported by anything.
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { platform } from "node:os";
+import { createHash } from "node:crypto";
 import { AGENT_HANDLES } from "./seed.ts";
 export type Agent = (typeof AGENT_HANDLES)[number];
 
-type BreakerEntry = { key: string | null; streak: number; open: boolean };
+export type BreakerEntry = {
+  key: string | null; streak: number; open: boolean;
+  // WS-C review 4 (breaker persistence) — what a snapshot carries beyond the streak. All optional so the
+  // three-field literal ({ key, streak, open }) tests and status.ts already build keeps compiling.
+  openedAt?: number | null;        // ms epoch when `open` last flipped true
+  lastFailureAt?: number | null;   // ms epoch of the last failure that fed this entry
+  lastErrorClass?: string | null;  // the classifier's answer on that failure (null = unclassified: keyed on the tail)
+  probeInFlight?: boolean;         // an OPEN entry whose probe fire has launched and not yet ended ⇒ "half-open"
+  cooldownUntil?: number | null;   // the slot's next probe time as last rescheduled through intervalFor (agent entries)
+};
 // LOOP-114 adds "session-limit". It is provider-scoped for the same reason the other three are: the
 // cap belongs to the KEY, so when it is hit every agent on that provider fails identically, and the
 // streak must accumulate per (provider, class) rather than per agent. It is kept DISTINCT from
@@ -167,9 +180,11 @@ function tailErrorClass(tail: string): string | null {
 // reading metrics after the fact. The breaker watches recordFire: N consecutive fires of ONE agent failing
 // with the SAME key (errorClass, else the last output line) trip that agent's slot down to a probe cadence;
 // each probe fire IS the recovery check — the first success closes the breaker and restores normal cadence.
-// Trip and recovery notify ONCE each (team comms when configured; console always). In-memory by design:
-// a scheduler restart re-probes at full cadence, which is itself a fresh signal. Heterogeneous task
-// failures never trip it — the key must repeat identically.
+// Trip and recovery notify ONCE each (team comms when configured; console always). The state machine is
+// in-memory and this object is its ONLY owner; since WS-C review 4 a snapshot of it is also persisted
+// (`onChange` → breaker.json, see the persistence section below) so `dev-loop status` can read the live
+// state instead of approximating it, and so a scheduler RESTART resumes an open breaker rather than
+// silently closing it. Heterogeneous task failures never trip it — the key must repeat identically.
 // P0-1b: spend-limit/rate-limit/auth are PROVIDER properties — when one key is exhausted every agent on it
 // fails identically. The failure streak therefore accumulates per (provider, errorClass) across agents;
 // tripping the provider breaker caps every agent on that provider immediately without re-accumulation.
@@ -180,6 +195,10 @@ export const breaker = {
   byProvider: new Map<string, BreakerEntry>(), // key = "${provider}:${errorClass}" for PROVIDER_SCOPED_CLASSES
   _agentProvider: new Map<Agent, string | null>(), // cached provider per agent (updated in record())
   onEvent: undefined as ((agent: Agent, ev: "open" | "close", key: string, streak: number) => void) | undefined,
+  // WS-C review 4 — the persistence subscriber. Called after EVERY state change (a fire end, a probe
+  // launch, a reschedule); the subscriber decides what to do with it (createBreakerPersistence below
+  // coalesces and writes). Never consulted for a decision: persistence subscribes, it does not own.
+  onChange: undefined as ((reason: BreakerChangeReason) => void) | undefined,
   // LOOP-72 — the cold-start window. `_agentProvider` was populated ONLY by a completed fire, so an
   // agent that had not yet fired since scheduler start was invisible to an open provider breaker and
   // made one full-cadence fire into a provider already known to be exhausted. It bit widest for the
@@ -190,25 +209,38 @@ export const breaker = {
   seedProvider(agent: Agent, provider: string | null): void {
     if (!this._agentProvider.has(agent)) this._agentProvider.set(agent, provider);
   },
-  record(agent: Agent, exitCode: number, errorClass: string | null | undefined, tail: string | undefined, provider?: string | null): void {
+  // `meta.interrupted` (LOOP-155): the operator's own SIGINT leaves the fire exiting 0, and exit 0 is what
+  // record() reads as a RECOVERY. While the state lived only in memory that was harmless — the process
+  // was exiting anyway — but a snapshot written at stop must not say CLOSED because the operator pressed
+  // ^C, or the restart starts fresh: the "restart resets the safety" shape this persistence exists to
+  // remove, one layer down. An interrupted fire is evidence of nothing; it only ends the probe it was.
+  // `meta.at` is the fire's end time — status's replay passes the ledger row's ts so the timestamps it
+  // reports are the fires', not the read's.
+  record(agent: Agent, exitCode: number, errorClass: string | null | undefined, tail: string | undefined, provider?: string | null, meta?: { interrupted?: boolean; at?: number }): void {
     if (!this.threshold) return;
     if (provider !== undefined) this._agentProvider.set(agent, provider);
+    const p = provider ?? this._agentProvider.get(agent);
+    let changed = this._endProbe(agent, p);
+    if (meta?.interrupted) { if (changed) this.onChange?.("record"); return; }
+    const at = meta?.at ?? Date.now();
     if (exitCode === 0) {
       // Close per-agent breaker.
       const e = this.byAgent.get(agent) ?? { key: null, streak: 0, open: false };
       if (e.open) this.onEvent?.(agent, "close", e.key ?? "", e.streak);
+      if (e.open || e.streak > 0 || e.cooldownUntil) changed = true;
       this.byAgent.set(agent, { key: null, streak: 0, open: false });
       // Close all open provider breakers for this agent's provider.
-      const p = provider ?? this._agentProvider.get(agent);
       if (p) {
         const prefix = `${p}:`;
         for (const [k, pe] of this.byProvider) {
           if (k.startsWith(prefix) && pe.open) {
             this.onEvent?.(agent, "close", k, pe.streak);
             this.byProvider.set(k, { key: null, streak: 0, open: false });
+            changed = true;
           }
         }
       }
+      if (changed) this.onChange?.("record"); // a healthy fire on a healthy lane changes nothing — no write
       return;
     }
     const lastLine = (tail ?? "").trimEnd().split("\n").pop()?.trim().slice(0, 160) ?? "";
@@ -218,15 +250,43 @@ export const breaker = {
       const pkey = `${provider}:${key}`;
       const pe = this.byProvider.get(pkey) ?? { key: null, streak: 0, open: false };
       if (key === pe.key) pe.streak++; else { pe.key = key; pe.streak = 1; }
-      if (!pe.open && pe.streak >= this.threshold) { pe.open = true; this.onEvent?.(agent, "open", `[provider=${provider}] ${key}`, pe.streak); }
+      pe.lastFailureAt = at; pe.lastErrorClass = errorClass;
+      if (!pe.open && pe.streak >= this.threshold) { pe.open = true; pe.openedAt = at; this.onEvent?.(agent, "open", `[provider=${provider}] ${key}`, pe.streak); }
       this.byProvider.set(pkey, pe);
+      this.onChange?.("record");
       return; // don't also accumulate per-agent for provider-scoped classes
     }
-    // Non-provider classes accumulate per agent (unchanged from P0-1a).
+    // Non-provider classes accumulate per agent (unchanged from P0-1a). A RESUMED entry carries the
+    // persisted (hashed, §16) form of an unclassified key: the same tail failing again continues that
+    // streak instead of restarting the count at 1, and the live line replaces the hash in memory.
     const e = this.byAgent.get(agent) ?? { key: null, streak: 0, open: false };
-    if (key === e.key) e.streak++; else { e.key = key; e.streak = 1; }
-    if (!e.open && e.streak >= this.threshold) { e.open = true; this.onEvent?.(agent, "open", key, e.streak); }
+    if (key === e.key || (e.key !== null && e.key === persistedKey(key, errorClass))) { e.streak++; e.key = key; } else { e.key = key; e.streak = 1; }
+    e.lastFailureAt = at; e.lastErrorClass = errorClass ?? null; e.cooldownUntil = null;
+    if (!e.open && e.streak >= this.threshold) { e.open = true; e.openedAt = at; this.onEvent?.(agent, "open", key, e.streak); }
     this.byAgent.set(agent, e);
+    this.onChange?.("record");
+  },
+  // A fire on this lane ended (however it ended): whatever probe was in flight on the agent's own entry
+  // and on its provider's entries is over. Returns whether any flag was actually cleared.
+  _endProbe(agent: Agent, provider: string | null | undefined): boolean {
+    let changed = false;
+    const e = this.byAgent.get(agent);
+    if (e?.probeInFlight) { e.probeInFlight = false; changed = true; }
+    if (provider) for (const [k, pe] of this.byProvider) if (k.startsWith(`${provider}:`) && pe.probeInFlight) { pe.probeInFlight = false; changed = true; }
+    return changed;
+  },
+  // The scheduler calls this as it launches a fire for an agent whose breaker is OPEN — that fire IS the
+  // probe (fireReasonFor tells the agent as much). Until it ends the open entries read "half-open" in the
+  // snapshot. Returns whether anything was open to probe.
+  markProbe(agent: Agent, provider?: string | null): boolean {
+    if (!this.threshold) return false;
+    let any = false;
+    const e = this.byAgent.get(agent);
+    if (e?.open) { e.probeInFlight = true; any = true; }
+    const p = provider ?? this._agentProvider.get(agent);
+    if (p) for (const [k, pe] of this.byProvider) if (k.startsWith(`${p}:`) && pe.open) { pe.probeInFlight = true; any = true; }
+    if (any) this.onChange?.("probe");
+    return any;
   },
   isOpen(agent: Agent): boolean {
     if (this.byAgent.get(agent)?.open) return true;
@@ -238,8 +298,192 @@ export const breaker = {
     return false;
   },
   // The one seam every slot-rescheduling site goes through: open ⇒ the probe cadence (never faster).
-  intervalFor(agent: Agent, baseMs: number): number { return this.isOpen(agent) ? Math.max(baseMs, this.probeMs) : baseMs; },
+  // While open it also records the lane's next probe time as the agent entry's `cooldownUntil`: "when
+  // does this lane try again" is the question an operator reading an OPEN breaker asks, and this seam
+  // is the only place the answer is decided. Closed lanes are untouched (pure, as before).
+  intervalFor(agent: Agent, baseMs: number, now = Date.now()): number {
+    if (!this.isOpen(agent)) return baseMs;
+    const ms = Math.max(baseMs, this.probeMs);
+    const e = this.byAgent.get(agent) ?? { key: null, streak: 0, open: false };
+    e.cooldownUntil = now + ms;
+    this.byAgent.set(agent, e);
+    this.onChange?.("reschedule");
+    return ms;
+  },
+  // ─── WS-C review 4: the persisted shape ─────────────────────────────────────────────────────────
+  // A pure projection of the maps above. §16: an UNCLASSIFIED failure's key is the fire's last output
+  // line — credential-adjacent CLI output the ledger deliberately never writes (LOOP-62) — so it reaches
+  // the file only as a short hash. Identity is what the file needs (the streak already counted the
+  // repeats); the text is not.
+  snapshot(scheduler: BreakerStateFile["scheduler"], reason: BreakerChangeReason | "start" | "stop", now = Date.now()): BreakerStateFile {
+    const iso = (ms: number | null | undefined): string | null => (typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+    const stateOf = (e: BreakerEntry): BreakerPersistedState => (e.open ? (e.probeInFlight ? "half-open" : "open") : "closed");
+    const reasonOf = (e: BreakerEntry): string | null => (e.key === null ? null : persistedKey(e.key, e.lastErrorClass));
+    const base = (e: BreakerEntry): BreakerPersistedEntry => ({
+      state: stateOf(e), consecutiveFailures: e.streak, openedAt: iso(e.openedAt), lastFailureAt: iso(e.lastFailureAt),
+      lastErrorClass: e.lastErrorClass ?? null, lastReason: reasonOf(e), probeInFlight: !!e.probeInFlight, cooldownUntil: iso(e.cooldownUntil),
+    });
+    const agents: Record<string, BreakerPersistedAgent> = {};
+    for (const [agent, e] of this.byAgent) if (e.open || e.streak > 0 || e.probeInFlight) agents[agent] = { ...base(e), provider: this._agentProvider.get(agent) ?? null };
+    const providers: Record<string, BreakerPersistedProvider> = {};
+    for (const [k, pe] of this.byProvider) {
+      if (!(pe.open || pe.streak > 0)) continue;
+      const i = k.indexOf(":");
+      const provider = k.slice(0, i), errorClass = k.slice(i + 1);
+      // A provider breaker has no slot of its own: its cooldown is the earliest next probe among the
+      // lanes it caps (each lane reschedules itself through intervalFor above).
+      let cooldown: number | null = null;
+      for (const [a, ae] of this.byAgent) if (this._agentProvider.get(a) === provider && typeof ae.cooldownUntil === "number" && (cooldown === null || ae.cooldownUntil < cooldown)) cooldown = ae.cooldownUntil;
+      providers[k] = { ...base(pe), provider, errorClass, cooldownUntil: iso(cooldown) };
+    }
+    const lanes: Record<string, string | null> = {};
+    for (const [a, p] of this._agentProvider) lanes[a] = p;
+    return { schema: BREAKER_STATE_SCHEMA, scheduler, threshold: this.threshold, probeMs: this.probeMs, agents, providers, lanes, updatedAt: new Date(now).toISOString(), reason };
+  },
+  // Restart semantics (WS-C review 4). An OPEN breaker is a safety the loop earned from N identical
+  // failures; an operator restart is not evidence that anything recovered, so it must not close one
+  // silently — that is exactly the "restart resets the safety" shape the LOOP-543 outage ran in (the
+  // scheduler restarted inside a 19h no-work streak and every restart re-armed full cadence).
+  //   • RESUMED: every open / half-open entry whose LAST evidence (lastFailureAt, else openedAt) is
+  //     younger than the probe cadence. The previous scheduler would not have probed yet, so the new
+  //     one inherits the open state; its first fire on that lane is the probe, and a failed probe keeps
+  //     the lane at probe cadence instead of re-accumulating N failures at full cadence.
+  //   • NOT resumed (stale): open entries older than the probe cadence. The old scheduler would have
+  //     probed by now and nothing is known either way — the restart's first fire is that probe, and
+  //     the lane starts fresh. Returned so the caller can say so in one line.
+  //   • NEVER resumed: closed entries with a partial streak. A partial streak is evidence, not a
+  //     safety; the restart's own fires re-accumulate it.
+  // The NEW process's --breaker / --breaker-probe apply throughout (the file's are informational);
+  // threshold 0 resumes nothing. Lane→provider mappings fill in only where boot seeding left a gap.
+  restore(file: BreakerStateFile, now = Date.now()): BreakerRestoreResult {
+    const out: BreakerRestoreResult = { resumed: [], stale: [] };
+    if (!this.threshold) return out;
+    for (const [a, p] of Object.entries(file.lanes ?? {})) this.seedProvider(a as Agent, p);
+    const ageOf = (s: BreakerPersistedEntry): number => { const t = Date.parse(s.lastFailureAt ?? s.openedAt ?? file.updatedAt); return Number.isFinite(t) ? now - t : Number.POSITIVE_INFINITY; };
+    const entryOf = (s: BreakerPersistedEntry): BreakerEntry => ({
+      key: s.lastReason, streak: s.consecutiveFailures, open: true, openedAt: parseMs(s.openedAt), lastFailureAt: parseMs(s.lastFailureAt),
+      lastErrorClass: s.lastErrorClass, probeInFlight: false, cooldownUntil: null,
+    });
+    const consider = (kind: "agent" | "provider", name: string, s: BreakerPersistedEntry, apply: () => void) => {
+      if (s.state === "closed") return;
+      const ageMs = ageOf(s);
+      const item = { kind, name, reason: s.lastReason, streak: s.consecutiveFailures, ageMs };
+      if (ageMs < this.probeMs) { apply(); out.resumed.push(item); } else out.stale.push(item);
+    };
+    for (const [agent, s] of Object.entries(file.agents ?? {})) consider("agent", agent, s, () => { this.byAgent.set(agent as Agent, entryOf(s)); });
+    for (const s of Object.values(file.providers ?? {})) consider("provider", `${s.provider}:${s.errorClass}`, s, () => { this.byProvider.set(`${s.provider}:${s.errorClass}`, entryOf(s)); });
+    if (out.resumed.length) this.onChange?.("resume");
+    return out;
+  },
 };
+const parseMs = (s: string | null | undefined): number | null => { if (!s) return null; const t = Date.parse(s); return Number.isFinite(t) ? t : null; };
+// §16 — what an entry's key looks like ON DISK. A classified key is its errorClass and "(no-output)" is a
+// constant; anything else is the fire's last output line — credential-adjacent CLI output the ledger
+// deliberately never stores (LOOP-62) — and reaches the file only as a short hash. Identity is what the
+// file needs (the streak already counted the repeats); the text is not. record() matches a resumed entry
+// against this form, so a streak survives a restart. Idempotent on an already-persisted key.
+export function persistedKey(key: string, errorClass: string | null | undefined): string {
+  if (errorClass || key === "(no-output)" || /^\(unclassified tail #[0-9a-f]{8}\)$/.test(key)) return key;
+  return `(unclassified tail #${createHash("sha256").update(key).digest("hex").slice(0, 8)})`;
+}
+
+// ─── WS-C review 4: breaker.json — persistence as a subscriber ───────────────────────────────────────
+// Why a file at all: `dev-loop status` used to REPLAY the fire ledger through record() to guess at the
+// state the scheduler holds in memory, and the guess is wrong in every way a replay can be (the threshold
+// and probe flags are not in the ledger, probe timing is not reproducible, unclassified failures key on a
+// tail the ledger never stores, a restart or a 90-day prune moves the replay's start). The scheduler is
+// the only process that KNOWS; it writes what it knows, at most once per fire end, and status reads it.
+//   schema      — bump when a field's meaning changes; a reader refuses any other version (⇒ replay).
+//   scheduler   — pid + startedAt identify the writer; stoppedAt is set by the exit hook, so a file with
+//                 stoppedAt:null and a dead pid is a crash, not a running loop (readers probe the pid).
+//   threshold / probeMs — the writer's --breaker / --breaker-probe, the two things a replay had to assume.
+//   agents / providers — only entries carrying state (open, half-open, or a partial streak).
+//   lanes       — agent → provider as the scheduler resolved it; which lanes an open provider breaker caps.
+export const BREAKER_STATE_SCHEMA = 1;
+export type BreakerChangeReason = "record" | "probe" | "reschedule" | "resume";
+export type BreakerPersistedState = "open" | "closed" | "half-open";
+export interface BreakerPersistedEntry {
+  state: BreakerPersistedState;
+  consecutiveFailures: number;
+  openedAt: string | null;
+  lastFailureAt: string | null;
+  lastErrorClass: string | null;
+  lastReason: string | null;     // the streak key: the errorClass, "(no-output)", or a hash of an unclassified tail (§16)
+  probeInFlight: boolean;
+  cooldownUntil: string | null;  // next probe time (agent: its slot; provider: the earliest lane it caps)
+}
+export interface BreakerPersistedAgent extends BreakerPersistedEntry { provider: string | null }
+export interface BreakerPersistedProvider extends BreakerPersistedEntry { provider: string; errorClass: string }
+export interface BreakerStateFile {
+  schema: number;
+  scheduler: { pid: number; startedAt: string; stoppedAt: string | null };
+  threshold: number;
+  probeMs: number;
+  agents: Record<string, BreakerPersistedAgent>;
+  providers: Record<string, BreakerPersistedProvider>; // keyed "<provider>:<errorClass>" like byProvider
+  lanes: Record<string, string | null>;
+  updatedAt: string;
+  reason: string;
+}
+export interface BreakerRestoreItem { kind: "agent" | "provider"; name: string; reason: string | null; streak: number; ageMs: number }
+export interface BreakerRestoreResult { resumed: BreakerRestoreItem[]; stale: BreakerRestoreItem[] }
+
+/** Atomic (tmp + rename) and owner-only (§16: it names failure classes and lanes, and sits beside secrets.env). Best-effort: never throws. */
+export function writeBreakerState(path: string, file: BreakerStateFile): boolean {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
+    if (platform() !== "win32") { try { chmodSync(tmp, 0o600); } catch { /* best-effort */ } }
+    renameSync(tmp, path);
+    return true;
+  } catch { return false; }
+}
+
+/** The file, or null when absent / torn / another schema. A `.tmp` a crashed writer left behind is never read: readers only ever see the last completed rename. */
+export function readBreakerState(path: string): BreakerStateFile | null {
+  try {
+    const f = JSON.parse(readFileSync(path, "utf8")) as Partial<BreakerStateFile> | null;
+    if (!f || f.schema !== BREAKER_STATE_SCHEMA) return null;
+    if (typeof f.scheduler?.pid !== "number" || typeof f.scheduler?.startedAt !== "string") return null;
+    if (!f.agents || typeof f.agents !== "object" || !f.providers || typeof f.providers !== "object") return null;
+    return { ...f, threshold: typeof f.threshold === "number" ? f.threshold : 0, probeMs: typeof f.probeMs === "number" ? f.probeMs : 0, lanes: f.lanes && typeof f.lanes === "object" ? f.lanes : {}, updatedAt: typeof f.updatedAt === "string" ? f.updatedAt : f.scheduler.startedAt, reason: typeof f.reason === "string" ? f.reason : "" } as BreakerStateFile;
+  } catch { return null; }
+}
+
+/** Is the writer still the running scheduler? Not stopped, and its pid answers a zero-signal probe (EPERM = exists, not ours). */
+export function breakerStateAlive(f: BreakerStateFile): boolean {
+  if (f.scheduler.stoppedAt) return false;
+  if (!f.scheduler.pid || f.scheduler.pid <= 0) return false;
+  try { process.kill(f.scheduler.pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; }
+}
+
+/**
+ * Subscribe the singleton to a file. Writes are COALESCED: record() and the reschedule that follows it
+ * in the same turn of the loop become one write, scheduled through `schedule` (setImmediate by default;
+ * tests pass a synchronous one). `flush` writes now (scheduler start); `stop` writes the final snapshot
+ * with stoppedAt set and unsubscribes — it is synchronous so a process 'exit' hook can call it.
+ */
+export function createBreakerPersistence(opts: { path: string; startedAt?: string; pid?: number; schedule?: (fn: () => void) => void; now?: () => number }): { path: string; flush(reason?: BreakerChangeReason | "start"): boolean; stop(): boolean } {
+  const pid = opts.pid ?? process.pid;
+  const now = opts.now ?? Date.now;
+  const startedAt = opts.startedAt ?? new Date(now()).toISOString();
+  const schedule = opts.schedule ?? ((fn) => { setImmediate(fn); });
+  let pending: BreakerChangeReason | null = null;
+  let stopped = false;
+  const write = (reason: BreakerChangeReason | "start" | "stop", stoppedAt: string | null) => writeBreakerState(opts.path, breaker.snapshot({ pid, startedAt, stoppedAt }, reason, now()));
+  breaker.onChange = (reason) => {
+    if (stopped) return;
+    const first = pending === null;
+    pending = reason;
+    if (first) schedule(() => { const r = pending ?? "record"; pending = null; if (!stopped) write(r, null); });
+  };
+  return {
+    path: opts.path,
+    flush: (reason = "start") => write(reason, null),
+    stop: () => { stopped = true; breaker.onChange = undefined; return write("stop", new Date(now()).toISOString()); },
+  };
+}
 
 // ─── LOOP-175: provider-scoped breaker message formatting ────────────────────────────────────────────
 // Provider-scoped events (rate-limit / spend-limit / auth) name the whole blast radius rather than

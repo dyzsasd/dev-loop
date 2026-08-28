@@ -11,12 +11,13 @@
 // (actorExists) + the state set (STATES) are uniform across both paths by construction.
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { nowIso, nextTicketId, logEvent, actorExists, STATES, type State } from "./db.ts";
+import { nowIso, nextTicketId, logEvent, actorExists, actorIsHuman, listHumanActorHandles, STATES, type State } from "./db.ts";
 import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug, designChildrenOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 import { handoffGateRejection } from "./handoff-gate.ts";
 import { acCompletenessRejection, unlandedWorkRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance; LOOP-575: the UNLANDED axis // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
 import { effectiveRepo, reposOfProject } from "./team-config.ts";
+import { BAIL_SHAPE_SET, parseBailShape, latestBailShape, type BailShape } from "./bail-shape.ts"; // Decision 1: the derived bail-shape label
 
 export type WriteResult = { ok: true; id: string } | { ok: false; status: number; error: string };
 
@@ -411,6 +412,119 @@ function applyTierRestore(
 }
 
 
+// ─── WS-C review 3: `waiting_on` is a property of the Human-Blocked STATE, not of the ticket ──────────
+// LOOP-384 added the discriminator (human-decision | human-action | external) and the ruling grammar
+// documented "leaving Human-Blocked IS the clear" — but nothing cleared it: updateTicketRow carried the
+// column forward on every transition, so a ticket parked `human-action`, resumed to Todo and re-parked
+// for a DECISION still read `human-action` in the operator's queue. status.ts masked the stale value on
+// display (waitingOn is shown only in Human-Blocked), which is exactly how a wrong stored value survives
+// until the one place that trusts the column. Two halves, one function, enforced at THE choke point
+// every write path runs through (save_issue, the daemon board-move, merge-guard's demote, ticket-release):
+//   • leaving Human-Blocked → NULL (idempotent — a ticket that was never parked is already NULL);
+//   • entering Human-Blocked with nothing set → 'human-decision', the documented default, so a re-park
+//     always carries a fresh, meaningful discriminator (an explicit value still wins);
+//   • every other write carries the value through unchanged (LOOP-587's In Review rewrite keeps its
+//     `external`; a Human-Blocked ticket's field is edited only by an explicit save_issue waitingOn).
+export const WAITING_ON_DEFAULT = "human-decision";
+export function waitingOnFor(toState: string, requested: string | null, fromState: string | null): string | null {
+  if (toState === "Human-Blocked") return fromState === "Human-Blocked" ? requested : (requested ?? WAITING_ON_DEFAULT);
+  return fromState === "Human-Blocked" ? null : requested;
+}
+
+// ─── WS-C review 3: the operator ruling — ONE grammar, ONE policy, at the comment write ──────────────
+// `Ruling: approve|reject|defer — <reason>` (references/operator-rulings.md) is what PM's next verify
+// pass, the digest and a human scrolling all read as THE operator's answer on a parked ticket. Before
+// this, a comment body was pure data at the write (insertComment: "never a command-verb parser"), so any
+// actor could post one and it would be read as the human's ruling. The grammar is parsed HERE, once,
+// and both comment writers (opSaveComment on every agent transport, addComment on the daemon's web
+// form) apply the same policy: a ruling-shaped body from a non-human actor is refused, a malformed one
+// is refused rather than stored as prose that half-parses, and a valid one is RECORDED — an
+// `issue.ruling` ledger event, and on a Human-Blocked ticket the wait it was parked for is answered, so
+// waiting_on clears. It does NOT move state: the state verb is still the operator's explicit act
+// (`dev-loop rule` does both in one shot; the two-step form stays legal). insertComment itself stays
+// the mechanic: the policy sits in the callers, which carry an actor to check.
+export const RULING_PREFIX = "Ruling:";
+export const RULING_VERDICTS = ["approve", "reject", "defer"] as const;
+export type RulingVerdict = (typeof RULING_VERDICTS)[number];
+export interface ParsedRuling { verdict: RulingVerdict; reason: string }
+/** Anything that LOOKS like a ruling is subject to the policy — a lookalike (`ruling:`, `RULING :`) from an agent must not slip through as prose. */
+export const isRulingShaped = (body: string): boolean => /^\s*ruling\s*:/i.test(body ?? "");
+const RULING_RE = /^\s*Ruling:\s+(approve|reject|defer)\b\s*(?:[—–-]+\s*)?([\s\S]*)$/;
+export const rulingBody = (verdict: RulingVerdict, reason: string): string => `${RULING_PREFIX} ${verdict} — ${reason.trim()}`;
+/** null when the body is not ruling-shaped; a string error when it is but does not parse; else the parse. */
+export function parseRuling(body: string): ParsedRuling | string | null {
+  if (!isRulingShaped(body)) return null;
+  const m = RULING_RE.exec(body);
+  if (!m) return `a ruling comment must read exactly "${RULING_PREFIX} ${RULING_VERDICTS.join("|")} — <reason in the human's words>" (references/operator-rulings.md); got ${JSON.stringify(body.split("\n")[0]!.slice(0, 80))}`;
+  const reason = m[2]!.trim();
+  if (!reason) return `a ruling needs the human's reason after the dash — "${RULING_PREFIX} ${m[1]} — <why>"; the record must read back later without this conversation`;
+  return { verdict: m[1] as RulingVerdict, reason };
+}
+export type RulingPolicy = { status: 400 | 403; error: string; ruling: null } | { status: 200; error: null; ruling: ParsedRuling | null };
+/** The policy half: is this body a ruling, and may THIS actor post one. */
+export function rulingCommentPolicy(db: DatabaseSync, actor: string, body: string): RulingPolicy {
+  const parsed = parseRuling(body);
+  if (parsed === null) return { status: 200, error: null, ruling: null };
+  if (typeof parsed === "string") return { status: 400, error: parsed, ruling: null };
+  if (!actorIsHuman(db, actor)) {
+    return { status: 403, error: `a ${RULING_PREFIX} comment is the operator's act — '${actor}' is an agent identity, and a ruling recorded against an agent would be read by PM's next pass as the human's answer. Nothing has been written. Human identities in this workspace: ${listHumanActorHandles(db).join(", ") || "(none seeded)"}. To ASK for a ruling, park the ticket Human-Blocked with a Bail-shape comment; the operator rules with: dev-loop rule <id> approve|reject|defer --reason "<why>"`, ruling: null };
+  }
+  return { status: 200, error: null, ruling: parsed };
+}
+export interface RulingRecord { verdict: RulingVerdict; reason: string; state: string; waitingOnCleared: string | null }
+/**
+ * The record half, called AFTER the comment row is in (inside the caller's txn): logs `issue.ruling`
+ * and, on a Human-Blocked ticket, clears waiting_on — the wait the park was for is answered. The state
+ * is deliberately untouched (see the module note above).
+ */
+export function recordRuling(db: DatabaseSync, projectId: string, actor: string, ticketId: string, ruling: ParsedRuling): RulingRecord {
+  const cur = db.prepare("SELECT state, waiting_on FROM tickets WHERE id=? AND project_id=?").get(ticketId, projectId) as { state: string; waiting_on: string | null } | undefined;
+  const state = cur?.state ?? "";
+  let waitingOnCleared: string | null = null;
+  if (cur && cur.state === "Human-Blocked" && cur.waiting_on !== null) {
+    waitingOnCleared = cur.waiting_on;
+    db.prepare("UPDATE tickets SET waiting_on=NULL, updated_at=? WHERE id=? AND project_id=?").run(nowIso(), ticketId, projectId);
+  }
+  logEvent(db, { project_id: projectId, ticket_id: ticketId, actor, kind: "issue.ruling", data: { ruling: ruling.verdict, state, waitingOnCleared } });
+  return { verdict: ruling.verdict, reason: ruling.reason, state, waitingOnCleared };
+}
+// ─── Decision 1: the bail-shape label is a DERIVED, single-source field ───────
+// The `Bail-shape: <x>` comment first line is the SOURCE (the human record carrying the reason
+// text); the bail-shape LABEL of the same name is its PROJECTION (the machine-routable form the
+// scheduler reads). Exactly as Review 3 made `waiting_on` a derived single-source column, the label
+// is recomputed from the comment here, at the write choke point, so the two can never disagree:
+//   • updateTicketRow — reconciles on every label write: blocked + a parseable Bail-shape comment ⇒
+//     that one label (stale bail-shape labels stripped); blocked cleared ⇒ every bail-shape label
+//     stripped. This covers the ordering where `blocked` is set AFTER the comment, and the unblock.
+//   • insertComment — when a `Bail-shape: <x>` comment lands on a blocked ticket, sets label <x>
+//     (stripping stale bail-shape labels). This covers the canonical order (block, then comment):
+//     at block time no comment existed, so the label is derived the instant the comment lands.
+// Between the two hooks the label cannot drift from the newest comment for any write ordering.
+
+// The newest parseable bail-shape across a ticket's comments (chronological, rowid-tiebroken like
+// metrics.ts's marker reader so same-ms comments order deterministically). Rows only — no fs/forge.
+function latestBailShapeOf(db: DatabaseSync, ticketId: string): BailShape | null {
+  const rows = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid").all(ticketId) as { body: string }[];
+  return latestBailShape(rows.map((r) => r.body));
+}
+
+// Return `labels` reconciled so at most ONE bail-shape label is present and it matches the source:
+// the latest Bail-shape comment when the ticket is blocked, nothing when it is not. Same reference
+// back when already consistent (the caller skips the write). Fast path: a ticket that is neither
+// blocked nor already carrying a bail-shape label needs no comment read.
+function reconcileBailShapeLabels(db: DatabaseSync, ticketId: string, labels: string[]): string[] {
+  const isBlocked = labels.includes("blocked");
+  const hasBailLabel = labels.some((l) => BAIL_SHAPE_SET.has(l));
+  if (!isBlocked && !hasBailLabel) return labels; // nothing a bail-shape label could be doing here
+  const target = isBlocked ? latestBailShapeOf(db, ticketId) : null;
+  // Keep every non-bail label in place, and the target label in place if already present; drop the
+  // OTHER bail-shape labels; append the target only when absent. Order-preserving so an already-correct
+  // set is returned unchanged (the caller skips the write — no spurious reorder churn).
+  const next = labels.filter((l) => !BAIL_SHAPE_SET.has(l) || l === target);
+  if (target && !next.includes(target)) next.push(target);
+  return next.length === labels.length && next.every((l, i) => l === labels[i]) ? labels : next;
+}
+
 export function insertTicket(
   db: DatabaseSync, projectId: string, actor: string, f: NewTicketFields, createEventData: Record<string, unknown>,
 ): string {
@@ -444,7 +558,7 @@ export function insertTicket(
   const t = nowIso();
   db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,waiting_on,created_by,created_at,updated_at)
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(labels), f.duplicateOf, JSON.stringify(f.relatedTo), f.waiting_on ?? null, actor, t, t);
+    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(labels), f.duplicateOf, JSON.stringify(f.relatedTo), waitingOnFor(f.state, f.waiting_on ?? null, null), actor, t, t);
   logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.create", data: createEventData });
   if (retier.retiered) {
     logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
@@ -498,9 +612,14 @@ export function updateTicketRow(
   // LOOP-345 R1: on a design parent the §21a rule is the WHOLE decision — a pass here means the
   // ownership gate must not also refuse pm for the qa label the ticket carries from its type.
   if (gate && gate !== DESIGN_PARENT_DECIDED) return { ok: false, status: 400, error: gate };
+  // Decision 1: reconcile the derived bail-shape label AFTER the gates (a label-only projection never
+  // gates a transition). Setting `blocked` picks up an existing Bail-shape comment; clearing `blocked`
+  // strips every bail-shape label — the "unblock removes the bail-shape label" invariant.
+  const finalLabels = JSON.stringify(reconcileBailShapeLabels(db, id, JSON.parse(resolved.labels) as string[]));
   const t = nowIso();
+  const waitingOn = waitingOnFor(resolved.state, resolved.waiting_on, fromState); // WS-C review 3: the discriminator lives and dies with the Human-Blocked state
   db.prepare(`UPDATE tickets SET title=?,description=?,type=?,state=?,assignee=?,priority=?,labels=?,duplicate_of=?,related_to=?,waiting_on=?,updated_at=? WHERE id=? AND project_id=?`)
-    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, resolved.labels, resolved.duplicate_of, resolved.related_to, resolved.waiting_on, t, id, projectId);
+    .run(resolved.title, resolved.description, resolved.type, resolved.state, resolved.assignee, resolved.priority, finalLabels, resolved.duplicate_of, resolved.related_to, waitingOn, t, id, projectId);
   logEvent(db, resolved.state !== fromState
     ? { project_id: projectId, ticket_id: id, actor, kind: "issue.transition", data: { from: fromState, to: resolved.state, assignee: resolved.assignee } }
     : { project_id: projectId, ticket_id: id, actor, kind: "issue.update", data: {} });
@@ -523,6 +642,23 @@ export function insertComment(
   const t = nowIso();
   db.prepare("INSERT INTO comments(id,ticket_id,author,body,created_at) VALUES (?,?,?,?,?)").run(id, ticketId, actor, body, t);
   logEvent(db, { project_id: projectId, ticket_id: ticketId, actor, kind: "comment.add", data: {} });
+  // Decision 1: derive the bail-shape LABEL from the comment as it lands (the single source). Only a
+  // comment whose first line parses as `Bail-shape: <x>` triggers a read — every other comment is an
+  // untouched no-op. On a blocked ticket, set label <x> and strip any stale bail-shape label. The
+  // comment.add event above is the audit trail; the label is its projection, so no extra event.
+  const shape = parseBailShape(body);
+  if (shape) {
+    const row = db.prepare("SELECT labels FROM tickets WHERE id=? AND project_id=?").get(ticketId, projectId) as { labels: string } | undefined;
+    if (row) {
+      const labels = JSON.parse(row.labels) as string[];
+      if (labels.includes("blocked")) {
+        const next = labels.filter((l) => !BAIL_SHAPE_SET.has(l) || l === shape); // keep a present `shape` in place, drop others
+        if (!next.includes(shape)) next.push(shape);
+        const changed = next.length !== labels.length || next.some((l, i) => l !== labels[i]);
+        if (changed) db.prepare("UPDATE tickets SET labels=?, updated_at=? WHERE id=? AND project_id=?").run(JSON.stringify(next), t, ticketId, projectId);
+      }
+    }
+  }
   return { id, createdAt: t };
 }
 
@@ -547,7 +683,10 @@ export function createTicket(
 export function addComment(db: DatabaseSync, projectId: string, actor: string, id: string, body: string): WriteResult {
   if (!exists(db, projectId, id)) return { ok: false, status: 404, error: `no such ticket ${id}` };
   if (!(body ?? "").trim()) return { ok: false, status: 400, error: "comment body required" };
+  const pol = rulingCommentPolicy(db, actor, body); // WS-C review 3: the web form is a comment writer too — same ruling policy
+  if (pol.error !== null) return { ok: false, status: pol.status, error: pol.error };
   insertComment(db, projectId, actor, id, body);
+  if (pol.ruling) recordRuling(db, projectId, actor, id, pol.ruling);
   return { ok: true, id };
 }
 

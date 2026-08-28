@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline, spendCurvePoints, spendCurveDeadline, ratePerMsFor, SPEND_CURVE_MIN_SAMPLES } from "../src/metrics.ts";
+import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline, spendCurvePoints, spendCurveDeadline, ratePerMsFor, SPEND_CURVE_MIN_SAMPLES, laneUsage, estimateLaneCost, DEFAULT_CHANNEL_MULTIPLIERS } from "../src/metrics.ts";
 import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -585,6 +585,52 @@ try {
     writeFileSync(join(usageWs, ".dev-loop", "team", "fires.jsonl"),
       [cliClaudeRow, cliCodexRow, cliPreRow].map((r) => JSON.stringify(r)).join("\n") + "\n");
 
+    // ── WS-A A7: per-lane cache-channel split + cost-by-channel ──────────────────────────────────
+    {
+      const u = (i: number | null, o: number | null, cr: number | null, cw: number | null, cost: number | null) =>
+        ({ source: "provider" as const, inputTokens: i, outputTokens: o, cacheReadTokens: cr, cacheWriteTokens: cw, costUsd: cost, currency: cost === null ? null : "USD" });
+      const laneRows = [
+        { ts: iso(NOW - DAY), agent: "pm", project: "w", codingAgent: "claude", usage: u(1000, 200, 8000, 1000, 0.5) },
+        { ts: iso(NOW - DAY), agent: "qa", project: "w", codingAgent: "claude", usage: u(1000, 100, 6000, 3000, 0.4) },
+        { ts: iso(NOW - DAY), agent: "dev", project: "w", codingAgent: "codex", usage: u(500, 50, null, null, null) },
+        { ts: iso(NOW - DAY), agent: "dev", project: "w", codingAgent: "codex" },                       // unmetered
+        { ts: iso(NOW - DAY), agent: "ops", project: "w" },                                             // lane unknown
+      ] as unknown as Parameters<typeof laneUsage>[0];
+      const lanes = laneUsage(laneRows, { claude: { inputUsdPerMTok: 10 } });
+      const claude = lanes.find((l) => l.lane === "claude")!, codex = lanes.find((l) => l.lane === "codex")!, unknown = lanes.find((l) => l.lane === "(unknown)")!;
+      ok(lanes.length === 3 && claude.fires === 2 && codex.fires === 2 && codex.metered === 1 && unknown.fires === 1 && unknown.metered === 0,
+        `WS-A A7: one lane per codingAgent with fire/metered counts (got ${lanes.map((l) => `${l.lane}:${l.fires}/${l.metered}`).join(" ")})`);
+      ok(claude.input === 2000 && claude.cacheRead === 14000 && claude.cacheWrite === 4000 && claude.output === 300,
+        "WS-A A7: the four channels sum per lane (input 2000, cacheRead 14000, cacheWrite 4000, output 300)");
+      ok(claude.cacheWriteShare !== null && Math.abs(claude.cacheWriteShare - 4000 / 20000) < 1e-9,
+        `WS-A A7: cacheWriteShare = cacheW ÷ (in + cacheR + cacheW) = 0.2 (got ${claude.cacheWriteShare})`);
+      ok(codex.cacheWriteShare === 0 && codex.cacheRead === null && codex.cacheWrite === null,
+        "WS-A A7: a lane with no cache channels metered reads share 0 with null cache tokens (never NaN)");
+      ok(unknown.cacheWriteShare === null && unknown.estimate === null, "WS-A A7: an unmetered lane has a null share and no estimate");
+      // cost-by-channel: $10/MTok input, default multipliers 1.25 / 0.1 / 5
+      const e = claude.estimate!;
+      ok(!!e && Math.abs(e.inputUsd - 2000 * 10 / 1e6) < 1e-12 && Math.abs(e.cacheWriteUsd - 4000 * 10 / 1e6 * 1.25) < 1e-12
+        && Math.abs(e.cacheReadUsd - 14000 * 10 / 1e6 * 0.1) < 1e-12 && Math.abs(e.outputUsd - 300 * 10 / 1e6 * 5) < 1e-12
+        && Math.abs(e.totalUsd - (e.inputUsd + e.cacheWriteUsd + e.cacheReadUsd + e.outputUsd)) < 1e-12,
+        `WS-A A7: the estimate prices each channel at input × its multiplier (${DEFAULT_CHANNEL_MULTIPLIERS.cacheWrite}/${DEFAULT_CHANNEL_MULTIPLIERS.cacheRead}/${DEFAULT_CHANNEL_MULTIPLIERS.output}) and sums them`);
+      ok(claude.reportedCostUsd !== null && Math.abs(claude.reportedCostUsd - 0.9) < 1e-9, "WS-A A7: the provider-reported cost is carried beside the estimate, never replaced by it");
+      ok(codex.estimate === null, "WS-A A7: a lane with no team.pricing entry is UNPRICED (estimate null) — no made-up dollars");
+      const custom = estimateLaneCost({ input: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000, output: 1_000_000 }, { inputUsdPerMTok: 2, cacheWriteMultiplier: 2, cacheReadMultiplier: 0.5, outputMultiplier: 3 });
+      ok(!!custom && custom.inputUsd === 2 && custom.cacheWriteUsd === 4 && custom.cacheReadUsd === 1 && custom.outputUsd === 6 && custom.totalUsd === 13,
+        "WS-A A7: configured multipliers override the defaults per channel");
+      ok(estimateLaneCost({ input: 1, cacheRead: 1, cacheWrite: 1, output: 1 }, undefined) === null, "WS-A A7: no pricing ⇒ null estimate");
+      // the report carries byLane, and the renderer prints the lane block
+      const rep = usageReport(laneRows, 7 * DAY, { nowMs: NOW, pricing: { claude: { inputUsdPerMTok: 10 } } });
+      ok(rep.byLane!.length === 3 && rep.byLane![0].fires >= rep.byLane![1].fires, "WS-A A7: usageReport carries byLane, busiest lane first");
+      const laneLines: string[] = [];
+      const origLog2 = console.log;
+      console.log = (...args: unknown[]) => laneLines.push(String(args[0] ?? ""));
+      try { renderUsage(rep, "agent"); } finally { console.log = origLog2; }
+      ok(laneLines.some((l) => /^by lane \(cache channels/.test(l)) && laneLines.some((l) => /^  claude: in=2000 cacheR=14000 cacheW=4000 out=300  cacheWriteShare=20\.0%  reported=\$0\.9000  est \$/.test(l)),
+        `WS-A A7: renderUsage prints the per-lane channel line with the share and the estimate (${laneLines.filter((l) => /claude:/.test(l))[0] ?? "no line"})`);
+      ok(laneLines.some((l) => /^  codex: .*unpriced — set team\.pricing\.codex\.inputUsdPerMTok/.test(l)), "WS-A A7: …and says 'unpriced' for a lane without a price, naming the key to set");
+    }
+
     // CLI --usage --by provider --json
     const rUJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--usage", "--by", "provider", "--json"],
       { cwd: usageWs, env: { ...scrubFireEnv() }, encoding: "utf8" });
@@ -594,6 +640,10 @@ try {
     const byDimJ = uJOut?.usage?.byDimension as Record<string, { inputTokens: number | null; costUsd: number | null }> | undefined;
     ok(byDimJ?.["anthropic"]?.inputTokens === 1000, `LOOP-125 AC1: --json anthropic inputTokens=1000 (got ${byDimJ?.["anthropic"]?.inputTokens})`);
     ok(byDimJ?.["openai"]?.costUsd === null, `LOOP-125 AC1: --json openai costUsd=null (not 0; got ${byDimJ?.["openai"]?.costUsd})`);
+    // WS-A A7 — the JSON surface carries the lane split too (no team.pricing in this fixture ⇒ unpriced).
+    const lanesJ = uJOut?.usage?.byLane as Array<{ lane: string; input: number | null; cacheWriteShare: number | null; estimate: unknown }> | undefined;
+    ok(Array.isArray(lanesJ) && lanesJ.some((l) => l.lane === "claude" && l.input === 1000 && l.cacheWriteShare === 0 && l.estimate === null),
+      `WS-A A7: --usage --json carries usage.byLane with the channel split (got ${JSON.stringify(lanesJ?.map((l) => l.lane))})`);
 
     // CLI --cost --json: overall.costUsd sums only priced rows; never a string "$0.00"
     const rCJ = spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--cost", "--json"],

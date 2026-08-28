@@ -1,5 +1,5 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,9 @@ import { breaker, formatBreakerMsg, PROVIDER_SCOPED_CLASSES, type Agent } from "
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
+import { ensureSeed, findProject } from "../src/seed.ts";
+// Job-scoped prompts: the zero-dep leaf predicates the pm/qa lane gates + the senior-dev Mode pick consume.
+import { qaMaintenanceSlice, seniorDevModePick } from "../src/servable.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -98,9 +101,17 @@ try {
 
   const defaultCore = run(["--cli", "claude", "--once", "--dry-run", ...common]);
   ok(defaultCore.code === 0, "default scheduler exits 0");
-  ok(/agents=pm@5m, qa@5m, senior-dev@5m, junior-dev@5m, sweep@30m/.test(defaultCore.out), "default core uses split-dev agents");
-  ok(/launch=pm:claude:opus\/max, qa:claude:sonnet\/high, senior-dev:claude:claude-opus-4-8\/max, junior-dev:claude:claude-sonnet-4-6\/high, sweep:claude:sonnet\/high/.test(defaultCore.out),
-    "default core applies per-agent Claude coding-agent/model/effort profiles");
+  // job-scoped prompts: the default `core` group now expands pm/qa to their LANES (pm-maintenance/
+  // pm-groom/pm-review, qa-maintenance/qa-hunt) so the two highest-frequency agents job-boot in the
+  // most common invocation; the split-dev tiers + sweep are unchanged.
+  ok(/agents=pm-maintenance@5m, pm-groom@15m, pm-review@30m, qa-maintenance@5m, qa-hunt@30m, senior-dev@5m, junior-dev@5m, sweep@30m/.test(defaultCore.out),
+    "default core expands pm/qa to their lanes (job-scoped) + the split-dev tiers");
+  ok(/launch=pm-maintenance:claude:sonnet\/high, pm-groom:claude:opus\/max, pm-review:claude:opus\/max, qa-maintenance:claude:sonnet\/high, qa-hunt:claude:opus\/max, senior-dev:claude:claude-opus-4-8\/max, junior-dev:claude:claude-sonnet-4-6\/high, sweep:claude:sonnet\/high/.test(defaultCore.out),
+    "default core applies the per-lane + per-agent Claude coding-agent/model/effort profiles");
+  // the two highest-frequency agents now JOB-boot in the default run (not the whole-role classic boot)
+  ok(/\[pm-maintenance\] boot corpus: ON/.test(defaultCore.out) && /\[qa-maintenance\] boot corpus: ON/.test(defaultCore.out)
+    && /\[qa-hunt\] boot corpus: ON/.test(defaultCore.out) && !/^\[pm\] boot corpus/m.test(defaultCore.out),
+    "default run job-boots pm AND qa (via lanes) — the bare pm/qa whole-role boot is NOT in the default path");
   ok(/devSplit=runtime/.test(defaultCore.out), "default core marks split-dev runtime mode");
   ok(/DEVLOOP_DEV_SPLIT":"true"/.test(defaultCore.out), "default core injects DEVLOOP_DEV_SPLIT=true");
   ok(/junior-dev: claude .* --model claude-sonnet-4-6 --effort high /.test(defaultCore.out),
@@ -109,9 +120,9 @@ try {
   const claude = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm,communication", "--interval", "pm=2m", "--cli-arg", "--model", "--cli-arg", "opus", ...common]);
   ok(claude.code === 0, "claude dry-run scheduler exits 0");
   ok(/agents=pm@2m, communication@1d/.test(claude.out), "claude dry-run shows resolved agents + interval override");
-  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --output-format json --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "claude dry-run injects model/effort defaults + --output-format json (usage capture), keeps extra CLI args last, and renders without dumping the prompt");
+  ok(/pm: claude --mcp-config .* --strict-mcp-config --model opus --effort max --output-format json --model opus -p (?:'?<prompt:\d+ chars>'?|<stdin:\d+ chars>)/.test(claude.out), "claude dry-run injects model/effort defaults + --output-format json (usage capture), keeps extra CLI args last, and renders without dumping the prompt");
   ok(/dev-loop-hub/.test(claude.out), "the inline --mcp-config defines the dev-loop-hub server (no plugin / .mcp.json needed)");
-  ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --output-format json --model opus -p '?<prompt:\d+ chars>'?/.test(claude.out), "communication-agent gets its own default profile (+ --output-format json) and remains overrideable through --cli-arg");
+  ok(/communication: claude --mcp-config .* --strict-mcp-config --model sonnet --effort high --output-format json --model opus -p (?:'?<prompt:\d+ chars>'?|<stdin:\d+ chars>)/.test(claude.out), "communication-agent gets its own default profile (+ --output-format json) and remains overrideable through --cli-arg");
 
   // boot-prefix (conventions-to-code phase 0): --assemble-boot appends the deterministic §0a corpus and
   // flips the claude prompt channel to stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB).
@@ -123,16 +134,196 @@ try {
     "the featureless service fixture prunes pm's config-gated spans (§5 queue, §19 multi-repo, §24 codex)");
   ok(/pm: claude .* -p <stdin:\d+ chars>/.test(boot.out),
     "assemble-boot renders -p with the prompt on stdin, never as an argv");
-  const bootOff = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
-  // LOOP-272 AC(B) — the NEGATIVE is now observable, so "boot corpus" DOES appear when it is off;
-  // what must not appear is an assembled corpus. The old assertion keyed on the substring, which
-  // could not tell "never assembled" from "assembled and reported" — that indistinguishability is
-  // the defect this ticket fixes, so the assertion moves to the size line.
+  // WS-A A1 — the corpus is the DEFAULT on every lane: no config, no flag ⇒ assembled, prompt via stdin.
+  const bootDefault = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(/pm: boot corpus \d+KB/.test(bootDefault.out) && /pm: claude .* -p <stdin:\d+ chars>/.test(bootDefault.out),
+    "WS-A A1: without config or flag the corpus IS assembled and the prompt rides stdin — ON is the default");
+  ok(/\[pm\] boot corpus: ON — \d+ B/.test(bootDefault.out), "WS-A A1: …and the ON state is stated with its byte count");
+  const bootOff = run(["--cli", "claude", "--once", "--dry-run", "--no-assemble-boot", "--agents", "pm", ...common]);
+  // LOOP-272 AC(B) — the NEGATIVE is observable, so "boot corpus" DOES appear when it is off; what must
+  // not appear is an assembled corpus (the size line). --no-assemble-boot is the run-scoped opt-out.
   ok(!/boot corpus \d+KB/.test(bootOff.out) && /pm: claude .* -p '?<prompt:\d+ chars>'?/.test(bootOff.out),
-    "LOOP-272: without config or flag, no corpus is assembled and the prompt stays an argv (default unchanged)");
+    "WS-A A1: --no-assemble-boot assembles nothing and the prompt goes back to an argv (§0a pull mode)");
   ok(/\[pm\] boot corpus: OFF — §0a pull mode/.test(bootOff.out),
     `LOOP-272 AC(B): …and the OFF state is STATED, not merely absent (${bootOff.out.split("\n").filter((l) => /boot corpus/.test(l))[0] ?? "no line"})`);
+  // WS-A A1 — every lane assembles: codex takes the prompt on stdin via `codex exec -`, opencode via a
+  // positional-less `opencode run` (both documented stdin forms; Linux MAX_ARG_STRLEN caps one argv at 128 KiB).
+  const bootCodex = run(["--cli", "codex", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(/pm: boot corpus \d+KB/.test(bootCodex.out) && /pm: codex exec .* - <stdin:\d+ chars>/.test(bootCodex.out),
+    "WS-A A1: the codex lane assembles the corpus and passes `-` so codex exec reads the prompt from stdin");
+  ok(!/pm: codex exec .*<prompt:/.test(bootCodex.out), "WS-A A1: …and never as a positional argv");
+  const bootOpencode = run(["--cli", "opencode", "--once", "--dry-run", "--agents", "pm", ...common]);
+  ok(/pm: boot corpus \d+KB/.test(bootOpencode.out) && /pm: opencode run .*--format json <stdin:\d+ chars>/.test(bootOpencode.out) && !/<prompt:/.test(bootOpencode.out.split("\n").find((l) => /pm: opencode run/.test(l)) ?? ""),
+    "WS-A A1: the opencode lane assembles the corpus and passes NO positional — opencode run reads a piped stdin as the message");
+  // WS-A A2 — the byte-stable prefix. Two fires with different selected agents + models: the prompts are
+  // byte-identical up to the fire-context marker, and that common prefix is at least the constant segment
+  // (header + SKILL + corpus). --dump-prompt is the dry-run seam that exposes the bytes.
+  {
+    const d1 = join(tmp, "prompts-1"), d2 = join(tmp, "prompts-2");
+    const r1 = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", "--dump-prompt", d1, ...common]);
+    const r2 = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm,qa,sweep", "--cli-arg", "--model", "--cli-arg", "haiku", "--interval", "pm=9m", "--dump-prompt", d2, ...common]);
+    const p1 = join(d1, "pm.prompt.txt"), p2 = join(d2, "pm.prompt.txt");
+    const a = existsSync(p1) ? readFileSync(p1, "utf8") : "", b = existsSync(p2) ? readFileSync(p2, "utf8") : "";
+    const constantA = Number(/pm: prompt \d+B = constant (\d+)B/.exec(r1.out)?.[1] ?? -1);
+    const constantB = Number(/pm: prompt \d+B = constant (\d+)B/.exec(r2.out)?.[1] ?? -1);
+    ok(a.length > 0 && b.length > 0 && constantA > 0 && constantA === constantB,
+      `WS-A A2: --dump-prompt wrote both prompts and the dry-run reports the same constant length for both fires (${constantA} / ${constantB})`);
+    const MARKER = "<!-- devloop-fire-context -->";
+    const ia = a.indexOf(MARKER), ib = b.indexOf(MARKER);
+    ok(ia > 0 && ib > 0 && a.indexOf(MARKER, ia + 1) === -1, "WS-A A2: exactly one fire-context marker per prompt, after the constant segment");
+    let commonBytes = 0;
+    const ba = Buffer.from(a, "utf8"), bb = Buffer.from(b, "utf8");
+    while (commonBytes < ba.length && commonBytes < bb.length && ba[commonBytes] === bb[commonBytes]) commonBytes++;
+    ok(commonBytes >= constantA, `WS-A A2: the byte-identical prefix (${commonBytes} B) is at least the constant segment (${constantA} B) — the cache prefix survives a different agent set, model and cadence`);
+    ok(Buffer.byteLength(a.slice(0, ia), "utf8") >= constantA && a.slice(0, ia) === b.slice(0, ib),
+      "WS-A A2: everything before the marker is byte-identical across the two fires; only the tail differs");
+    ok(a.slice(ia) !== b.slice(ib) && /- selected agents: pm\n/.test(a) && /- selected agents: pm,qa,sweep\n/.test(b),
+      "WS-A A2: the variable tail carries the per-fire scheduler context (selected agents differ)");
+    ok(a.indexOf("<!-- devloop-boot:begin agent=pm") > 0 && a.indexOf("<!-- devloop-boot:begin agent=pm") < ia && a.indexOf("<!-- devloop-boot:end") < ia,
+      "WS-A A2: the devloop-boot block sits INSIDE the constant segment, before the marker (marker semantics kept)");
+    ok(!/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(a.slice(0, ia)) && !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(a.slice(0, ia)),
+      "WS-A A2: the constant segment carries no timestamp and no fire id");
+    ok(/- why you were launched: once — operator-invoked/.test(a), "WS-A A6: the tail says WHY the fire was launched (--once here)");
+    ok(/### Resolved config \(§0a step 2, pre-assembled\) — project: demo/.test(a.slice(0, ia)) && /- repos \(1 — single-repo/.test(a.slice(0, ia)),
+      "WS-A A6: the corpus carries the Resolved config block (§0a step 2) for the fire's project");
+  }
 
+  // ── job-scoped prompts (docs/design/job-scoped-prompts.md): pm job-lanes ─────────────────────
+  // A pm lane (pm-maintenance / pm-groom / pm-review) is a scheduler fire unit that fires as actor pm
+  // but loads ONE job playbook (constitution + job span + pulled playbooks), not the whole SKILL + the
+  // conventions union. Two fires of the same lane share a byte-constant prefix; a different lane's job
+  // differs; the fire keeps identity pm; the tail names the job.
+  {
+    const constOf = (out: string) => Number(/(?:pm-maintenance|pm-groom|pm-review): prompt \d+B = constant (\d+)B/.exec(out)?.[1] ?? -1);
+    const m1 = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm-maintenance", ...common]);
+    const m2 = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm-maintenance", ...common]);
+    const gr = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm-groom", ...common]);
+    ok(m1.code === 0 && m2.code === 0 && gr.code === 0, "pm-lane dry-runs exit 0");
+    const cm1 = constOf(m1.out), cm2 = constOf(m2.out), cg = constOf(gr.out);
+    ok(cm1 > 0 && cm1 === cm2, `pm-maintenance: two fires report the SAME constant length (${cm1}/${cm2}) — the (actor, job) cache prefix holds`);
+    ok(cg > 0 && cg !== cm1, `pm-groom: a different lane's job yields a DIFFERENT constant length (${cg} ≠ ${cm1})`);
+    // the job corpus is far smaller than the whole-role pm load
+    const full = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...common]);
+    const cfull = Number(/pm: prompt \d+B = constant (\d+)B/.exec(full.out)?.[1] ?? -1);
+    ok(cfull > 0 && cm1 < cfull, `pm-maintenance job corpus (${cm1}B constant) is far smaller than the whole-role pm load (${cfull}B)`);
+    // the fire executes as actor pm (same identity, same board slice), not a new actor
+    ok(/DEVLOOP_ACTOR":"pm"/.test(m1.out) && !/DEVLOOP_ACTOR":"pm-maintenance"/.test(m1.out),
+      "a pm lane fires as DEVLOOP_ACTOR=pm (same identity, not a new actor)");
+    // per-lane model tiers: maintenance is the cheaper/faster class, groom the stronger class
+    ok(/launch=pm-maintenance:claude:sonnet\//.test(m1.out) && /launch=pm-groom:claude:opus\//.test(gr.out),
+      "per-lane model tier: pm-maintenance=sonnet (mechanical/cheaper), pm-groom=opus (judgment/stronger)");
+    // the why-launched tail names the job (dump the prompt and read the scheduler context)
+    const dumpDir = mkdtempSync(join(tmpdir(), "dl-lane-"));
+    run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm-maintenance", "--dump-prompt", dumpDir, ...common]);
+    const tail = readFileSync(join(dumpDir, "pm-maintenance.prompt.txt"), "utf8");
+    ok(/\n- agent: pm\b/.test(tail) && /\n- job-lane job: verify\b/.test(tail),
+      "the fire prompt's scheduler context names actor pm + the job-lane job (verify)");
+    ok(/why you were launched: .*\bverify\b/.test(tail), "the why-launched tail names the picked job");
+    rmSync(dumpDir, { recursive: true, force: true });
+  }
+
+  // ── job-scoped prompts: qa job-lanes (mirror of pm) ──────────────────────────────────────────
+  // qa splits into two lanes (qa-maintenance / qa-hunt), both firing as actor qa. Same shape the pm
+  // PoC proves: byte-constant per (actor, job) prefix, DEVLOOP_ACTOR=qa, per-lane model tiers, the
+  // tail naming the job. With an unseeded hub the lane gate fails OPEN to its primary job.
+  {
+    const constOf = (out: string, lane: string) => Number(new RegExp(`${lane}: prompt \\d+B = constant (\\d+)B`).exec(out)?.[1] ?? -1);
+    const qm = run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa-maintenance", ...common]);
+    const qh = run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa-hunt", ...common]);
+    ok(qm.code === 0 && qh.code === 0, "qa-lane dry-runs exit 0");
+    const cqm = constOf(qm.out, "qa-maintenance"), cqh = constOf(qh.out, "qa-hunt");
+    ok(cqm > 0 && cqh > 0 && cqm !== cqh, `qa-maintenance vs qa-hunt yield different constant lengths (${cqm} ≠ ${cqh}) — different jobs`);
+    const qaFull = run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa", ...common]);
+    const cqaFull = Number(/qa: prompt \d+B = constant (\d+)B/.exec(qaFull.out)?.[1] ?? -1);
+    ok(cqaFull > 0 && cqm < cqaFull && cqh < cqaFull, `qa lane job corpora (${cqm}/${cqh}B) are far smaller than the whole-role qa load (${cqaFull}B)`);
+    ok(/DEVLOOP_ACTOR":"qa"/.test(qm.out) && !/DEVLOOP_ACTOR":"qa-maintenance"/.test(qm.out),
+      "a qa lane fires as DEVLOOP_ACTOR=qa (same identity, not a new actor)");
+    ok(/launch=qa-maintenance:claude:sonnet\//.test(qm.out) && /launch=qa-hunt:claude:opus\//.test(qh.out),
+      "per-lane model tier: qa-maintenance=sonnet (mechanical/cheaper), qa-hunt=opus (judgment/stronger)");
+    const dumpDir = mkdtempSync(join(tmpdir(), "dl-qa-lane-"));
+    run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa-maintenance", "--dump-prompt", dumpDir, ...common]);
+    const mTail = readFileSync(join(dumpDir, "qa-maintenance.prompt.txt"), "utf8");
+    ok(/\n- agent: qa\b/.test(mTail) && /\n- job-lane job: verify\b/.test(mTail),
+      "qa-maintenance prompt names actor qa + the fail-open primary job (verify)");
+    run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa-hunt", "--dump-prompt", dumpDir, ...common]);
+    const hTail = readFileSync(join(dumpDir, "qa-hunt.prompt.txt"), "utf8");
+    ok(/\n- agent: qa\b/.test(hTail) && /\n- job-lane job: bughunt\b/.test(hTail),
+      "qa-hunt prompt names actor qa + the bughunt job");
+    rmSync(dumpDir, { recursive: true, force: true });
+  }
+
+  // ── job-scoped prompts: the static steward map + the dev tiers job-boot ───────────────────────
+  // Every migrated agent's fire loads a JOB corpus, not the whole-SKILL classic boot. The single-job
+  // stewards resolve a fixed job (sweep→sweep, reflect→retro, ops→poll, architect→audit,
+  // communication→article); dev→ship, junior-dev→implement; senior-dev→design (fail-open with no board).
+  {
+    const dumpDir = mkdtempSync(join(tmpdir(), "dl-steward-"));
+    const cases: Array<[string, string]> = [
+      ["sweep", "sweep"], ["reflect", "retro"], ["ops", "poll"], ["architect", "audit"],
+      ["communication", "article"], ["dev", "ship"], ["junior-dev", "implement"], ["senior-dev", "design"],
+    ];
+    for (const [agent, job] of cases) {
+      // stewards fire at team scope with no single project; run each as its own --once fire and dump it.
+      const r = run(["--cli", "claude", "--once", "--dry-run", "--agents", agent, "--dump-prompt", dumpDir, ...common]);
+      ok(r.code === 0, `${agent} dry-run exits 0`);
+      // a job-boot fire reports its boot corpus ON and rides the prompt via stdin (a job corpus is always present)
+      ok(new RegExp(`\\[${agent}\\] boot corpus: ON`).test(r.out), `${agent} job-boots (boot corpus ON — not classic pull mode)`);
+      const tail = readFileSync(join(dumpDir, `${agent}.prompt.txt`), "utf8");
+      ok(new RegExp(`\\n- agent: ${agent}\\b`).test(tail) && new RegExp(`\\n- job-lane job: ${job}\\b`).test(tail),
+        `${agent} fire loads job '${job}' (the tail names it) — no classic whole-SKILL boot`);
+      // the job corpus is the JOB CORPUS block (constitution + job span), not the full BOOT CORPUS conventions union
+      ok(/JOB CORPUS — pre-assembled/.test(tail) && !/BOOT CORPUS — pre-assembled/.test(tail),
+        `${agent} carries the JOB CORPUS block (constitution + job span + playbooks), not the conventions-union boot`);
+    }
+    rmSync(dumpDir, { recursive: true, force: true });
+  }
+
+  // ── job-scoped prompts: the lane-gate + Mode-pick ROUTING predicates (unit) ───────────────────
+  // qaLaneGate / seniorDevModePick are internal to run-agents.ts (main() runs on import, LOOP-58), but the
+  // zero-dep leaf predicates they consume ARE importable — assert the routing decisions directly.
+  {
+    const laneDb = join(tmp, "lane-routing.db");
+    const db = openDb(laneDb);
+    // qa-maintenance routing: verify (qa-owned In Review) then unblock (needs-qa / blocked+info-needed).
+    ensureSeed(db, "qarv", "QA Routing Verify", "QARV");
+    const pv = findProject(db, "qarv")!;
+    insertTicket(db, pv, "qa", { title: "in-review qa bug", description: "", type: "Bug", state: "In Review", assignee: "qa", priority: 2, labels: ["dev-loop", "qa"], duplicateOf: null, relatedTo: [] }, { title: "in-review qa bug", type: "Bug" });
+    ok(qaMaintenanceSlice(db, pv).verify === 1 && qaMaintenanceSlice(db, pv).unblock === 0,
+      "qaLaneGate input: a qa-owned In Review row routes to verify (not unblock)");
+
+    ensureSeed(db, "qaru", "QA Routing Unblock", "QARU");
+    const pu = findProject(db, "qaru")!;
+    insertTicket(db, pu, "dev", { title: "needs-qa info", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "needs-qa"], duplicateOf: null, relatedTo: [] }, { title: "needs-qa info", type: "Feature" });
+    insertTicket(db, pu, "dev", { title: "blocked info-needed", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "blocked", "info-needed"], duplicateOf: null, relatedTo: [] }, { title: "blocked info-needed", type: "Feature" });
+    const su = qaMaintenanceSlice(db, pu);
+    ok(su.verify === 0 && su.unblock === 2,
+      `qaLaneGate input: needs-qa AND blocked+info-needed rows route to unblock (got verify ${su.verify}, unblock ${su.unblock})`);
+
+    ensureSeed(db, "qare", "QA Routing Empty", "QARE");
+    const pe = findProject(db, "qare")!;
+    const se = qaMaintenanceSlice(db, pe);
+    ok(se.verify === 0 && se.unblock === 0, "qaLaneGate input: an empty board routes to neither (the lane skips)");
+
+    // senior-dev Mode pick: the ticket's Mode: marker selects design vs directcode.
+    const mk = (key: string, desc: string, labels: string[], related: string[] = []) => {
+      ensureSeed(db, key, key, key.toUpperCase());
+      const pid = findProject(db, key)!;
+      insertTicket(db, pid, "senior-dev", { title: "t", description: desc, type: "Feature", state: "Todo", assignee: "senior-dev", priority: 2, labels: ["dev-loop", "senior-dev", ...labels], duplicateOf: null, relatedTo: related }, { title: "t", type: "Feature" });
+      return pid;
+    };
+    ok(seniorDevModePick(db, mk("snd1", "Mode: design\n\nauthor the module", [])) === "design",
+      "seniorDevModePick: `Mode: design` marker ⇒ design");
+    ok(seniorDevModePick(db, mk("snd2", "Mode: direct-code\n\nship the escalation", [])) === "directcode",
+      "seniorDevModePick: `Mode: direct-code` marker ⇒ directcode");
+    ok(seniorDevModePick(db, mk("snd3", "no marker here", [], ["SND-PRED"])) === "directcode",
+      "seniorDevModePick: no marker + a follow-up (relatedTo non-empty) ⇒ directcode");
+    ok(seniorDevModePick(db, mk("snd4", "no marker here", [])) === "design",
+      "seniorDevModePick: no marker + not a follow-up ⇒ design (the normal complex path)");
+    ensureSeed(db, "snd5", "snd5", "SND5");
+    ok(seniorDevModePick(db, findProject(db, "snd5")!) === "design",
+      "seniorDevModePick: nothing to pick ⇒ design (fail-open to the primary job)");
+    db.close();
+  }
 
   // ── LOOP-237 AC3: the PULL directive is per-agent and DEFAULT OFF ────────────────────────────
   // With it off the fire prompt must be byte-identical to today — the compression lever must not
@@ -157,7 +348,28 @@ try {
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_ACTOR="communication"/.test(codex.out), "codex dry-run injects per-agent actor with -c");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_PROJECT="demo"/.test(codex.out), "codex dry-run injects project with -c");
   ok(/mcp_servers\.dev-loop-hub\.env\.DEVLOOP_DEV_SPLIT="false"/.test(codex.out), "codex dry-run injects the runtime dev-split switch");
-  ok(!/dangerously-bypass/.test(codex.out), "--codex-safe omits unsafe bypass flags");
+  ok(!/dangerously-bypass/.test(codex.out), "--codex-safe (a no-op since WS-A) — no bypass flags, as by default");
+  // WS-A C4 — the codex lane is SAFE by default; the bypass flag rides only on an explicit ask.
+  // Review 1 of C4: `--skip-git-repo-check` is independent of the sandbox choice and rides on EVERY codex
+  // fire — it only lifts codex's startup refusal outside a git tree (a team-scope steward's cwd is the
+  // workspace root, which `team init` never git-inits; codex-cli 0.147.0 exits 1 there before auth).
+  const codexPlain = run(["--cli", "codex", "--once", "--dry-run", "--agents", "communication", ...common]);
+  ok(codexPlain.code === 0 && !/dangerously-bypass-approvals-and-sandbox/.test(codexPlain.out),
+    "WS-A C4: with no flag and no config the codex command carries NO --dangerously-bypass-approvals-and-sandbox (safe default)");
+  ok(/codex exec .*--skip-git-repo-check/.test(codexPlain.out),
+    "C4 review 1: --skip-git-repo-check rides on a SAFE codex fire too — it is not a sandbox flag");
+  ok(/\[dry-run\] communication: cwd=\S+ cli=codex sandbox=safe /.test(codexPlain.out),
+    "C4 review 1: the codex dry-run info line names sandbox=safe so the posture is visible, not inferred from a missing flag");
+  ok(/dev-loop run: NOTICE codex sandbox=safe \(default\) for communication/.test(codexPlain.out) && /team set team\.codex\.sandbox bypass\|safe \(doctor W45\)/.test(codexPlain.out),
+    "C4 review 1: a run whose codex lane rides the default prints ONE scheduler-start NOTICE naming the key, both choices and doctor W45");
+  ok((codexPlain.out.match(/dev-loop run: NOTICE codex sandbox=/g) ?? []).length === 1, "C4 review 1: the notice prints once, not per fire");
+  const codexUnsafe = run(["--cli", "codex", "--once", "--dry-run", "--codex-unsafe", "--agents", "communication", ...common]);
+  ok(/codex exec .*--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check/.test(codexUnsafe.out),
+    "WS-A C4: --codex-unsafe restores the bypass pair (the pre-WS-A unattended shape)");
+  ok(/\[dry-run\] communication: cwd=\S+ cli=codex sandbox=bypass /.test(codexUnsafe.out) && /dev-loop run: codex sandbox=bypass \(--codex-unsafe\) for communication/.test(codexUnsafe.out) && !/NOTICE codex sandbox/.test(codexUnsafe.out),
+    "C4 review 1: an explicit posture shows sandbox=bypass on the fire line and a plain (non-NOTICE) start line");
+  const claudeOnly = run(["--cli", "claude", "--once", "--dry-run", "--agents", "communication", ...common]);
+  ok(!/codex sandbox=/.test(claudeOnly.out), "C4 review 1: a run with no codex lane prints no codex sandbox line at all");
 
   // ── D8/D9 interface flip: claude on a service project DEFAULTS to interface="cli" — the scheduler
   //    injects NO hub MCP and passes NO --strict-mcp-config; the agent reaches the board through the
@@ -166,7 +378,7 @@ try {
   const svcCliCommon = ["--root", repoRoot, "--data", data, "--hub-db", join(tmp, "hub.db"), "--project", "svccli"];
   const cliDefault = run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm", ...svcCliCommon]);
   ok(cliDefault.code === 0, "service + claude on the D9 default (interface=cli) exits 0");
-  ok(/pm: claude --model opus --effort max --output-format json -p '?<prompt:\d+ chars>'?/.test(cliDefault.out),
+  ok(/pm: claude --model opus --effort max --output-format json -p (?:'?<prompt:\d+ chars>'?|<stdin:\d+ chars>)/.test(cliDefault.out),
     "interface=cli claude command drops the hub injection entirely (model/effort + --output-format json + prompt) — D9 default, the lane LOOP-13 regressed");
   ok(!/--mcp-config/.test(cliDefault.out) && !/--strict-mcp-config/.test(cliDefault.out) && !/dev-loop-hub/.test(cliDefault.out),
     "interface=cli passes no --mcp-config / --strict-mcp-config and defines no dev-loop-hub server");
@@ -194,12 +406,12 @@ try {
   const split = run(["--cli", "claude", "--once", "--dry-run", "--agents", "core", "--dev-split", ...common]);
   ok(split.code === 0, "--dev-split dry-run exits 0");
   ok(/devSplit=runtime/.test(split.out), "--dev-split marks this runner as split-dev at runtime");
-  ok(/agents=pm@5m, qa@5m, senior-dev@5m, junior-dev@5m, sweep@30m/.test(split.out), "--dev-split replaces dev with senior-dev + junior-dev");
+  ok(/agents=pm-maintenance@5m, pm-groom@15m, pm-review@30m, qa-maintenance@5m, qa-hunt@30m, senior-dev@5m, junior-dev@5m, sweep@30m/.test(split.out), "--dev-split roster: pm/qa lanes + senior-dev + junior-dev (no single dev)");
   ok(/DEVLOOP_DEV_SPLIT":"true"/.test(split.out), "--dev-split injects DEVLOOP_DEV_SPLIT=true into the Claude MCP env");
 
   const legacy = run(["--cli", "claude", "--once", "--dry-run", "--agents", "legacy", ...common]);
   ok(legacy.code === 0, "legacy single-dev group exits 0");
-  ok(/agents=pm@5m, qa@5m, dev@5m, sweep@30m/.test(legacy.out), "legacy group keeps the single dev agent");
+  ok(/agents=pm-maintenance@5m, pm-groom@15m, pm-review@30m, qa-maintenance@5m, qa-hunt@30m, dev@5m, sweep@30m/.test(legacy.out), "legacy group keeps the single dev agent (pm/qa still expand to lanes)");
   ok(!/devSplit=runtime/.test(legacy.out), "legacy group does not mark split-dev runtime mode");
   ok(/DEVLOOP_DEV_SPLIT":"false"/.test(legacy.out), "legacy group injects DEVLOOP_DEV_SPLIT=false");
 

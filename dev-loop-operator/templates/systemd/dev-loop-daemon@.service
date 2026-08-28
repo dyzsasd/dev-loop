@@ -1,0 +1,29 @@
+# dev-loop hub daemon (board + op-API, localhost) — per-USER systemd unit, one instance per workspace.
+# %i = the workspace's team key (dev-loop.json team.key), used only as the instance name.
+# `dev-loop daemon install-autostart` writes an equivalent concrete unit for you on Linux; this template
+# is the hand-managed path. Install:
+#   cp dev-loop-daemon@.service ~/.config/systemd/user/
+#   edit the two "edit:" lines, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now dev-loop-daemon@<team-key>
+#   loginctl enable-linger "$USER"        # keep it up after logout / start it at boot
+[Unit]
+Description=dev-loop hub daemon for workspace %i (localhost board + op-API)
+After=network-online.target
+
+[Service]
+# `daemon up-all` starts every backend:"service" project's daemon detached and returns; the daemons
+# stay in this unit's cgroup, so `systemctl --user stop` ends them and `restart` re-runs up-all.
+Type=oneshot
+RemainAfterExit=yes
+# edit: the workspace root (the directory holding dev-loop.json) — both lines, same path.
+# The binding is WRITTEN here; never add the shell's workspace-selecting overrides (home/db/run-dir vars).
+WorkingDirectory=%h/work/my-team
+Environment=DEVLOOP_WORKSPACE=%h/work/my-team
+Environment=DEVLOOP_ACTOR=operator
+Environment=PATH=%h/.npm-global/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env dev-loop daemon up-all
+ExecStop=/usr/bin/env dev-loop hub stop
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

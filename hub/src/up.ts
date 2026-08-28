@@ -39,10 +39,11 @@ interface UpOpts {
   key?: string; backend: "service" | "linear"; noDaemon: boolean; dryLaunch: boolean;
   bundle?: string; attach?: string; forceReseed: boolean;
   dirExplicit: boolean; // LOOP-418: did the operator actually pass --dir?
+  printBrief: boolean;  // WS-C C1: print the console brief + env block for a NON-Claude harness to paste, and exit
 }
 
 export function parseUpArgs(argv: string[]): UpOpts {
-  const o: UpOpts = { dir: process.cwd(), dirExplicit: false, backend: "service", noDaemon: false, dryLaunch: false, forceReseed: false };
+  const o: UpOpts = { dir: process.cwd(), dirExplicit: false, backend: "service", noDaemon: false, dryLaunch: false, forceReseed: false, printBrief: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]; const next = () => argv[++i] ?? die(`${a} requires a value`);
     if (a === "--dir") { o.dir = resolve(next()); o.dirExplicit = true; }
@@ -53,6 +54,7 @@ export function parseUpArgs(argv: string[]): UpOpts {
     else if (a === "--backend") { const v = next(); if (v !== "service" && v !== "linear") die("--backend must be service or linear"); o.backend = v; }
     else if (a === "--no-daemon") o.noDaemon = true;
     else if (a === "--dry-launch") o.dryLaunch = true;
+    else if (a === "--print-brief") o.printBrief = true;
     else if (a === "--bundle") o.bundle = resolve(next());
     else if (a === "--attach") o.attach = next();
     else if (a === "--force-reseed") o.forceReseed = true;
@@ -88,6 +90,9 @@ starts the board daemon (service backend), then EXECS an interactive coding-agen
 the operator console (CLAUDE.md/AGENTS.md at the workspace root; you do setup by talking).
   --dry-launch   print the resolved launch (command/args/env) as JSON instead of spawning — the test
                  and inspection surface.
+  --print-brief  do NOT launch anything: print the env block to export + the console brief to paste
+                 into ANY harness (Codex, opencode, a shell agent). The console is a thin convenience
+                 over the same verbs; the brief's first step is \`dev-loop status --json\`.
 Attach: same console, but every dev-loop verb targets the remote hub (DEVLOOP_HUB_URL + the §6.2
 bearer from DEVLOOP_UI_TOKEN(_FILE)). Home-only verbs (run/daemon/seed/team file writes) refuse there.
 Bundle: see \`dev-loop bundle --help\` for authoring the encrypted move/backup artifact.`);
@@ -146,11 +151,33 @@ export function resolvedBoardUrl(ws: Workspace): string {
   return `http://127.0.0.1:${process.env.DEVLOOP_DAEMON_PORT ?? 8787}/  (dev-loop hub status)`;
 }
 
-const CONSOLE_BRIEF =
-  "You are the dev-loop OPERATOR CONSOLE (DEVLOOP_ACTOR=operator). Read and follow the workspace-root " +
-  "CLAUDE.md; the full guide is /dev-loop:operator-console when the dev-loop plugin is installed. All " +
-  "setup and board actions go through `dev-loop` CLI verbs — never hand-edit dev-loop.json, and never " +
-  "accept a secret value in chat: run `dev-loop secret set <NAME>` so the human types it on the TTY.";
+// WS-C C1: the brief is HARNESS-NEUTRAL. `up` hands it to claude via --append-system-prompt as a
+// convenience; `up --print-brief` prints the same text (plus the env block) for any other harness to
+// paste. Nothing in it presumes Claude, a plugin, or that `up` launched the session — every job it
+// names is a `dev-loop` verb, and its first step is the one read model, `dev-loop status --json`.
+export function consoleBrief(): string {
+  return "You are the dev-loop OPERATOR CONSOLE (DEVLOOP_ACTOR=operator) — the human's hands on this workspace; " +
+    "you are NOT one of the loop's agents. First read: `dev-loop status --json` (scheduler/pause/drain, the " +
+    "decision queue, fire health, daemons, board, cost + a NEXT line). Rule on queue items with the grammar in " +
+    "references/operator-rulings.md (a `Ruling: approve|reject|defer — <reason>` comment, then the state verb). " +
+    "The full guide is skills/operator-console/SKILL.md (/dev-loop:operator-console when the plugin is installed); " +
+    "the workspace-root CLAUDE.md/AGENTS.md is its short form. All setup and board actions go through `dev-loop` " +
+    "CLI verbs — never hand-edit dev-loop.json, never export DEVLOOP_TEAM_SCOPE/DEVLOOP_DEV_SPLIT, and never " +
+    "accept a secret value in chat: run `dev-loop secret set <NAME>` so the human types it on the TTY.";
+}
+
+/** The paste-able block `up --print-brief` prints: the env to export, then the brief. */
+export function printableBrief(envAdded: Record<string, string>): string {
+  return [
+    "# dev-loop operator console — paste into your harness (any CLI agent). Step 1: export the env; step 2: the brief.",
+    ...Object.entries(envAdded).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
+    "unset DEVLOOP_TEAM_SCOPE DEVLOOP_DEV_SPLIT   # fire markers — an operator write refuses under them (exit 4)",
+    "",
+    consoleBrief(),
+    "",
+    "Start with: dev-loop status --json",
+  ].join("\n");
+}
 
 export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   const o = parseUpArgs(argv);
@@ -234,7 +261,14 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
   if (o.attach) envAdded.DEVLOOP_HUB_URL = o.attach; // §6.0: every dev-loop verb in the session targets the remote hub
   Object.assign(env, envAdded);
 
-  const { command, args } = interactiveCommandFor(cli, profile, CONSOLE_BRIEF);
+  // WS-C C1: a non-Claude harness gets the SAME brief and env, as text to paste — no launch, no TUI
+  // assumption. The console below is a convenience over exactly these verbs, not a different path.
+  if (o.printBrief) {
+    console.log(printableBrief(envAdded));
+    return 0;
+  }
+
+  const { command, args } = interactiveCommandFor(cli, profile, consoleBrief());
   const cwd = ws?.root ?? o.dir;
 
   if (o.dryLaunch) {
