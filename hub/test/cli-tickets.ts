@@ -189,3 +189,22 @@ ok(tcount === 6 && ecount === 0, `read-only: tickets unchanged (6) + zero events
 
 console.log(fails === 0 ? "\nCLI_TICKETS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
+
+// ── 10. LOOP-470: error message does not recommend legacy ~/.dev-loop/projects.json ──
+{
+  // Run with no DEVLOOP_PROJECT set and no workspace DB — the "no project resolved" error case
+  const noProj = spawnSync("node", ["src/cli-tickets.ts", "tickets"], {
+    encoding: "utf8", timeout: 30000,
+    env: { ...scrubFireEnv() }, // no DEVLOOP_PROJECT, no DEVLOOP_HUB_DB
+  });
+  ok(
+    noProj.status !== 0,
+    `no-project error exits non-zero (got ${noProj.status})`,
+  );
+  const msg = (noProj.stdout ?? "") + (noProj.stderr ?? "");
+  ok(
+    msg.includes("configured in the workspace") && !msg.includes("~/.dev-loop/projects.json"),
+    `no-project error message says "configured in the workspace" and does NOT mention ~/.dev-loop/projects.json (message: ${JSON.stringify(msg.slice(0, 150))})`,
+  );
+}
+
