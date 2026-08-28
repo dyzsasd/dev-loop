@@ -1135,6 +1135,20 @@ function fireReasonFor(opts: Options, agent: SchedKey, project: string, gated: b
   return { kind: "cadence", text: `cadence due — this agent fires every ${every}${gated ? "; the change-gate passed (a repo HEAD or the board moved since your last fire, or the quiet-board TTL elapsed)" : ""}` };
 }
 
+/**
+ * A lane gate's verdict: the job to run, or nothing-eligible WITH the reason.
+ *
+ * The reason is the whole point of the type. A lane gate returning a bare null let the scheduler
+ * `continue` in silence, and a silent skip is indistinguishable from a crash — the same reasoning
+ * that made devTierQueueSkip return its REASON rather than a boolean (LOOP-144). `reason` is set
+ * exactly when `job` is null, and names the lane, the project and the board counts the decision was
+ * made from, so the printed line explains itself without the reader re-deriving the query.
+ */
+interface LaneDecision { job: string | null; reason: string | null }
+const laneRuns = (job: string): LaneDecision => ({ job, reason: null });
+const laneIdle = (lane: string, project: string, counts: string): LaneDecision =>
+  ({ job: null, reason: `nothing eligible for the ${lane} lane in '${project}' (${counts})` });
+
 // ─── pm/qa job-lanes (job-scoped prompts, docs/design/job-scoped-prompts.md) ─────────────────────────────
 // The scheduler picks the JOB a lane runs from board-row predicates it already computes + the seeded
 // bail-shape labels — the same "$0 arm selection" the dev tiers prove (servableSlice + PICK_RANK). A sibling
@@ -1147,43 +1161,52 @@ function fireReasonFor(opts: Options, agent: SchedKey, project: string, gated: b
 //                    INSIDE the fire — a groom fire is valid at the cap), else null
 //   pm-review      ⇒ review if the change-gate tripped (a repo HEAD or the board moved / the quiet-board TTL
 //                    elapsed) — the same gate pm's review tier already rides — else null
-function pmLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): string | null {
+function pmLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): LaneDecision {
   const jobs = LANE_JOBS[lane as Lane];
   try {
     if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
     const projectId = fireDb ? findProject(fireDb, project) : null;
-    if (!fireDb || !projectId) return jobs[0]; // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
+    if (!fireDb || !projectId) return laneRuns(jobs[0]); // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
     if (lane === "pm-maintenance") {
       const { verify, unblock } = pmMaintenanceSlice(fireDb, projectId);
-      return verify > 0 ? "verify" : unblock > 0 ? "unblock" : null;
+      if (verify > 0) return laneRuns("verify");
+      if (unblock > 0) return laneRuns("unblock");
+      return laneIdle(lane, project, "0 In Review rows owned by pm to verify, 0 decision-needed / scope-design / needs-pm rows to unblock");
     }
-    if (lane === "pm-groom") return servableBacklogDepth(fireDb, projectId).total > 0 ? "groom" : null;
+    if (lane === "pm-groom") {
+      const backlog = servableBacklogDepth(fireDb, projectId).total;
+      return backlog > 0 ? laneRuns("groom") : laneIdle(lane, project, "0 non-blocked Backlog rows to groom");
+    }
     // pm-review: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
-    return gateTripped ? "review" : null;
-  } catch { return jobs[0]; } // any read error ⇒ fail open (run the lane's primary job)
+    return gateTripped ? laneRuns("review")
+      : laneIdle(lane, project, "the change-gate did not trip — no repo HEAD or board movement since this lane's last fire, and the quiet-board TTL has not elapsed");
+  } catch { return laneRuns(jobs[0]); } // any read error ⇒ fail open (run the lane's primary job)
 }
 // qaLaneGate — the pm PoC applied to QA (mirror of pmLaneGate, same fail-open contract).
 //   qa-maintenance ⇒ verify if qa-owned In-Review rows exist, else unblock if needs-qa / blocked+info-needed
 //                    rows exist, else null
 //   qa-hunt        ⇒ bughunt if the change-gate tripped (a watched repo HEAD moved / the board moved / the
 //                    change-gate is off entirely), else null
-function qaLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): string | null {
+function qaLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): LaneDecision {
   const jobs = LANE_JOBS[lane as Lane];
   try {
     if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
     const projectId = fireDb ? findProject(fireDb, project) : null;
-    if (!fireDb || !projectId) return jobs[0]; // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
+    if (!fireDb || !projectId) return laneRuns(jobs[0]); // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
     if (lane === "qa-maintenance") {
       const { verify, unblock } = qaMaintenanceSlice(fireDb, projectId);
-      return verify > 0 ? "verify" : unblock > 0 ? "unblock" : null;
+      if (verify > 0) return laneRuns("verify");
+      if (unblock > 0) return laneRuns("unblock");
+      return laneIdle(lane, project, "0 In Review rows owned by qa to verify, 0 needs-qa / blocked+info-needed rows to unblock");
     }
     // qa-hunt: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
-    return gateTripped ? "bughunt" : null;
-  } catch { return jobs[0]; } // any read error ⇒ fail open (run the lane's primary job)
+    return gateTripped ? laneRuns("bughunt")
+      : laneIdle(lane, project, "the change-gate did not trip — no watched repo HEAD or board movement since this lane's last fire");
+  } catch { return laneRuns(jobs[0]); } // any read error ⇒ fail open (run the lane's primary job)
 }
 // The ONE lane-gate dispatcher every scheduler branch calls: routes a pm-* lane to pmLaneGate and a qa-* lane
 // to qaLaneGate, so the dispatch code stays lane-owner-agnostic (no pm-only vs qa-only branch that could drift).
-function laneGate(opts: Options, lane: Lane, project: string, gateTripped: boolean): string | null {
+function laneGate(opts: Options, lane: Lane, project: string, gateTripped: boolean): LaneDecision {
   return isQaLane(lane) ? qaLaneGate(opts, lane, project, gateTripped) : pmLaneGate(opts, lane, project, gateTripped);
 }
 // The launch reason for a lane, naming the chosen job so the fire explains itself in one line
@@ -1786,7 +1809,12 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
   });
 }
 
-type Slot = { agent: SchedKey; nextAt: number; running: boolean };
+// `bootLog` holds LOOP-273's seed line for a slot that was seeded to FIRE ON BOOT. It is an
+// announcement of a fire, so it is printed at the launch rather than at the seed: printing it at the
+// seed and then having a gate decline leaves an announcement with no start line, which reads as a
+// crash. A slot seeded DEFERRED carries no bootLog — that line is a scheduling statement about a fire
+// that is not being attempted, and it is printed immediately.
+type Slot = { agent: SchedKey; nextAt: number; running: boolean; bootLog: string | null };
 type RunnerChild = ChildProcessByStdio<Writable | null, Readable, Readable>; // stdio: [pipe|ignore,"pipe","pipe"] — stdin is a pipe only on boot-prefix fires
 const activeChildren = new Set<RunnerChild>();
 
@@ -1987,7 +2015,7 @@ async function main(): Promise<void> {
       if (isLane(a)) {
         const key = gateActive ? changeKey(opts, cfg, project) : null;
         const tripped = !(gateActive && gateSkips(opts, gateState, a, laneActor(a), key));
-        const job = laneGate(opts, a, project, tripped) ?? LANE_JOBS[a][0];
+        const job = laneGate(opts, a, project, tripped).job ?? LANE_JOBS[a][0];
         return runAgent(opts, cfg, a, project, cwd, undefined, laneReason(a, job), job);
       }
       return runAgent(opts, cfg, a, project, cwd, undefined, ONCE_REASON);
@@ -2033,11 +2061,11 @@ async function main(): Promise<void> {
   const lastFireAt = lastFirePerAgent(null);
   const slots: Slot[] = opts.agents.map((agent, i) => {
     const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
-    console.log(d.log);
+    if (!d.fireOnBoot) console.log(d.log); // a DEFERRAL announces no fire — print it now
     // LOOP-459: a dry-run preview must print the resolved agent set immediately without waiting for
     // the scheduler's cadence. Reset all slots to fire on the first tick so runAgent prints its dry-run output.
     const nextAt = opts.dryRun ? bootNow - 1 : d.nextAt;
-    return { agent, nextAt, running: false };
+    return { agent, nextAt, running: false, bootLog: d.fireOnBoot ? d.log : null };
   });
   let stopping = false;
   let fired = 0; // total fires started; --max-fires caps it (0 = unlimited)
@@ -2078,25 +2106,31 @@ async function main(): Promise<void> {
     const budgetReason = budgetGateReason(undefined, fireLedgerPath, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      // The slot is due, so its boot announcement is now resolved either way: it is printed at the
+      // launch below, or dropped in favour of whichever line explains why no launch happened.
+      const bootAnnounce = slot.bootLog;
+      slot.bootLog = null;
       if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
         console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
         continue;
       }
       // Job-scoped prompts: a pm/qa lane owns its OWN gate — the scheduler picks the lane's job from board
-      // rows (+ the change-gate for review/hunt). null ⇒ nothing eligible this fire ⇒ skip (a dry-run still
-      // previews the lane's primary job). The generic change/queue gates below are for real agents only.
+      // rows (+ the change-gate for review/hunt). No job ⇒ nothing eligible this fire ⇒ skip, and SAY so in
+      // the same shape the dev-tier queue gate below uses (a dry-run still previews the lane's primary job).
+      // The generic change/queue gates below are for real agents only.
       let laneJob: string | undefined;
       if (isLane(slot.agent)) {
         const actor = laneActor(slot.agent);
         const key = gateActive ? changeKey(opts, cfg, project) : null;
         const tripped = !(gateActive && gateSkips(opts, gateState, slot.agent, actor, key));
         const picked = laneGate(opts, slot.agent, project, tripped);
-        if (picked === null && !opts.dryRun) {
+        if (picked.job === null && !opts.dryRun) {
+          console.log(`[${slot.agent}] skipped: ${picked.reason}`);
           slot.nextAt = now + breaker.intervalFor(actor, opts.intervals[slot.agent]);
           continue; // nothing eligible for this lane this fire (no-op avoided, no token burn)
         }
-        laneJob = picked ?? LANE_JOBS[slot.agent][0];
+        laneJob = picked.job ?? LANE_JOBS[slot.agent][0];
       } else if (gateActive && GATED_AGENTS.has(slot.agent)) {
         // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
         // entirely (the agent would just no-op) — except a pm/qa review fire past the quiet-board TTL (R1a).
@@ -2116,6 +2150,7 @@ async function main(): Promise<void> {
           continue;
         }
       }
+      if (bootAnnounce) console.log(bootAnnounce); // every gate passed — the fire it announces starts below
       slot.running = true;
       fired++;
       const fireReason = isLane(slot.agent)
@@ -2332,10 +2367,13 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
   // pick a project (skipping gated-unchanged + unseeded ones up to one full rotation), resolve its cwd, and run.
-  const fireAgentOnce = async (agent: SchedKey, reason?: FireReason): Promise<void> => {
+  // `announce` is the slot's deferred boot line (LOOP-273): it is invoked immediately before the spawn,
+  // so a gate that declines every candidate leaves it unprinted and prints its own skip line instead.
+  const fireAgentOnce = async (agent: SchedKey, reason?: FireReason, announce?: () => void): Promise<void> => {
     const actor = laneActor(agent); // a pm lane executes as pm; steward/gate membership tests key on the actor
     if (STEWARD_AGENTS.has(actor)) {
       // teamComms reads through `ws` at fire time so a hot-reloaded comms block takes effect next fire.
+      announce?.();
       await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: stewardScope(), teamComms: ws.file.team.comms ?? null }, reason ?? fireReasonFor(opts, agent, stewardProject, false));
       return;
     }
@@ -2353,8 +2391,13 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         const key = gateActive ? changeKey(opts, cfg, p) : null;
         const tripped = !(gateActive && gateSkips(opts, gateState, gateKey(agent, p), actor, key));
         const picked = laneGate(opts, agent, p, tripped);
-        if (picked === null && !opts.dryRun) continue;
-        laneJob = picked ?? LANE_JOBS[agent][0];
+        if (picked.job === null && !opts.dryRun) {
+          // Say it, per candidate project — a silent `continue` here is the whole defect: a lane that
+          // declines every candidate produced no start line, no log and no skip line at all.
+          console.log(`[${agent}] skipped: ${picked.reason}`);
+          continue;
+        }
+        laneJob = picked.job ?? LANE_JOBS[agent][0];
       } else if (gateActive && GATED_AGENTS.has(agent)) {
         const key = changeKey(opts, cfg, p);
         if (gateSkips(opts, gateState, gateKey(agent, p), agent, key)) continue; // unchanged (and inside the pm/qa TTL) ⇒ skip, try next candidate
@@ -2369,6 +2412,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const cwd = cwdFor(project);
     if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
     const fr = isLane(agent) ? laneReason(agent, laneJob!) : (reason ?? fireReasonFor(opts, agent, project, gateActive && GATED_AGENTS.has(agent)));
+    announce?.(); // every gate passed and a project was picked — the fire it announces starts here
     await runAgent(opts, cfg, agent, project, cwd, undefined, fr, laneJob);
     // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
     // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
@@ -2456,11 +2500,11 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const lastFireAt = lastFirePerAgent(fireLedger);
   const slots: Slot[] = opts.agents.map((agent, i) => {
     const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
-    console.log(d.log);
+    if (!d.fireOnBoot) console.log(d.log); // a DEFERRAL announces no fire — print it now
     // LOOP-459: a dry-run preview must print the resolved agent set immediately without waiting for
     // the scheduler's cadence. Reset all slots to fire on the first tick so runAgent prints its dry-run output.
     const nextAt = opts.dryRun ? bootNow - 1 : d.nextAt;
-    return { agent, nextAt, running: false };
+    return { agent, nextAt, running: false, bootLog: d.fireOnBoot ? d.log : null };
   });
   let stopping = false;
   let fired = 0;
@@ -2511,6 +2555,10 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      // The slot is due, so its boot announcement is now resolved either way: fireAgentOnce prints it
+      // immediately before the spawn, or nothing prints it and the gate's own skip line stands instead.
+      const bootAnnounce = slot.bootLog;
+      slot.bootLog = null;
       if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
         console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
@@ -2518,7 +2566,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       }
       slot.running = true;
       fired++;
-      fireAgentOnce(slot.agent)
+      fireAgentOnce(slot.agent, undefined, bootAnnounce ? () => console.log(bootAnnounce) : undefined)
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
         .finally(() => {
           slot.running = false;

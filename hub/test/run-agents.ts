@@ -1,5 +1,5 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -323,6 +323,78 @@ try {
     ok(seniorDevModePick(db, findProject(db, "snd5")!) === "design",
       "seniorDevModePick: nothing to pick ⇒ design (fail-open to the primary job)");
     db.close();
+  }
+
+  // ── D3: an ineligible lane skips OUT LOUD, and never announces a boot fire it does not make ──────
+  // Observed on a live workspace: qa-maintenance printed "no recorded fire — firing on boot" and then
+  // produced no start line, no log file and no skip line. The behaviour was correct (no In Review rows
+  // to verify) but unobservable — the lane branch's `continue` printed nothing, so a correct skip and a
+  // crashed slot look identical. The dev-tier branch immediately below it has printed
+  // `[agent] skipped: <reason>` since LOOP-144 for exactly this reason.
+  //
+  // Exercised through the REAL scheduler tick, not the gate predicate: the defect is the missing print
+  // at the skip point and the announcement's placement, and neither is visible from the predicate.
+  {
+    const laneData = join(tmp, "lane-skip-data");
+    const laneRepo = join(tmp, "lane-skip-repo");
+    mkdirSync(laneData, { recursive: true });
+    mkdirSync(laneRepo, { recursive: true });
+    const laneHubDb = join(laneData, "hub.db");
+    writeFileSync(join(laneData, "projects.json"), JSON.stringify({
+      defaultProject: "laneskip",
+      projects: { laneskip: { repoPath: laneRepo, backend: "service" } },
+    }));
+    const laneDb = openDb(laneHubDb);
+    ensureSeed(laneDb, "laneskip", "Lane Skip", "LSK");   // seeded, and EMPTY — the gate must decline
+    laneDb.close();
+
+    const laneBin = join(tmp, "lane-fake-claude.sh");
+    writeFileSync(laneBin, "#!/bin/sh\necho 'fire ok'\nexit 0\n");
+    chmodSync(laneBin, 0o755);
+
+    // The persistent scheduler (no --once, no --dry-run) — the path that carries both the boot
+    // announcement and the lane gate. Killed by the spawn timeout when nothing ever fires.
+    const scheduler = (extra: string[], timeoutMs: number) => {
+      const { DEVLOOP_WORKSPACE: _w, DEVLOOP_PROJECTS_JSON: _p, DEVLOOP_TEAM: _t, ...e } = process.env;
+      for (const k of ["DEVLOOP_PROJECT", "DEVLOOP_ACTOR", "DEVLOOP_HUB_DB", "DEVLOOP_DEV_SPLIT",
+        "DEVLOOP_DATA_DIR", "DEVLOOP_RUN_DIR", "DEVLOOP_PLUGIN_ROOT"]) delete (e as Record<string, string | undefined>)[k];
+      const r = spawnSync("node", ["src/run-agents.ts", "--cli", "claude", "--agents", "qa-maintenance",
+        "--root", repoRoot, "--data", laneData, "--hub-db", laneHubDb, "--project", "laneskip",
+        "--stagger", "0", ...extra], {
+        cwd: hubRoot, encoding: "utf8", timeout: timeoutMs,
+        env: { ...e, DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_CLAUDE_BIN: laneBin },
+      });
+      return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    };
+
+    const idle = scheduler([], 6000);
+    const idleLines = idle.split("\n").filter((l) => /qa-maintenance/.test(l));
+    const skipLine = idleLines.find((l) => /\[qa-maintenance\] skipped: /.test(l)) ?? "";
+    ok(skipLine !== "",
+      `D3: an ineligible lane prints '[qa-maintenance] skipped: <reason>' — the dev-tier shape (lines seen: ${JSON.stringify(idleLines)})`);
+    ok(/qa-maintenance/.test(skipLine.replace("[qa-maintenance] ", "")),
+      `D3: the skip reason names the LANE that declined (got ${JSON.stringify(skipLine)})`);
+    ok(/\b0 In Review\b/.test(skipLine) && /\b0 needs-qa\b/.test(skipLine),
+      `D3: the skip reason names the board counts that made the lane ineligible (got ${JSON.stringify(skipLine)})`);
+    ok(!/firing on boot/.test(idle),
+      `D3: the boot announcement is NOT printed when the gate then declines — an announcement with no start line reads as a crash (lines seen: ${JSON.stringify(idleLines)})`);
+    ok(!/qa-maintenance: start \(/.test(idle),
+      "D3 control: the declining lane really did not launch, so the skip line is the only thing that could have reported it");
+
+    // The CONTROL. Give the lane an eligible row and the SAME scheduler must announce the boot fire and
+    // start it — so the assertion above cannot be satisfied by deleting the announcement outright.
+    const liveDb = openDb(laneHubDb);
+    insertTicket(liveDb, findProject(liveDb, "laneskip")!, "qa",
+      { title: "in-review qa row", description: "", type: "Bug", state: "In Review", assignee: "qa", priority: 2, labels: ["dev-loop", "qa"], duplicateOf: null, relatedTo: [] },
+      { title: "in-review qa row", type: "Bug" });
+    liveDb.close();
+    const live = scheduler(["--max-fires", "1"], 30000);
+    ok(/\[qa-maintenance\] boot: no recorded fire — firing on boot/.test(live),
+      `D3 control: an ELIGIBLE lane still announces the boot fire (lines seen: ${JSON.stringify(live.split("\n").filter((l) => /qa-maintenance/.test(l)))})`);
+    ok(/qa-maintenance: start \(claude\)/.test(live),
+      "D3 control: …and the announcement is followed by the start line it announced");
+    ok(!/\[qa-maintenance\] skipped: /.test(live),
+      "D3 control: an eligible lane prints no skip line");
   }
 
   // ── LOOP-237 AC3: the PULL directive is per-agent and DEFAULT OFF ────────────────────────────

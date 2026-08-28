@@ -275,6 +275,23 @@ try {
       delete c3.projects.gamma.hub;
       writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c3, null, 2));
     }
+
+    // ── D3 (team mirror): a lane that finds no eligible job SAYS so, per candidate project ────────
+    // The team scheduler's lane branch `continue`d in silence, exactly like the legacy one: a lane
+    // that declined every candidate produced no start line, no log file and no skip line, so a
+    // correct skip and a crashed slot were indistinguishable. gamma is seeded and its board is empty
+    // (the fires above write no tickets), so qa-maintenance has nothing to verify and nothing to unblock.
+    {
+      const laneOnce = runAgents(["--agents", "qa-maintenance", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: fakeBin });
+      const skip = laneOnce.out.split("\n").find((l) => /\[qa-maintenance\] skipped: /.test(l)) ?? "";
+      ok(laneOnce.code === 0, "D3 team: a lane with nothing eligible still exits 0");
+      ok(skip !== "",
+        `D3 team: the team scheduler prints '[qa-maintenance] skipped: <reason>' (lines seen: ${JSON.stringify(laneOnce.out.split("\n").filter((l) => /qa-maintenance/.test(l)))})`);
+      ok(/qa-maintenance lane in 'gamma'/.test(skip) && /0 In Review/.test(skip),
+        `D3 team: the reason names the lane, the candidate PROJECT it declined, and the board counts (got ${JSON.stringify(skip)})`);
+      ok(!/qa-maintenance: start \(/.test(laneOnce.out),
+        "D3 team control: the declining lane launched nothing, so the skip line is the only report of it");
+    }
   }
 
   // ── team run lock: a live holder blocks a second scheduler ──
