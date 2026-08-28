@@ -6,6 +6,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { openDb } from "../src/db.ts";
+import { ensureSeed, findProject } from "../src/seed.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -156,6 +158,98 @@ try {
   const rNoRemote = run(["add", "LOOP-NOREMOTE", "--repo", "dev-loop"], wsNoRemote);
   ok(rNoRemote.status === 0, "no-remote: exits 0 (falls back to local branch)");
   ok(/no remote/.test(rNoRemote.stderr), "no-remote: stderr mentions 'no remote'");
+
+  // ── D4: `worktree reap` in a repository with NO REMOTE ──────────────────────────
+  // `worktree add` has always had a no-remote fallback to the local default branch (AC5 above); reap
+  // did not. It judged merged-ness against `origin/<defaultBranch>` and recoverability against
+  // `refs/remotes/origin/<branch>`, neither of which can resolve without a remote — so every branch
+  // read as the only copy and was kept forever, and worktrees accumulated without bound. That is the
+  // exact shape of a `landing: "direct"` workspace with no remote.
+  const NOW = "2026-08-01T00:00:00.000Z";
+  /** A service workspace with a hub.db carrying the given <id, state> ticket rows. */
+  const seedBoard = (wsDir: string, key: string, prefix: string, rows: Array<[string, string]>) => {
+    const db = openDb(join(realpathSync(wsDir), ".dev-loop", "hub.db"));
+    ensureSeed(db, key, key, prefix);
+    const pid = findProject(db, key)!;
+    const ins = db.prepare("INSERT INTO tickets(id,project_id,title,description,type,state,priority,labels,related_to,created_by,created_at,updated_at,assignee) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    for (const [id, state] of rows) ins.run(id, pid, id, "", "Feature", state, 2, "[]", "[]", "dev", NOW, NOW, null);
+    db.close();
+  };
+  const branchExists = (dir: string, branch: string) => git(dir, ["branch", "--list", branch]).trim() !== "";
+
+  {
+    // A repository with no remote at all — `git init`, never cloned, landing:"direct".
+    const lws = join(ROOT, "ws-reap-local");
+    const lrepo = join(lws, "repo");
+    mkdirSync(lrepo, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main", lrepo]);
+    git(lrepo, ["commit", "--allow-empty", "-qm", "baseline"]);
+    writeFileSync(join(lws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "reap-local-ws",
+      team: { key: "reaplocal", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { repo: { path: "repo", landing: "direct" } },   // NO remote field
+      projects: { reaplocal: { repos: [{ ref: "repo" }] } },
+    }, null, 2));
+    mkdirSync(join(lws, ".dev-loop", "locks"), { recursive: true });
+    seedBoard(lws, "reaplocal", "RL", [["RL-1", "Done"], ["RL-2", "Canceled"]]);
+
+    // RL-1: terminal, and its work is merged into the LOCAL default branch ⇒ recoverable.
+    const wtMerged = run(["add", "RL-1", "--repo", "repo"], lws).stdout.trim();
+    git(wtMerged, ["commit", "--allow-empty", "-qm", "work for RL-1"]);
+    git(lrepo, ["merge", "--no-ff", "-q", "-m", "merge RL-1", "dev-loop/RL-1"]);
+    // RL-2: terminal, but its commit exists nowhere else ⇒ the only copy, must be KEPT.
+    const wtUnmerged = run(["add", "RL-2", "--repo", "repo"], lws).stdout.trim();
+    git(wtUnmerged, ["commit", "--allow-empty", "-qm", "work for RL-2"]);
+
+    const reap = run(["reap", "--repo", "repo"], lws);
+    const out = `${reap.stdout}${reap.stderr}`;
+    ok(reap.status === 0, `D4: reap on a no-remote repo exits 0 (out: ${out.trim()})`);
+    ok(/removed worktree '[^']*RL-1[^']*'/.test(out) && !branchExists(lrepo, "dev-loop/RL-1"),
+      `D4: no remote + terminal + merged into LOCAL main ⇒ the worktree is removed and the branch deleted (out: ${out.trim()})`);
+    ok(/kept branch 'dev-loop\/RL-2'/.test(out) && branchExists(lrepo, "dev-loop/RL-2"),
+      `D4: no remote + terminal but NOT merged ⇒ the branch is kept, its only copy is local (out: ${out.trim()})`);
+    ok(/UNRECOVERABLE/.test(out) && /not merged into main/.test(out),
+      `D4: the kept-branch reason names the base it was compared against (out: ${out.trim()})`);
+  }
+
+  {
+    // The control: WITH a remote, reap's judgement is unchanged — merged into origin/main is
+    // recoverable, a branch that exists only locally is not.
+    const rOrigin = join(ROOT, "reap-origin.git");
+    const rws = join(ROOT, "ws-reap-remote");
+    const rrepo = join(rws, "repo");
+    mkdirSync(rOrigin, { recursive: true });
+    mkdirSync(rws, { recursive: true });
+    execFileSync("git", ["init", "--bare", "-q", "-b", "main", rOrigin]);
+    execFileSync("git", ["clone", "-q", rOrigin, rrepo]);
+    git(rrepo, ["commit", "--allow-empty", "-qm", "baseline"]);
+    git(rrepo, ["push", "-qu", "origin", "main"]);
+    writeFileSync(join(rws, "dev-loop.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "reap-remote-ws",
+      team: { key: "reapremote", backend: "service", mode: "live", autonomy: "ask" },
+      repos: { repo: { path: "repo", remote: rOrigin, landing: "pr" } },
+      projects: { reapremote: { repos: [{ ref: "repo" }] } },
+    }, null, 2));
+    mkdirSync(join(rws, ".dev-loop", "locks"), { recursive: true });
+    seedBoard(rws, "reapremote", "RR", [["RR-1", "Done"], ["RR-2", "Canceled"]]);
+
+    const wtR1 = run(["add", "RR-1", "--repo", "repo"], rws).stdout.trim();
+    git(wtR1, ["commit", "--allow-empty", "-qm", "work for RR-1"]);
+    git(rrepo, ["merge", "--no-ff", "-q", "-m", "merge RR-1", "dev-loop/RR-1"]);
+    git(rrepo, ["push", "-q", "origin", "main"]);
+    const wtR2 = run(["add", "RR-2", "--repo", "repo"], rws).stdout.trim();
+    git(wtR2, ["commit", "--allow-empty", "-qm", "work for RR-2"]);
+
+    const reap = run(["reap", "--repo", "repo"], rws);
+    const out = `${reap.stdout}${reap.stderr}`;
+    ok(reap.status === 0, `D4 control: reap on a repo WITH a remote exits 0 (out: ${out.trim()})`);
+    ok(!branchExists(rrepo, "dev-loop/RR-1"),
+      `D4 control: merged into origin/main ⇒ still reaped (out: ${out.trim()})`);
+    ok(/kept branch 'dev-loop\/RR-2'/.test(out) && branchExists(rrepo, "dev-loop/RR-2"),
+      `D4 control: neither merged nor pushed ⇒ still kept (out: ${out.trim()})`);
+  }
 
 } finally {
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* best-effort */ }

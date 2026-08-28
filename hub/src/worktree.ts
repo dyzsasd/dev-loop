@@ -3,7 +3,9 @@
 //   add  <id> [--repo <ref>]            create a dev worktree off origin/<defaultBranch>
 //   path <id> [--repo <ref>]            print the canonical wsWorktree() path (LOOP-37: single path-builder)
 //   reap [--repo <ref>] [--dry-run]     remove terminal-state worktrees + delete each RECOVERABLE branch
-//                                       (merged into the base, or pushed to origin). A dirty worktree or an
+//                                       (merged into the base — origin/<defaultBranch>, or the local
+//                                       <defaultBranch> on a repo with no remote — or pushed to origin).
+//                                       A dirty worktree or an
 //                                       unrecoverable Canceled branch is KEPT with a printed reason — never a
 //                                       silent `remove --force` / `branch -D` of the only copy (LOOP-106).
 // Importable: exports worktreeReap() so team-repair.ts can call it as part of its pass (isMainEntry guard).
@@ -133,20 +135,36 @@ function parsePorcelain(out: string): Array<{ path: string; branch: string | nul
   }).filter((e) => e.path !== "");
 }
 
-function isMergedIntoOrigin(repoDir: string, branch: string, defaultBranch: string): boolean {
-  const r = spawnSync("git", ["-C", repoDir, "merge-base", "--is-ancestor", branch, `origin/${defaultBranch}`], { stdio: "ignore" });
+/**
+ * The ref reap measures merged-ness against — the same judgement `worktreeAdd` makes when it picks
+ * what to branch off: `origin/<defaultBranch>` when the repo has a remote, the LOCAL
+ * `<defaultBranch>` when it does not. In a repository with no remote `origin/<defaultBranch>` does
+ * not resolve at all, so a comparison against it can only ever fail.
+ */
+function reapBaseRef(defaultBranch: string, hasRemote: boolean): string {
+  return hasRemote ? `origin/${defaultBranch}` : defaultBranch;
+}
+
+function isMergedIntoBase(repoDir: string, branch: string, baseRef: string): boolean {
+  const r = spawnSync("git", ["-C", repoDir, "merge-base", "--is-ancestor", branch, baseRef], { stdio: "ignore" });
   return (r.status ?? 1) === 0;
 }
 
 // A terminal-ticket branch is safe to delete ONLY when its work survives somewhere other than the
-// local branch: (a) merged into origin/<defaultBranch>, or (b) pushed to origin with no local-only
-// commits ahead of that remote ref. Otherwise the branch is the ONLY copy and must be KEPT — the
+// local branch: (a) merged into the base ref, or (b) pushed to origin with no local-only commits
+// ahead of that remote ref. Otherwise the branch is the ONLY copy and must be KEPT — the
 // pre-LOOP-106 reaper force-deleted (-D) every Canceled branch on ticket state alone, unrecoverably.
-function branchRecoverable(repoDir: string, branch: string, defaultBranch: string): boolean {
-  if (isMergedIntoOrigin(repoDir, branch, defaultBranch)) return true;
+//
+// With NO remote, (a) is measured against the local default branch and (b) does not exist: there is
+// no second copy to push to, so merged-into-the-base is the whole test. Measuring both halves
+// against `origin/…` in a remote-less repository made every branch read as the only copy, so reap
+// reclaimed nothing and worktrees accumulated without bound (the `landing: "direct"` shape).
+function branchRecoverable(repoDir: string, branch: string, defaultBranch: string, hasRemote: boolean): boolean {
+  if (isMergedIntoBase(repoDir, branch, reapBaseRef(defaultBranch, hasRemote))) return true;
+  if (!hasRemote) return false; // no origin to have pushed to — merged-into-the-local-base was the only recovery
   const remoteRef = `refs/remotes/origin/${branch}`;
-  const hasRemote = spawnSync("git", ["-C", repoDir, "show-ref", "--verify", "--quiet", remoteRef], { stdio: "ignore" }).status === 0;
-  if (!hasRemote) return false;
+  const hasRemoteBranch = spawnSync("git", ["-C", repoDir, "show-ref", "--verify", "--quiet", remoteRef], { stdio: "ignore" }).status === 0;
+  if (!hasRemoteBranch) return false;
   const ahead = git(repoDir, ["rev-list", "--count", `origin/${branch}..${branch}`]);
   return ahead.ok && ahead.out === "0"; // no local commits beyond what origin already holds
 }
@@ -162,6 +180,9 @@ export async function worktreeReap(
   const resolvedReap = effectiveRepo(ws, repoRef);
   const repoDir = resolvedReap.absPath;
   const defaultBranch = resolvedReap.defaultBranch;
+  // The SAME `repo.remote` judgement `worktree add` uses — one registry field, one reading of it.
+  const hasRemote = !!resolvedReap.remote;
+  const baseRef = reapBaseRef(defaultBranch, hasRemote);
   const lockPath = wsLockPath(ws, `repo-${repoRef}`);
 
   // Query terminal-state tickets from hub DB (service backend only).
@@ -233,12 +254,12 @@ export async function worktreeReap(
       // 2. Delete the local branch ONLY when the work is recoverable elsewhere — merged into the base,
       //    or fully pushed to origin. A Canceled branch that exists nowhere else is KEPT with a reason
       //    (LOOP-106, AC2); the pre-LOOP-106 reaper force-deleted every Canceled branch on state alone.
-      if (branchRecoverable(repoDir, e.branch, defaultBranch)) {
+      if (branchRecoverable(repoDir, e.branch, defaultBranch, hasRemote)) {
         const del = git(repoDir, ["branch", "-D", e.branch]);
-        if (del.ok) print(`[reap] deleted branch '${e.branch}' (${e.state}; recoverable — merged into ${defaultBranch} or pushed to origin)`);
+        if (del.ok) print(`[reap] deleted branch '${e.branch}' (${e.state}; recoverable — merged into ${baseRef}${hasRemote ? " or pushed to origin" : ""})`);
         else print(`[reap] kept branch '${e.branch}' (delete failed: ${del.err.split("\n")[0] || "git branch -D refused"})`);
       } else {
-        print(`[reap] kept branch '${e.branch}' (${e.state} but UNRECOVERABLE — no origin upstream and not merged into ${defaultBranch}; its only copy is local)`);
+        print(`[reap] kept branch '${e.branch}' (${e.state} but UNRECOVERABLE — ${hasRemote ? "no origin upstream and " : ""}not merged into ${baseRef}; its only copy is local)`);
       }
       reaped.push(e);
     }
@@ -277,7 +298,8 @@ Usage: dev-loop worktree <verb> [args]
 
   reap [--repo <ref>] [--dry-run]
       DESTRUCTIVE. Remove worktrees whose ticket is in a terminal state (Done / Canceled / Duplicate)
-      and delete each branch that is RECOVERABLE (merged into the base, or fully pushed to origin). A
+      and delete each branch that is RECOVERABLE (merged into the base — origin/<defaultBranch>, or
+      the LOCAL <defaultBranch> when the repo has no remote — or fully pushed to origin). A
       dirty or locked worktree, or an unrecoverable Canceled branch (its only copy is local), is KEPT
       with a printed reason — never a silent \`remove --force\` / \`branch -D\` of the only copy (LOOP-106).
       Enumerates via \`git worktree list\` so it covers all roots, including legacy paths.
