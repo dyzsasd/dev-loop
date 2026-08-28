@@ -35,6 +35,7 @@ import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject, AGENT_HANDLES } from "./seed.ts"; // AGENT_HANDLES: W45 expands a codex default across every handle
 import { BAIL_SHAPE_SET, latestBailShape } from "./bail-shape.ts"; // Decision 1: W46 reads the same canonical bail-shape vocabulary/parser as the derivation
+import { liveBlockerIds } from "./blocked-by.ts"; // W46's second routable signal — the ONE `Blocked-by:` parser (LOOP-264), shared with dependency-graph.ts
 import { detectRepoFacts } from "./team-edit.ts";
 import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./team-init.ts";
 import * as metricsMod from "./metrics.ts";
@@ -731,18 +732,41 @@ export function checkNullAssigneeRow(ctx: BoardCtx): void {
 
 /**
  * Row 10b (board scope) — W46 unroutable block (Decision 1): a non-terminal ticket carrying the
- * `blocked` label but NO bail-shape label AND no parseable `Bail-shape:` comment. This is the ONE
- * genuinely fail-closed hole in blocked-ticket routing: the scheduler reads labels (not comment
- * bodies) to send a blocked ticket to its owner's unblock job, so a block with neither the label nor
- * the legacy comment reaches no owner. A block that still carries a parseable comment is NOT warned —
- * it is routable (legacy form) and the sweep backfills its label. Rows only (tickets + comments), no
- * fs/forge — same board-scope contract as W27/W43.
+ * `blocked` label that reaches NONE of the three routable signals. The scheduler reads labels (not
+ * comment bodies) to send a blocked ticket to its owner's unblock job, so a block with no signal at
+ * all reaches no owner. The three signals, in the order they are checked:
+ *
+ *   1. a bail-shape label — the routable form;
+ *   2. a parseable `Bail-shape:` comment — the legacy form; routable, and the sweep backfills the label;
+ *   3. a LIVE `Blocked-by:` edge — dev-loop's second blocking mechanism (LOOP-190,
+ *      `ticket create --blocked-by`), parsed by blocked-by.ts and routed by dependency-graph.ts,
+ *      which the §9c auto-unpark clears when the blocker goes terminal. Such a block needs no unblock
+ *      OWNER: the edge is what releases it. Treating an edge-blocked ticket as unroutable reports
+ *      correct sequencing as a defect, which is the noise that trains an operator to ignore W46.
+ *
+ * An edge is LIVE only when it names a ticket row that exists and is non-terminal. An edge onto a
+ * terminal blocker, an edge retired by a later `Unblocked-by:`, and an edge naming an id with no
+ * ticket row are all edges nothing will ever resolve — §9c cannot fire on them — so those tickets
+ * still reach no owner and W46 stands.
+ *
+ * Rows only (tickets + comments), no fs/forge — same board-scope contract as W27/W43.
  */
 export function checkBlockedNoBailShape(ctx: BoardCtx): void {
   const { db, projectKey: key, projectId: pid, out } = ctx;
   try {
     const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
     const rows = db.prepare("SELECT id, state, labels FROM tickets WHERE project_id=?").all(pid) as { id: string; state: string; labels: string }[];
+    const commentsOf = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid");
+    const stateOf = db.prepare("SELECT state FROM tickets WHERE id=?");
+    /** Does this ticket carry an edge onto a blocker that exists and has not gone terminal? */
+    const hasLiveBlockerEdge = (bodies: string[]): boolean => {
+      const { live } = liveBlockerIds(bodies.map((body) => ({ body })));
+      for (const id of live) {
+        const row = stateOf.get(id) as { state: string } | undefined;
+        if (row && !TERMINAL.has(row.state)) return true;
+      }
+      return false;
+    };
     const unroutable: string[] = [];
     for (const r of rows) {
       if (TERMINAL.has(r.state)) continue;
@@ -750,12 +774,13 @@ export function checkBlockedNoBailShape(ctx: BoardCtx): void {
       try { labels = JSON.parse(r.labels) as string[]; } catch { continue; }
       if (!labels.includes("blocked")) continue;
       if (labels.some((l) => BAIL_SHAPE_SET.has(l))) continue;                                    // has the routable label
-      const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid").all(r.id) as { body: string }[];
-      if (latestBailShape(comments.map((c) => c.body))) continue;                                 // legacy parseable comment ⇒ routable, sweep backfills
+      const bodies = (commentsOf.all(r.id) as { body: string }[]).map((c) => c.body);
+      if (latestBailShape(bodies)) continue;                                                      // legacy parseable comment ⇒ routable, sweep backfills
+      if (hasLiveBlockerEdge(bodies)) continue;                                                   // LOOP-190 edge ⇒ routed by the dependency graph, no owner needed
       unroutable.push(r.id);
     }
     if (unroutable.length) {
-      out.warn(`[W46] [${key}] ${unroutable.length} blocked ticket(s) carry no bail-shape label and no parseable 'Bail-shape:' comment — the scheduler routes blocked tickets by LABEL, so these reach no unblock owner: ${unroutable.join(", ")}. Re-block via §9 (set 'blocked' + owner + a 'Bail-shape: <info-needed|decision-needed|scope-design|external-prereq|fix-exhausted>' comment; the label is derived from it), or clear 'blocked' if it is resolved.`);
+      out.warn(`[W46] [${key}] ${unroutable.length} blocked ticket(s) carry no bail-shape label, no parseable 'Bail-shape:' comment and no live 'Blocked-by:' edge — the scheduler routes blocked tickets by LABEL and the dependency graph routes them by EDGE, so these reach no unblock owner: ${unroutable.join(", ")}. Re-block via §9 (set 'blocked' + owner + a 'Bail-shape: <info-needed|decision-needed|scope-design|external-prereq|fix-exhausted>' comment; the label is derived from it), record the dependency (\`Blocked-by: <id>\`) if one exists, or clear 'blocked' if it is resolved.`);
     }
   } catch { /* best-effort — never fails doctor */ }
 }
