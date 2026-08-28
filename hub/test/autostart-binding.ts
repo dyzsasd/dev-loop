@@ -185,6 +185,33 @@ try {
     ok(!nl.some((l) => /⚠|WARN/.test(l)), `AC7: ABSENT plist is NOT graded a warning (${nl[0] ?? ""})`);
   }
 
+  // ── LOOP-533 AC6 (discharging LOOP-468 AC4) — the VERB still installs the login item ───────────
+  // LOOP-468 removed the autostart spawn from `postinstall.cjs`; `dev-loop daemon install-autostart`
+  // was supposed to remain the explicit way to get one. build-artifact.ts now asserts the negative
+  // half on the filesystem (a package install spawns nothing and writes no plist). This is the
+  // positive half, and it belongs here: without it the pair is satisfiable by a verb that installs
+  // nothing at all. `hub/test/init-service.ts:88` is NOT this assertion — it only checks that
+  // `init perform` PRINTS the guidance string.
+  //
+  // A real install writes into FAKE_HOME (line 30), never the runner's home. The write is macOS-only
+  // by design, so the off-darwin arm asserts the refusal instead — which is what the CI matrix
+  // actually executes, and it is stated rather than silently skipped.
+  rmSync(PLIST, { force: true });
+  if (process.platform === "darwin") {
+    const realInstall = cli(WS_A, { DEVLOOP_NODE: NODE }, "daemon", "install-autostart", "--workspace", WS_A);
+    ok(realInstall.status === 0, `LOOP-533 AC6: a real install-autostart exits 0 (got ${realInstall.status}: ${(realInstall.stderr ?? "").split("\n")[0]})`);
+    ok(existsSync(PLIST), "LOOP-533 AC6: …and the login item EXISTS on disk — the verb postinstall no longer calls still installs one");
+    ok(/RunAtLoad/.test(existsSync(PLIST) ? readFileSync(PLIST, "utf8") : ""), "LOOP-533 AC6: …and it is a login item (RunAtLoad), not an inert plist");
+    rmSync(PLIST, { force: true });
+  } else {
+    // Same claim, the only way this platform can carry it: the verb renders the login item it would
+    // write. AC2 above already pins the plist's CONTENT; this pins that the render is reachable and
+    // that the real write is refused for the platform, not because the verb became a no-op.
+    const dryHere = cli(WS_A, { DEVLOOP_NODE: NODE }, "daemon", "install-autostart", "--workspace", WS_A, "--dry-run");
+    ok(dryHere.status === 0 && /RunAtLoad/.test(dryHere.stdout ?? ""),
+      `LOOP-533 AC6 (non-darwin): install-autostart still RENDERS a RunAtLoad login item (got ${dryHere.status}); the real write is macOS-only and its refusal is asserted above`);
+  }
+
   // ── AC6 — uninstall removes whatever install wrote, previous format included ───────────────────
   // Removing a LaunchAgent means unloading it from launchd; the verb refuses off darwin by design.
   if (process.platform === "darwin") {

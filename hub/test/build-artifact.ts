@@ -11,7 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { registerDaemonPid } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -131,19 +131,72 @@ try {
     && mkt?.plugins?.[0]?.source?.package === "@dyzsasd/dev-loop",
     "installed cli.js install-claude-plugin → writes an npm-source marketplace.json (no GitHub, no file-copy drift)");
 
-  const localPostinstall = run(process.execPath, [join(inst, "postinstall.cjs")], { HOME: tmp, npm_config_global: "false", npm_config_location: "project" });
-  ok(localPostinstall.code === 0 && !/install-autostart/.test(localPostinstall.out),
-    "postinstall during local/project npm install → quiet no-op (does not install autostart in dev/CI)");
-  // LOOP-468: autostart removed from postinstall — global install no longer spawns install-autostart
-  const globalPostinstall = run(process.execPath, [join(inst, "postinstall.cjs")], {
-    HOME: tmp,
-    npm_config_global: "true",
-    DEVLOOP_POSTINSTALL_FORCE: "1",
-    DEVLOOP_POSTINSTALL_TEST_DARWIN: "1",
-    DEVLOOP_POSTINSTALL_DRY_RUN: "1",
-  });
-  ok(globalPostinstall.code === 0 && !/install-autostart|LaunchAgent|plist|login.item/i.test(globalPostinstall.out),
-    "postinstall global macOS install → does NOT install autostart (LOOP-468)");
+  // ── LOOP-468 / LOOP-533: installing a package must not install a login item ───────────────────
+  // The invariant is a FILESYSTEM fact, so it is asserted on the filesystem. The previous version of
+  // this block grepped the postinstall's stdout for `install-autostart|LaunchAgent|plist|login.item`,
+  // which anchored it to the pre-LOOP-468 file's `dryRun` PRINT branch — a branch the shipped file no
+  // longer has. Measured on LOOP-533: a postinstall that spawns for REAL and installs a login item
+  // leaves that assertion green. The exact defect LOOP-468 closed could return under a passing suite.
+  //
+  // The probe owns its own install-like root and its own HOME, so "LaunchAgents is empty" is a
+  // statement about THIS run rather than about whatever else the suite's shared `tmp` has touched.
+  // The stub `dist/daemon.js` is the spawn detector: the pre-LOOP-468 file ran
+  // `spawnSync(node, [join(__dirname, "dist", "daemon.js"), "install-autostart"])`, so a stub at that
+  // exact path records the spawn AND writes the plist a real install would write. An absent sentinel
+  // plus an empty LaunchAgents is a direct assertion of "no child process was spawned" — the thing
+  // LOOP-468's AC1 asked for — not an inference from what got printed.
+  const piRoot = join(tmp, "postinstall-probe");
+  const piHome = join(piRoot, "home");
+  const piLaunchAgents = join(piHome, "Library", "LaunchAgents");
+  const piSentinel = join(piHome, "daemon-spawned");
+  mkdirSync(join(piRoot, "dist"), { recursive: true });
+  mkdirSync(piHome, { recursive: true });
+  cpSync(join(hubRoot, "postinstall.cjs"), join(piRoot, "postinstall.cjs"));
+  writeFileSync(join(piRoot, "dist", "daemon.js"), [
+    `const { mkdirSync, writeFileSync } = require("node:fs");`,
+    `const { join } = require("node:path");`,
+    `writeFileSync(process.env.DL533_SENTINEL, process.argv.slice(2).join(" ") || "(spawned, no args)");`,
+    `const d = join(process.env.HOME, "Library", "LaunchAgents");`,
+    `mkdirSync(d, { recursive: true });`,
+    `writeFileSync(join(d, "so.devloop.hub.plist"), "<plist>RunAtLoad</plist>");`,
+    ``,
+  ].join("\n"));
+  // Each run starts from a clean HOME, so one run's finding can never be another run's leftovers.
+  const postinstallProbe = (env: Record<string, string>) => {
+    rmSync(piSentinel, { force: true });
+    rmSync(piLaunchAgents, { recursive: true, force: true });
+    const r = run(process.execPath, [join(piRoot, "postinstall.cjs")], { HOME: piHome, DL533_SENTINEL: piSentinel, ...env });
+    return { ...r, spawned: existsSync(piSentinel), launchAgents: existsSync(piLaunchAgents) ? readdirSync(piLaunchAgents) : [] };
+  };
+  // `DEVLOOP_POSTINSTALL_FORCE` + `_TEST_DARWIN` are dead in the shipped file and are passed ANYWAY:
+  // they are what carries a REVERTED file past its `!force && !globalInstall` and non-darwin early
+  // exits, so without them this probe would be vacuous on the Linux CI runners — it would pass on a
+  // reverted tree for the wrong reason. `DEVLOOP_POSTINSTALL_DRY_RUN` is deliberately NOT passed: it
+  // is the print-instead-of-spawn branch this assertion must never be anchored to again. Their
+  // inertness against the shipped file is asserted below rather than assumed (AC4).
+  const REVERT_REACHING = { DEVLOOP_POSTINSTALL_FORCE: "1", DEVLOOP_POSTINSTALL_TEST_DARWIN: "1" };
+  const globalPostinstall = postinstallProbe({ npm_config_global: "true", ...REVERT_REACHING });
+  ok(globalPostinstall.code === 0, `postinstall global install exits 0 — it must never fail npm install (got ${globalPostinstall.code}: ${globalPostinstall.out.trim().slice(0, 120)})`);
+  ok(!globalPostinstall.spawned,
+    "LOOP-533 AC2: postinstall global macOS install spawned NO child process — the stub dist/daemon.js sentinel is absent (LOOP-468)");
+  ok(globalPostinstall.launchAgents.length === 0,
+    `LOOP-533 AC1: …and its own HOME's Library/LaunchAgents is empty — the login item is asserted on the FILESYSTEM, not in stdout (found ${JSON.stringify(globalPostinstall.launchAgents)})`);
+  const localPostinstall = postinstallProbe({ npm_config_global: "false", npm_config_location: "project" });
+  ok(localPostinstall.code === 0 && !localPostinstall.spawned && localPostinstall.launchAgents.length === 0,
+    `postinstall during local/project npm install → quiet no-op (spawned=${localPostinstall.spawned}, LaunchAgents=${JSON.stringify(localPostinstall.launchAgents)})`);
+  // AC5: the OTHER disjunct of the removed `force` expression
+  // (`envFlag("DEVLOOP_POSTINSTALL_FORCE") || envFlag("DEVLOOP_INSTALL_AUTOSTART")`). LOOP-468's AC2
+  // asked for it and it was never asserted; the string appears nowhere under hub/ today, and that is
+  // the claim under test — not that the variable is unknown, but that setting it installs nothing.
+  const installAutostartVar = postinstallProbe({ DEVLOOP_INSTALL_AUTOSTART: "1", DEVLOOP_POSTINSTALL_TEST_DARWIN: "1" });
+  ok(installAutostartVar.code === 0 && !installAutostartVar.spawned && installAutostartVar.launchAgents.length === 0,
+    `LOOP-533 AC5: DEVLOOP_INSTALL_AUTOSTART=1 installs nothing either (spawned=${installAutostartVar.spawned}, LaunchAgents=${JSON.stringify(installAutostartVar.launchAgents)})`);
+  // AC4: the three DEVLOOP_POSTINSTALL_* vars read as live setup to the next person. They are not —
+  // asserted by DIFFERENCE, so this stays honest if one of them is ever wired back up.
+  const bare = postinstallProbe({ npm_config_global: "true" });
+  const withDeadVars = postinstallProbe({ npm_config_global: "true", ...REVERT_REACHING, DEVLOOP_POSTINSTALL_DRY_RUN: "1" });
+  ok(bare.code === withDeadVars.code && bare.out === withDeadVars.out && !withDeadVars.spawned && withDeadVars.launchAgents.length === 0,
+    `LOOP-533 AC4: the DEVLOOP_POSTINSTALL_* vars are INERT against the shipped file — identical exit and stdout with and without them, and neither run installs anything (${bare.code}/${withDeadVars.code})`);
 
   // ── (groom AC) mcp-merge with NO template arg → succeeds via the embedded DEFAULT_TEMPLATE, NOT an ENOENT on the
   //    `../../config/mcp.example.json` that doesn't ship. Args are plain identifiers/paths (DL-44/DL-66 guards). ──
