@@ -19,6 +19,7 @@ import { assembleBootCorpus, type ResolvedFireConfig } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
 import { tryDevloopDataDir, devloopProjectsPath, tryHubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
+import { readPause } from "./scheduler-pause.ts"; // the pause the operator writes — read here EVERY tick, not merely rendered by status
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { LANE_ACTOR, LANE_JOBS, isLane, isQaLane, type Lane } from "./agent-handles.ts"; // job-scoped prompts: the pm/qa job-lanes (scheduler fire units that fire as their owning actor)
 import { servableBacklogDepth, pmMaintenanceSlice, qaMaintenanceSlice, seniorDevModePick } from "./servable.ts"; // lane-gate board reads: Backlog depth (groom), pm/qa In-Review+unblock counts (maintenance), the senior-dev Mode pick
@@ -1276,6 +1277,41 @@ const DAY_MS = 86_400_000; // rolling window for the dailyUsd ceiling (the 24h c
 //     every launch is a worse outage than the spend it prevents — never let a broken read deadlock the loop).
 //   • The total is Child 2's estimate-augmented rollingSpendUsd — a killed/unpriced fire is estimated, never
 //     read as $0 (INV-5) — so this number matches what `dev-loop metrics` and `doctor` show the operator.
+/**
+ * The PAUSE launch gate - read every tick, exactly like the budget gate below it.
+ *
+ * `dev-loop pause` writes `scheduler_pause` in the board and `dev-loop status` renders it. Nothing in
+ * this file read it: readPause had ONE consumer, status.ts. So the display said `DRAINING ... paused by
+ * operator` while this loop kept launching - measured 2026-08-29 as 14 launches in the 41 minutes after
+ * a pause, and `--drain` never completing because it polls for an empty in-flight set that the scheduler
+ * kept refilling. An earlier `--drain` that did report "drained" had simply observed a gap between
+ * launches; with no gate in this file, launching never stopped either time.
+ *
+ * The connection is opened LAZILY and kept, because the tick runs every second and the board is the
+ * scheduler's own file. `openDb` creates the schema, so an absent file is left alone: a linear-backend
+ * run has no board and must not have one conjured by a gate.
+ *
+ * Unreadable ⇒ no gate, said ONCE. Fail-open matches the budget gate beside it, and a scheduler that
+ * refuses to fire because it cannot read a table is a worse failure than one that fires while paused —
+ * but silence is what let the original defect hide, so it announces itself.
+ */
+let pauseConn: import("node:sqlite").DatabaseSync | null = null;
+let pauseGateWarned = false;
+function pauseGateReason(hubDbPath: string | null, nowMs: number): string | null {
+  if (!hubDbPath || !existsSync(hubDbPath)) return null;
+  try {
+    pauseConn ??= openDb(hubDbPath);
+    const p = readPause(pauseConn, nowMs);
+    return p ? `paused by ${p.actor}: ${p.reason}${p.until ? ` (until ${p.until})` : ""}` : null;
+  } catch (e) {
+    if (!pauseGateWarned) {
+      pauseGateWarned = true;
+      console.warn(`dev-loop run: WARNING the pause gate cannot read ${hubDbPath} (${(e as Error).message}) — 'dev-loop pause' will NOT stop launches in this run; stop the scheduler instead ('dev-loop stop').`);
+    }
+    return null;
+  }
+}
+
 function budgetGateReason(dailyUsd: number | null | undefined, ledgerPath: string | null, nowMs: number): string | null {
   if (dailyUsd == null) return null;                          // INV-1 short-circuit: unset ⇒ today's path, byte-identical
   if (!ledgerPath) return null;                               // no ledger to read (legacy fixed-project path) ⇒ fail open
@@ -2117,12 +2153,24 @@ async function main(): Promise<void> {
     // (INV-1: undefined dailyUsd ⇒ null, no side effect). It is wired here so BOTH schedulers route through the
     // one budgetGateReason predicate and cannot drift; on the live team path it enforces (teamMain below).
     const budgetReason = budgetGateReason(undefined, fireLedgerPath, now);
+    // The operator's stop, re-read every tick (pauseGateReason). Checked BEFORE the budget gate: a
+    // paused loop launches nothing, for any reason.
+    const pauseReason = pauseGateReason(opts.hubDb || null, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
       // The slot is due, so its boot announcement is now resolved either way: it is printed at the
       // launch below, or dropped in favour of whichever line explains why no launch happened.
       const bootAnnounce = slot.bootLog;
       slot.bootLog = null;
+      if (pauseReason !== null) {
+        console.log(`[${slot.agent}] launch refused: ${pauseReason}`);
+        // The slot's OWN cadence, never the breaker's probe cadence the budget arm below backs off to.
+        // A budget ceiling clears on its own schedule, so probing slowly is right there; a pause is
+        // cleared by an operator typing `resume`, and an hour-long probe backoff would leave the loop
+        // silent long after they did — the resume would look as broken as the pause just did.
+        slot.nextAt = now + opts.intervals[slot.agent];
+        continue;
+      }
       if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
         console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
@@ -2589,12 +2637,25 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     // through the (hot-reloaded) ws so an operator raising the ceiling — or the costly rows aging out of the
     // 24h window — resumes launches on the next tick (AC6).
     const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, now);
+    // The operator's stop, re-read every tick (pauseGateReason). Checked BEFORE the budget gate, and
+    // it is what lets `pause --drain` finish at all: drain polls for an empty in-flight set, which
+    // only empties once this stops refilling it.
+    const pauseReason = pauseGateReason(opts.hubDb || null, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
       // The slot is due, so its boot announcement is now resolved either way: fireAgentOnce prints it
       // immediately before the spawn, or nothing prints it and the gate's own skip line stands instead.
       const bootAnnounce = slot.bootLog;
       slot.bootLog = null;
+      if (pauseReason !== null) {
+        console.log(`[${slot.agent}] launch refused: ${pauseReason}`);
+        // The slot's OWN cadence, never the breaker's probe cadence the budget arm below backs off to.
+        // A budget ceiling clears on its own schedule, so probing slowly is right there; a pause is
+        // cleared by an operator typing `resume`, and an hour-long probe backoff would leave the loop
+        // silent long after they did — the resume would look as broken as the pause just did.
+        slot.nextAt = now + opts.intervals[slot.agent];
+        continue;
+      }
       if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
         console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
