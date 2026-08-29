@@ -56,8 +56,17 @@ await sleep(200);
 const livePid = Number(readFileSync(livePidFile, "utf8").trim());
 
 const stale = () => writeFileSync(lockPath, JSON.stringify({ pid: deadPid, team: "race-team", startedAt: new Date().toISOString() }));
+// The scheduler LOOP is required: `--once` returns before the run lock is taken (a single manual fire is
+// deliberately not gated on the scheduler's lock), so it cannot exercise this path at all.
+//
+// Three flags keep it quick, and the first draft was killed by the runner's 300 s per-suite ceiling
+// without them. `--no-assemble-boot` skips a 72 KB corpus read per racer and `--stagger 0` starts the
+// lane at once, but the one that mattered was `--interval pm=1s`: once an earlier arm has fired, the
+// lane's cadence gate makes the NEXT scheduler wait out pm's due time — arm 3 alone sat for 300.7 s,
+// while every other arm finished in under a second, because `--max-fires 1` will not exit before it has
+// fired once.
 const runScheduler = async (): Promise<string> => {
-  const c = spawn("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--max-fires", "1", "--no-daemon"],
+  const c = spawn("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--interval", "pm=1s", "--max-fires", "1", "--stagger", "0", "--no-assemble-boot", "--no-daemon"],
     { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: bin }), stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   c.stdout.on("data", (d) => { out += d; }); c.stderr.on("data", (d) => { out += d; });
@@ -93,9 +102,13 @@ ok(/taking over stale (team )?run lock/.test(deadBreaker), "a break-mutex left b
 //    delete it on the way out. Unconditional unlink re-opened the two-scheduler window from the far end.
 rmSync(breakPath, { force: true });
 rmSync(lockPath, { force: true });
-const holder = spawn("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--interval", "pm=1s", "--no-daemon"],
-  { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: bin }), stdio: ["ignore", "pipe", "pipe"] });
-for (let i = 0; i < 80 && !existsSync(lockPath); i++) await sleep(250);
+// This arm needs the lock HELD while the file is rewritten underneath it, so its fire is a slow one.
+const slowBin = join(tmp, "slow.sh");
+writeFileSync(slowBin, "#!/bin/sh\nexec sleep 5\n");
+chmodSync(slowBin, 0o755);
+const holder = spawn("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--interval", "pm=1s", "--max-fires", "1", "--stagger", "0", "--no-assemble-boot", "--no-daemon"],
+  { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: slowBin }), stdio: ["ignore", "pipe", "pipe"] });
+for (let i = 0; i < 60 && !existsSync(lockPath); i++) await sleep(100);
 ok(existsSync(lockPath), "fixture: the scheduler took the lock");
 // Simulate the state after a takeover: the file now names somebody else.
 writeFileSync(lockPath, JSON.stringify({ pid: livePid, team: "race-team", startedAt: new Date().toISOString() }));
