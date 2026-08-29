@@ -1909,6 +1909,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
 // seed and then having a gate decline leaves an announcement with no start line, which reads as a
 // crash. A slot seeded DEFERRED carries no bootLog — that line is a scheduling statement about a fire
 // that is not being attempted, and it is printed immediately.
+// `running` is the scheduler's SETTLED predicate, and the exit gates below read it rather than
+// `activeChildren`. The two are not the same instant: a child is deleted from `activeChildren` on the OS
+// `exit` event, while its ledger row is written later, in finalize(), after up to a 150 ms grace for the
+// pipes to drain. With two fires in flight the first one's .finally() could see an empty `activeChildren`
+// and process.exit(0) out from under the second one's grace window, dropping that fire's ledger row and
+// log tail. `running` is cleared as the FIRST statement of the same .finally(), i.e. strictly after
+// finalize, so a slots-wide `!running` is exact and strictly stronger than an empty child set.
 type Slot = { agent: SchedKey; nextAt: number; running: boolean; bootLog: string | null };
 type RunnerChild = ChildProcessByStdio<Writable | null, Readable, Readable>; // stdio: [pipe|ignore,"pipe","pipe"] — stdin is a pipe only on boot-prefix fires
 const activeChildren = new Set<RunnerChild>();
@@ -2176,7 +2183,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     clearInterval(timer);
-    if (activeChildren.size === 0) process.exit(0);
+    if (slots.every((sl) => !sl.running)) process.exit(0); // settled, not merely exited — see the Slot type
   };
   // LOOP-23 decision — the scheduler interrupt path is deliberately NOT routed through the fire's
   // process-group kill. A forwarded SIGINT is the GRACEFUL stop (LOOP-10): it lets the agent CLI
@@ -2285,7 +2292,7 @@ async function main(): Promise<void> {
             const key = changeKey(opts, cfg, project);
             if (key !== null) { gateRecord(gateState, slot.agent, key); saveGateState(opts, project, gateState); }
           }
-          if (stopping && activeChildren.size === 0) process.exit(0);
+          if (stopping && slots.every((sl) => !sl.running)) process.exit(0); // settled, not merely exited
         });
       if (opts.maxFires && fired >= opts.maxFires) {
         console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining active fires then exiting`);
@@ -2664,7 +2671,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   });
   let stopping = false;
   let fired = 0;
-  const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
+  const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (slots.every((sl) => !sl.running)) process.exit(0); }; // settled, not merely exited
   // Graceful stop: forward SIGINT to the DIRECT child only (not the process group) — see the LOOP-23
   // decision at the other scheduler entrypoint above for why the graceful path stays non-forceful.
   // LOOP-155 latch (WS-C review 4): the legacy scheduler set `schedulerInterrupted` here and this one never
@@ -2748,7 +2755,7 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         .finally(() => {
           slot.running = false;
           slot.nextAt = Date.now() + breaker.intervalFor(laneActor(slot.agent), opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
-          if (stopping && activeChildren.size === 0) process.exit(0);
+          if (stopping && slots.every((sl) => !sl.running)) process.exit(0); // settled, not merely exited
         });
       if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }
     }
