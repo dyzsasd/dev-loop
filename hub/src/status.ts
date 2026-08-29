@@ -44,7 +44,16 @@ export interface InFlightFire { agent: string; project: string; startedAt: strin
 // from the live file (a replay cannot know them — that is the point of the file).
 export interface BreakerAgentEntry { agent: string; key: string | null; streak: number; open: boolean; state: BreakerPersistedState; openedAt: string | null; lastFailureAt: string | null; probeInFlight?: boolean; cooldownUntil?: string | null }
 export interface BreakerProviderEntry { provider: string; errorClass: string; streak: number; open: boolean; state: BreakerPersistedState; openedAt: string | null; lastFailureAt: string | null; probeInFlight?: boolean; cooldownUntil?: string | null; lanes?: string[] }
-export type BreakerSource = "live" | "replay";
+/**
+ * Where a breaker reading came from.
+ *   live   — the running scheduler's own breaker.json.
+ *   final  — the state a scheduler wrote AS IT STOPPED. Not live, but not a guess either: it is the last
+ *            thing the process recorded about itself, and no fire has happened since.
+ *   replay — reconstructed from the fire ledger, because no trustworthy file exists.
+ * `final` used to be lumped in with `replay`, which is what made a stopped workspace report breaker
+ * streaks from a PREVIOUS scheduler generation while the file on disk recorded none.
+ */
+export type BreakerSource = "live" | "final" | "replay";
 export interface BreakersSection { source: BreakerSource; since: string; threshold: number; probeMs: number; agents: BreakerAgentEntry[]; providers: BreakerProviderEntry[]; anyOpen: boolean; note?: string }
 export type SchedulerState = "stopped" | "running" | "paused" | "draining";
 export interface SchedulerSection {
@@ -215,7 +224,19 @@ export function inFlightFires(ws: Workspace, opts: { nowMs?: number; sinceMs?: n
 // tails read as one streak); interrupted fires never fed the breaker (skipped here too, LOOP-155); and a
 // scheduler restart or the 90-day ledger prune (metrics.pruneFireLedger) moves the replay's start.
 export const REPLAY_NOTE = "approximate — replayed from the fire ledger because the scheduler wrote no live breaker.json (older build, or not running): --breaker/--breaker-probe assumed at their defaults; half-open state, next-probe time and unclassified-failure identity are not reproducible";
-export function replayBreakers(rows: FireRow[], sinceMs: number): BreakersSection {
+/** Why the replay was used. The blanket sentence above named only one of four reasons and asserted it. */
+export type ReplayReason = "no-file" | "unreadable" | "dead-writer" | "foreign-writer" | "stale-file";
+const REPLAY_WHY: Record<ReplayReason, string> = {
+  "no-file": "the scheduler wrote no breaker.json (older build, or it never ran here)",
+  unreadable: "the breaker.json on disk could not be read at this schema",
+  "dead-writer": "the breaker.json was left by a process that is gone, so its last write may be mid-flight",
+  "foreign-writer": "the breaker.json was written by a pid the run lock does not vouch for",
+  "stale-file": "fires were ledgered after the breaker.json was written, so the file no longer describes the state",
+};
+export function replayNote(reason: ReplayReason): string {
+  return `approximate — replayed from the fire ledger because ${REPLAY_WHY[reason]}: --breaker/--breaker-probe assumed at their defaults; half-open state, next-probe time and unclassified-failure identity are not reproducible`;
+}
+export function replayBreakers(rows: FireRow[], sinceMs: number, reason: ReplayReason = "no-file"): BreakersSection {
   const b = { ...breaker, byAgent: new Map<Agent, BreakerEntry>(), byProvider: new Map<string, BreakerEntry>(), _agentProvider: new Map<Agent, string | null>(), onEvent: undefined, onChange: undefined };
   const replay = rows.filter((r) => Date.parse(r.ts) >= sinceMs && !r.interrupted).sort((x, y) => Date.parse(x.ts) - Date.parse(y.ts));
   for (const r of replay) b.record(r.agent as Agent, r.exitCode ?? 1, r.errorClass ?? null, undefined, r.provider ?? null, { at: Date.parse(r.ts) });
@@ -226,20 +247,42 @@ export function replayBreakers(rows: FireRow[], sinceMs: number): BreakersSectio
     const i = k.indexOf(":");
     return { provider: k.slice(0, i), errorClass: k.slice(i + 1), streak: e.streak, open: e.open, state: state(e), openedAt: iso(e.openedAt), lastFailureAt: iso(e.lastFailureAt) };
   });
-  return { source: "replay", since: new Date(sinceMs).toISOString(), threshold: b.threshold, probeMs: b.probeMs, agents, providers, anyOpen: agents.some((a) => a.open) || providers.some((p) => p.open), note: REPLAY_NOTE };
+  return { source: "replay", since: new Date(sinceMs).toISOString(), threshold: b.threshold, probeMs: b.probeMs, agents, providers, anyOpen: agents.some((a) => a.open) || providers.some((p) => p.open), note: replayNote(reason) };
 }
 
 /** The scheduler's own breaker.json, when its writer is the live scheduler; null ⇒ the caller replays. */
-export function liveBreakers(ws: Workspace, lock: RunLock): BreakersSection | null {
+export function liveBreakers(ws: Workspace, lock: RunLock, rows: FireRow[] = []): { section: BreakersSection | null; replayReason: ReplayReason } {
   const f = readBreakerState(breakerStatePath(teamDirOf(wsStateRoot(ws))));
-  if (!f || !breakerStateAlive(f)) return null;
-  if (lock.alive && lock.pid !== f.scheduler.pid) return null; // a live lock names the scheduler; a file another pid wrote is not its state
+  if (!f) return { section: null, replayReason: existsSync(breakerStatePath(teamDirOf(wsStateRoot(ws)))) ? "unreadable" : "no-file" };
+  if (lock.alive && lock.pid !== f.scheduler.pid) return { section: null, replayReason: "foreign-writer" }; // a live lock names the scheduler; a file another pid wrote is not its state
+
+  // A file whose writer STOPPED is not the same thing as a file whose writer died. `stoppedAt` is written
+  // by the scheduler on its own way out, together with `reason`, and it is the last statement the process
+  // made about itself — strictly better than a replay, which cannot see half-open state, probe timing or
+  // unclassified-failure identity, and which reaches back a fixed 24 h across scheduler GENERATIONS. That
+  // is not hypothetical: a stopped workspace reported `streak provider anthropic:rate-limit ×3` replayed
+  // from fires 15 h earlier, under a previous scheduler, while the file on disk recorded `providers: {}`.
+  // The one thing that can invalidate it is a fire ledgered AFTER the stop, so that is what is checked.
+  if (!breakerStateAlive(f)) {
+    if (!f.scheduler.stoppedAt) return { section: null, replayReason: "dead-writer" };
+    const stoppedMs = Date.parse(f.scheduler.stoppedAt);
+    const firedSince = rows.some((r) => Date.parse(r.ts) > stoppedMs);
+    if (firedSince) return { section: null, replayReason: "stale-file" };
+  }
   const agents: BreakerAgentEntry[] = Object.entries(f.agents).map(([agent, e]) => ({ agent, key: e.lastReason, streak: e.consecutiveFailures, open: e.state !== "closed", state: e.state, openedAt: e.openedAt, lastFailureAt: e.lastFailureAt, probeInFlight: e.probeInFlight, cooldownUntil: e.cooldownUntil }));
   const providers: BreakerProviderEntry[] = Object.values(f.providers).map((e) => ({
     provider: e.provider, errorClass: e.errorClass, streak: e.consecutiveFailures, open: e.state !== "closed", state: e.state, openedAt: e.openedAt, lastFailureAt: e.lastFailureAt,
     probeInFlight: e.probeInFlight, cooldownUntil: e.cooldownUntil, lanes: Object.entries(f.lanes).filter(([, p]) => p === e.provider).map(([a]) => a).sort(),
   }));
-  return { source: "live", since: f.scheduler.startedAt, threshold: f.threshold, probeMs: f.probeMs, agents, providers, anyOpen: agents.some((a) => a.open) || providers.some((p) => p.open) };
+  const stopped = !breakerStateAlive(f);
+  return {
+    section: {
+      source: stopped ? "final" : "live", since: f.scheduler.startedAt, threshold: f.threshold, probeMs: f.probeMs, agents, providers,
+      anyOpen: agents.some((a) => a.open) || providers.some((p) => p.open),
+      ...(stopped ? { note: `the state the scheduler recorded when it stopped at ${f.scheduler.stoppedAt}${f.reason ? ` (${f.reason})` : ""}; no fire has been ledgered since` } : {}),
+    },
+    replayReason: "no-file",
+  };
 }
 
 function schedulerSection(ws: Workspace, rows: FireRow[], nowMs: number): SchedulerSection {
@@ -256,7 +299,8 @@ function schedulerSection(ws: Workspace, rows: FireRow[], nowMs: number): Schedu
     try { const p = readPause(db, nowMs); if (p) pause = { ...p, human: formatPause(p, nowMs) }; } finally { db.close(); }
   }
   const state: SchedulerState = !running ? "stopped" : pause ? (inFlight.length ? "draining" : "paused") : "running";
-  return { state, running, pid: running ? lock.pid : null, startedAt: running ? lock.startedAt : null, lockPath: lock.path, pause, inFlight, breakers: liveBreakers(ws, lock) ?? replayBreakers(rows, sinceMs) };
+  const lb = liveBreakers(ws, lock, rows);
+  return { state, running, pid: running ? lock.pid : null, startedAt: running ? lock.startedAt : null, lockPath: lock.path, pause, inFlight, breakers: lb.section ?? replayBreakers(rows, sinceMs, lb.replayReason) };
 }
 
 // ─── decision queue ───────────────────────────────────────────────────────────────────────────────
@@ -464,7 +508,7 @@ export function renderStatus(r: StatusReport): string {
       ...bk.agents.map((a) => `${a.open ? "OPEN" : "streak"} ${a.agent} (${a.key}) ×${a.streak}${when(a)}`),
     ];
     if (bs.length) L.push(`  breakers [${bk.source}]: ${bs.join(" · ")}`);
-    if (bs.length && bk.source === "replay") L.push(`  (${bk.note})`);
+    if (bs.length && bk.note) L.push(`  (${bk.note})`);
   }
   const q = r.decisionQueue;
   if (isSectionError(q)) L.push("decision queue:", err(q));

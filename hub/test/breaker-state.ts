@@ -264,7 +264,15 @@ try {
   ok(last?.interrupted === true && last.watchdog === null,
     `run 5: the TEAM scheduler ledgers the killed fire as interrupted, whatever exit the child managed (${JSON.stringify(last)})`);
   const after = status(ws);
-  ok(after?.scheduler?.breakers?.source === "replay" && typeof after.scheduler.breakers.note === "string", "run 5: with the scheduler gone the file is stale ⇒ status falls back to the replay and says so");
+  // The scheduler stopped cleanly here (SIGTERM, drained, wrote stoppedAt), so its file is its FINAL
+  // recorded state, not a stale artefact: status serves it and says when it was recorded. A replay would
+  // be worse — it cannot see the half-open state or the probe timing this very suite just asserted, and
+  // it reaches back 24 h across scheduler generations. The one thing that would invalidate the file is a
+  // fire ledgered after the stop, which status.ts checks and test/status.ts covers.
+  ok(after?.scheduler?.breakers?.source === "final" && /stopped at/.test(after.scheduler.breakers.note ?? ""),
+    `run 5: a cleanly stopped scheduler's own final state is served, with the time it was recorded (source=${after?.scheduler?.breakers?.source}, note=${(after?.scheduler?.breakers?.note ?? "<none>").slice(0, 70)})`);
+  ok(after?.scheduler?.breakers?.agents?.[0]?.streak === 5,
+    `run 5: …carrying the resumed streak the replay could not reconstruct (${after?.scheduler?.breakers?.agents?.[0]?.streak})`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
