@@ -10,7 +10,7 @@ import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
 import { HUMAN_BLOCKED_MODES, validateTeamFile, referencingProjects, isTeamProject, normalizeAutonomy, MODES, AUTONOMY_INPUTS, CODEX_SANDBOX_MODES, type TeamFile, type Workspace, type AutonomyInput } from "./team-config.ts";
-import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
+import { confirmationToken, isolationVerdict, commitBothHalves, writeConfigAtomic, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
 import { isCanonicalTicketPrefix } from "./ticket-id.ts";
@@ -30,7 +30,7 @@ function mutate(apply: (file: TeamFile, ws: Workspace) => void): Workspace {
   apply(file, ws);
   const { errors } = validateTeamFile(file);
   if (errors.length) die("the edit would make dev-loop.json invalid:\n" + errors.map((e) => `  [${e.code}] ${e.path}: ${e.message}`).join("\n"), 1);
-  writeFileSync(ws.filePath, JSON.stringify(file, null, 2) + "\n");
+  writeConfigAtomic(ws.filePath, JSON.stringify(file, null, 2) + "\n"); // tmp+rename: a half-written dev-loop.json is unloadable and takes the workspace down
   return { ...ws, file };
 }
 

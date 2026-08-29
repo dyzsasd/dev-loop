@@ -236,7 +236,7 @@ export interface TwoPhase {
 // retained Buffer straight through keeps the restore byte-exact; decoding it to a string first would round
 // -trip through UTF-8 and silently substitute U+FFFD for any byte sequence that did not decode — turning a
 // rollback that promises "unchanged" into a quiet corruption of the file it was rescuing.
-function writeConfigAtomic(configPath: string, text: string | Buffer): void {
+export function writeConfigAtomic(configPath: string, text: string | Buffer): void {
   const tmp = `${configPath}.tmp-${process.pid}`;
   try {
     writeFileSync(tmp, text);
