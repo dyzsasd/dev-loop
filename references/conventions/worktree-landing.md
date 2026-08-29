@@ -38,6 +38,25 @@ How a worktree LANDS depends on `git.landing`:
      `--ff-only` is load-bearing: if the merge refuses, the base advanced under you — go back
      to step 1 and retry (cap ~2 cycles → `fix-exhausted` block, §9); **never create a merge
      knot on `defaultBranch`** — rebase in step 1, never merge the base into your branch.
+
+     **If the `git pull --ff-only` refuses**, the shared checkout's `<defaultBranch>` has DIVERGED:
+     it holds commits origin does not — another lane's landing that has not been pushed yet. The
+     only correct move is to PUBLISH them and retry: `dev-loop push --repo <ref>` (it runs the
+     guard, takes the same lock and pushes fast-forward-only), then start again at step 1.
+     **NEVER `git reset --hard origin/<defaultBranch>`, and never `git checkout -B
+     <defaultBranch> origin/<defaultBranch>`, to "align" a shared checkout.** Both discard every
+     unpushed landing in it, including other lanes'. Measured 2026-08-29 on one workspace: a lane
+     landed at 15:50:00, a second lane reset the checkout to `origin/main` at 15:51:52, and the
+     first landing was destroyed — recovered only because the same fire happened to re-merge the
+     same branch seconds later. `push-guard` lists these commits immediately before the push, so
+     the set you would be discarding is always named before you can discard it.
+
+     **With a remote, prefer landing from the WORKTREE and never touching the shared checkout's
+     branch at all:** `git push origin HEAD:<defaultBranch>` from the ticket's worktree is a
+     fast-forward-only publish that origin itself arbitrates, so two lanes cannot race a local
+     ref — the loser is refused by the server and retries from step 1. The shared checkout then
+     only ever needs a read-only `git fetch`. The merge-back above remains the sequence for a repo
+     with NO remote, where a local `<defaultBranch>` is the only place a landing can go.
      `push-guard` enforces this: a merge commit in the landing range is a refusal naming the
      sha, on any repo whose resolved `landing` is `direct`.
      **Pre-push ride-along gate:** a push carries every unpushed commit before yours,

@@ -211,7 +211,10 @@ export function unlandedWorkRejection(inp: UnlandedGateInput): string | null {
   const stranded = unlandedBranchResidue(inp.repoRoot, inp.baseRef, inp.id);
   if (!stranded.length) return null;
   const shown = stranded.slice(0, 3).map((b) => `  - ${b.branch}: ${b.paths.slice(0, 4).join(", ")}${b.paths.length > 4 ? ` …and ${b.paths.length - 4} more` : ""}`).join("\n");
-  return `verify gate: → Done blocked — ${inp.id} still has pushed work that is not on ${inp.baseRef}:\n${shown}${stranded.length > 3 ? `\n  …and ${stranded.length - 3} more branch(es)` : ""}\n`
+  // Not "pushed work": this reads local git only (the closing sentence says so), and the case it
+  // catches most often is a branch that was never pushed at all — measured on JBU-62, whose commit
+  // existed only on `dev-loop/JBU-62` when the owner tried to close it.
+  return `verify gate: → Done blocked — ${inp.id} still has work on a branch that is not on ${inp.baseRef}:\n${shown}${stranded.length > 3 ? `\n  …and ${stranded.length - 3} more branch(es)` : ""}\n`
     + `Done is terminal, so closing now takes this work out of every queue arm at once — no agent scans terminal tickets, so nothing will ever come back for it. `
     + `Land the branch (\`dev-loop pr merge <pr>\`), or close its PR and say why on the ticket, then close. `
     + `If the work is knowingly abandoned, comment a waiver naming the reason: \`AC-waived: <which> — <why>\`. `

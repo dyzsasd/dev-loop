@@ -465,6 +465,12 @@ The pattern (both cases): a dedicated `git worktree` on branch `dev-loop/<ticket
 the repo — ask for it, never compose it: `dev-loop worktree path <ticket-id> --repo <repo-ref>` prints it (`<workspace>/.dev-loop/wt/<ticket-id>/<repo-ref>`) — created off the
 up-to-date base, removed after landing; the shared checkout stays on `defaultBranch`; `git worktree prune`
 at fire-start; base-clone mutations run under `dev-loop with-repo-lock <repo-ref> -- <cmd>` (§27).
+**Never realign a shared checkout destructively.** `git reset --hard origin/<defaultBranch>` and
+`git checkout -B <defaultBranch> origin/<defaultBranch>` discard every landed-but-unpushed commit in
+the tree, including other lanes'. A refused `git pull --ff-only` means the branch diverged: publish
+what is there (`dev-loop push`) and retry — never discard. With a remote, landing by pushing
+`HEAD:<defaultBranch>` from the ticket's own worktree avoids the shared ref entirely.
+
 `"pr"` ⇒ push the branch + open the PR (§12b). `"direct"` ⇒ the **direct merge-back**: sync (fetch under
 the lock; rebase onto the advanced base; re-run the gate if commits came in), land ATOMICALLY under ONE
 lock (`checkout <defaultBranch> && pull --ff-only && merge --ff-only dev-loop/<id> && push`; a refusal ⇒

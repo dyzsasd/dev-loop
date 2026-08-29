@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { launchDaemonCli } from "./daemon-harness.ts";
+import { registerDaemonPid, launchDaemonCli } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { createServer as netCreateServer } from "node:net";
 
@@ -110,6 +110,13 @@ let upStdout = "", upStderr = "";
 upChild.stdout?.on("data", (d: Buffer) => { upStdout += d.toString(); });
 upChild.stderr?.on("data", (d: Buffer) => { upStderr += d.toString(); });
 const [upCode] = await once(upChild, "exit") as [number | null];
+// This `up` is EXPECTED to refuse, so it should have started nothing — but "should have" is what the
+// suite is testing. If the refusal ever regresses, a detached daemon leaks and the assertions below
+// still pass; registering whatever the runfile now names puts it under the harness's exit sweep.
+try {
+  const rf = JSON.parse(readFileSync(runfile, "utf8")) as { pid?: number };
+  if (rf.pid && rf.pid !== serverPid) registerDaemonPid(rf.pid);
+} catch { /* no runfile, nothing to sweep */ }
 
 // ── Assertions ─────────────────────────────────────────────────────────────────────────────────
 ok(upCode !== 0, `AC1: daemon up exits non-zero when running daemon is newer (got exit ${upCode})`);

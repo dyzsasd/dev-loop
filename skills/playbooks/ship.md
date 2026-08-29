@@ -78,6 +78,10 @@ legacy solo dev commits in place.
   never a divergent branch), message referencing the id + co-author trailer. **Push when the repo has a
   remote** — it is part of the landing, not a flag; the constitution's push-guard / fast-forward-only rule
   binds, and a merge commit in the range is a push-guard refusal (rebase, never merge the base in).
+- **Never realign the shared checkout destructively.** No `git reset --hard origin/<defaultBranch>`,
+  no `git checkout -B <defaultBranch> origin/<defaultBranch>`: both discard landed-but-unpushed work,
+  including another lane's. A refused `git pull --ff-only` means the branch diverged — run
+  `dev-loop push --repo <ref>` to publish what is there, then retry the landing from its first step.
 - **Before ANY deploy step apply the constitution's Deploy ceiling (§12d):** a `"manual"` `team.deployPolicy`
   env is a HARD BAIL + operator park, never a prompt (command-shape deploys with no env mapping = prod).
 - `git.autoDeploy` + a resolved `deploy.command` ⇒ run it and confirm success. A repo with NO deploy skips it

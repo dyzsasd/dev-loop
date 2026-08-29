@@ -14,7 +14,7 @@ import { openDb } from "../src/db.ts";
 import { findProject, ensureSeed } from "../src/seed.ts";
 import { createDaemon, roadmapDivergenceDoc } from "../src/daemon.ts";
 import { ticketPage, boardPage } from "../src/daemonviews.ts"; // DL-86: unit-check the failed-write re-render input preservation
-import { startTestDaemon, runDaemonCli } from "./daemon-harness.ts";
+import { registerDaemonPid, startTestDaemon, runDaemonCli } from "./daemon-harness.ts";
 import { daemonReap } from "../src/daemon-lifecycle.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -922,8 +922,14 @@ async function freeInBand(lo: number, hi: number): Promise<number | null> {
     ok(warnMsg.includes("port walked"), "LOOP-95 AC-B5: long-walk warning includes 'port walked' with the landed port");
     // Clean up the started daemon
     for (const s of blockedB7) await new Promise<void>(r => s.close(() => r()));
-    if (b7up.status === 0 && existsSync(join(run7, "daemon-b7.json"))) {
+    // Register FIRST, then kill. The conditional kill below covers the happy path only: an `up` that
+    // spawned a daemon and then failed its own health probe, or whose runfile is not readable yet,
+    // leaves a live detached process this block would skip — measured once as a daemon with cwd=hub/
+    // outliving a full `npm test`. registerDaemonPid puts it under the ONE exit sweep, which is what
+    // every other lifecycle caller in this suite already does (daemon-harness.ts's contract).
+    if (existsSync(join(run7, "daemon-b7.json"))) {
       const runInfo = JSON.parse(readFileSync(join(run7, "daemon-b7.json"), "utf8")) as { pid: number };
+      if (runInfo.pid > 0) registerDaemonPid(runInfo.pid);
       if (isAliveReap(runInfo.pid)) try { process.kill(runInfo.pid, "SIGKILL"); } catch { /* already dead */ }
     }
   } else {

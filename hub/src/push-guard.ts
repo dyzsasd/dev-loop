@@ -19,7 +19,12 @@ import { ticketIdScanRe } from "./ticket-id.ts";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite"; // R5 — the read-only probe below must NOT create/migrate
 import { openDb } from "./db.ts";
-import { resolveHubDbPath } from "./workspace.ts";
+// The try- form throughout: this module is a READ-ONLY guard whose every db use already has an
+// "absent db ⇒ degrade" arm (unverifiable refs, no passenger states, approvals unusable). Making
+// an unresolvable board throw here would take the whole guard down on a repo that is simply not in
+// a workspace — turning a fail-loud path resolver into a fail-CLOSED safety gate for the one caller
+// that does not need a board at all.
+import { tryResolveHubDbPath } from "./workspace.ts";
 import { approvalsEnforced, loadWorkspace, inferProjectForRepo } from "./team-config.ts";
 import { workspaceRootForRepoDir, workspaceForRepoDir, resolveDefaultBranchForRepoDir, registeredRepoRefFor } from "./repo-lock-path.ts";
 import { defaultBranchPushVerdict, defaultBranchPushRefusalLine, docLandAllowlist, strategyDocRelPath, type DefaultBranchPushVerdict } from "./default-branch-push.ts";
@@ -95,7 +100,12 @@ export interface PushGuardResult { branch: string; ahead: number; unknownRefs: s
   // base and lands `--ff-only` precisely so the default branch keeps a linear history; a merge commit
   // in the range becomes a merge knot on it the moment the branch is fast-forwarded in. Absent (not
   // an empty array) when there are none, so a clean result keeps its pre-change shape.
-  mergeCommits?: PushGuardMergeCommit[] }
+  mergeCommits?: PushGuardMergeCommit[];
+  // Commits that exist ONLY in this checkout's local <defaultBranch> — landed but never published.
+  // Reported when the guarded branch IS the default branch, i.e. the shared-checkout landing, because
+  // that is the one state a `reset --hard origin/<defaultBranch>` silently destroys. Informational:
+  // it is the NORMAL state immediately before the push that clears it, so it never trips --strict.
+  unpushedOnDefault?: PushGuardMergeCommit[] }
 export interface PushGuardMergeCommit { sha: string; subject: string }
 
 /** The key grammar for this class, in ONE place — the guard, the refusal, and the tests all read it. */
@@ -450,7 +460,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // Default-OFF (design §8): with the class absent from `approvals.enforce` nothing here runs, no db
   // handle is opened — not even the read-only probe — and the result is byte-identical to the
   // pre-LOOP-394 output (AC2).
-  const approvalsDbFile = enforcePush ? (dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir)) : "";
+  const approvalsDbFile = enforcePush ? (dbPath ?? tryResolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir) ?? "") : "";
   const recordUnusable = enforcePush ? approvalsRecordUnusable(approvalsDbFile) : null;
   // A record classified unusable must stay untouched for the REST of the guard, not just until the
   // next `openDb` (R6, PR #283 review). The other two axes open the same path, and `openDb` creates
@@ -482,7 +492,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     if (baseRef) {
       const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${baseRef}..${br}`]));
       // Open hub.db for passenger ticket-state lookups (read-only).
-      const pgDb = dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir);
+      const pgDb = dbPath ?? tryResolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir) ?? "";
       // An unreadable db degrades to the SAME path an absent one already takes (no state lookups,
       // passengers reported as unverifiable warnings). Before R5 it threw out of pushGuard entirely,
       // which took the approvals gate down with it — a corrupt record must make the safety gate
@@ -600,7 +610,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // call from a per-ticket worktree (the only place §7 lets a dev tier ship from) resolves the
   // workspace that owns the repo rather than the worktree's own path; this lookup was left behind and
   // silently degraded to "no local hub" there, reporting every ticket ref as unverifiable.
-  const db = dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir);
+  const db = dbPath ?? tryResolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir) ?? "";
   // Same degrade as the passenger axis (R5): an UNREADABLE db is reported as unverifiable refs, the
   // path an absent one already takes, instead of throwing out of the guard and taking the approvals
   // gate with it.
@@ -667,6 +677,24 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
     } catch { /* an unreadable range is already reported by `note`; this class adds nothing there */ }
   }
 
+  // The unpublished-landing class. Measured on jbu's main reflog, 2026-08-29: `3e51a06 @15:50:00
+  // merge dev-loop/JBU-11 FF` (landed, unpushed) followed by `2011a1c @15:51:52 reset: moving to
+  // origin/main` — a second lane aligning the shared checkout to origin the destructive way, which
+  // discarded the first lane's landing. It survived only because the same fire re-merged the same
+  // branch seconds later; any other pairing loses the commit. `git pull --ff-only` refuses on a
+  // diverged branch and the landing sequence never said what to do about that, so the agent
+  // improvised the one remedy that destroys work.
+  //
+  // These commits are what such a reset would take. Listing them immediately before the push that
+  // publishes them is the last point anything can say so, and the refusal line carries the rule.
+  const unpushedOnDefault: PushGuardMergeCommit[] = [];
+  if (hasRemote && br === defaultBranch && baseRef) {
+    try {
+      for (const c of parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${baseRef}..${br}`])))
+        unpushedOnDefault.push({ sha: c.sha.slice(0, 7), subject: c.subject });
+    } catch { /* an unreadable range is already carried by `note` */ }
+  }
+
   let landingVerdict: DefaultBranchPushVerdict | undefined;
   if (range && br === defaultBranch) {
     const facts = landingFacts!;
@@ -692,7 +720,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const note = hasUpstream ? undefined
     : range ? `no upstream ${remote}/${br} — first push of this branch; gated over ${range}`
     : `no upstream ${remote}/${br} and no ${hasRemote ? `${remote}/${defaultBranch}` : `local ${defaultBranch}`} or local ${br} — the range could not be resolved, so findings/passengers/governance did NOT run`;
-  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}), ...(landingVerdict ? { landing: landingVerdict } : {}), ...(mergeCommits.length ? { mergeCommits } : {}) };
+  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}), ...(landingVerdict ? { landing: landingVerdict } : {}), ...(mergeCommits.length ? { mergeCommits } : {}), ...(unpushedOnDefault.length ? { unpushedOnDefault } : {}) };
 }
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
@@ -788,13 +816,15 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     if (r.landing) console.log(defaultBranchPushRefusalLine(r.landing));
     // The remedy is the one §7 already prescribes, named so the agent has a legal next move: rebase,
     // do not merge. Printed per commit so a branch that merged twice shows both.
+    if (r.unpushedOnDefault?.length)
+      console.log(`•  ${r.unpushedOnDefault.length} landed commit(s) on ${defaultBranch} exist ONLY in this checkout (${r.unpushedOnDefault.map((c) => c.sha).join(", ")}) — publish them with this push. NEVER \`git reset --hard origin/${defaultBranch}\` or \`git checkout -B ${defaultBranch} origin/${defaultBranch}\` to align a shared checkout: that discards every unpushed landing, including another lane's. If \`git pull --ff-only\` refuses, the branch diverged — push what you have (\`dev-loop push\`), then retry the landing.`);
     for (const m of r.mergeCommits ?? [])
       console.log(`⛔ merge commit: ${m.sha} "${m.subject}" — a direct landing fast-forwards ${defaultBranch} onto this branch, so this would put a merge commit on ${defaultBranch}. Rebase onto the base instead (§7: rebase, then land --ff-only), then re-run this guard.`);
     // Names the ref that was actually missing. A repo with no remote has no `origin/main` to be
     // missing — saying so sent an operator looking for a remote that was never configured.
     if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: no base ref for '${r.unresolvedDefaultBranch}' (neither origin/${r.unresolvedDefaultBranch} nor a local ${r.unresolvedDefaultBranch}) — passenger detection did NOT run (a safety gate must not pass silently)`);
     if (r.unknownRefs.length) console.log(`note: ${r.unknownRefs.length} ticket ref(s) not verifiable here (${r.unknownRefs.slice(0, 5).join(", ")}${r.unknownRefs.length > 5 ? ", …" : ""}) — no matching row in the local hub`);
-    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.landing && !r.mergeCommits?.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, merge commits, or §17 governing-file edits aboard");
+    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.landing && !r.mergeCommits?.length && !r.unpushedOnDefault?.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, merge commits, or §17 governing-file edits aboard");
   }
   process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || r.approvals.length || !!r.landing || !!r.mergeCommits?.length || !!r.unresolvedDefaultBranch) ? 1 : 0);
 }
