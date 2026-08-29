@@ -315,8 +315,31 @@ try {
       "seniorDevModePick: `Mode: design` marker ⇒ design");
     ok(seniorDevModePick(db, mk("snd2", "Mode: direct-code\n\nship the escalation", [])) === "directcode",
       "seniorDevModePick: `Mode: direct-code` marker ⇒ directcode");
-    ok(seniorDevModePick(db, mk("snd3", "no marker here", [], ["SND-PRED"])) === "directcode",
-      "seniorDevModePick: no marker + a follow-up (relatedTo non-empty) ⇒ directcode");
+    // Where the templates actually put it: under `## Context`, never on the first line. The marker
+    // reader anchored at the head until 2026-08-29, so this placement matched nothing.
+    ok(seniorDevModePick(db, mk("snd1b", "## Context\nMode: design-and-delegate\n\nauthor the module", [], ["SND1B-X"])) === "design",
+      "seniorDevModePick: a `Mode: design-and-delegate` marker BELOW `## Context` still decides");
+    // The no-marker guess reads §21a's actual escalation signal — `relatedTo` a CANCELED
+    // `review failed:` predecessor — not "relatedTo is non-empty", which this arm used to assert.
+    // That older reading is what launched a design parent with the direct-code corpus every 5 minutes
+    // on a live board: `relatedTo` also carries §4 splits and §15 coverage siblings, so a live
+    // relation looked like an escalation. A predecessor that does not resolve is not a confirmed
+    // escalation either, and `design` is the safe direction — a wrong `directcode` is the idling.
+    {
+      const pid = mk("snd3", "no marker here", [], ["SND3-1"]);
+      ok(seniorDevModePick(db, pid) === "design",
+        "seniorDevModePick: no marker + an UNRESOLVABLE predecessor ⇒ design (not a confirmed escalation)");
+    }
+    {
+      // The predecessor is inserted FIRST so it takes SND3B-1; the follow-up then points at a real
+      // Canceled row rather than at itself (ids are assigned in insertion order).
+      ensureSeed(db, "snd3b", "snd3b", "SND3B");
+      const pid = findProject(db, "snd3b")!;
+      insertTicket(db, pid, "senior-dev", { title: "predecessor", description: "review failed: superseded", type: "Feature", state: "Canceled", assignee: "junior-dev", priority: 2, labels: ["dev-loop"], duplicateOf: null, relatedTo: [] }, { title: "predecessor", type: "Feature" });
+      insertTicket(db, pid, "senior-dev", { title: "t", description: "no marker here", type: "Feature", state: "Todo", assignee: "senior-dev", priority: 2, labels: ["dev-loop", "senior-dev"], duplicateOf: null, relatedTo: ["SND3B-1"] }, { title: "t", type: "Feature" });
+      ok(seniorDevModePick(db, pid) === "directcode",
+        "seniorDevModePick: no marker + a CANCELED predecessor ⇒ directcode (the §21a escalation shape)");
+    }
     ok(seniorDevModePick(db, mk("snd4", "no marker here", [])) === "design",
       "seniorDevModePick: no marker + not a follow-up ⇒ design (the normal complex path)");
     ensureSeed(db, "snd5", "snd5", "SND5");
