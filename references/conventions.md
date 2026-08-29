@@ -439,8 +439,8 @@ Two cases, and they compose:
 - **`git.landing:"pr"` (§12b/§12c) — even for the legacy solo `dev`.** The
   branch-per-ticket flow needs the shared checkout parked on `defaultBranch` anyway.
 
-The pattern (both cases): a dedicated `git worktree` on branch `dev-loop/<ticket-id>` at
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` (outside the repo), created off the
+The pattern (both cases): a dedicated `git worktree` on branch `dev-loop/<ticket-id>` at a path outside
+the repo — ask for it, never compose it: `dev-loop worktree path <ticket-id> --repo <repo-ref>` prints it (`<workspace>/.dev-loop/wt/<ticket-id>/<repo-ref>`) — created off the
 up-to-date base, removed after landing; the shared checkout stays on `defaultBranch`; `git worktree prune`
 at fire-start; base-clone mutations run under `dev-loop with-repo-lock <repo-ref> -- <cmd>` (§27).
 `"pr"` ⇒ push the branch + open the PR (§12b). `"direct"` ⇒ the **direct merge-back**: sync (fetch under
@@ -1208,7 +1208,7 @@ capability, on by default, with no change to ticket / product / board behavior.
 
 **Resident rules (every agent, every fire):**
 - **Where:** machine-local, never committed, §16-bound (no secrets / verbatim PII) —
-  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<handle>/{daily,weekly,monthly}/` (`<handle>` = the
+  `${DEVLOOP_DATA_DIR}/<project-key>/reports/<handle>/{daily,weekly,monthly}/` (`<handle>` = the
   agent's runtime handle, the value of `DEVLOOP_ACTOR` — e.g. `pm`, `junior-dev`), one file per period (`%F` / `%G-W%V` / `%Y-%m`), lazily created; `reports.sink:"linear"` (§23) is the opt-in alternative.
 - **Markers = the tree + a UTC shell call, never date reasoning:** `TODAY=$(date -u +%F)`,
   `WEEK=$(date -u +%G-W%V)`, `MONTH=$(date -u +%Y-%m)` (`-u` is load-bearing); the newest report per level

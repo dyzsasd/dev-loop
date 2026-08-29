@@ -127,7 +127,7 @@ applied by an agent.
 
 ## Reports <!-- from §22 -->
 Durable trail, machine-local, never committed, §16-bound:
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<handle>/{daily,weekly,monthly}/` (`<handle>` =
+`${DEVLOOP_DATA_DIR}/<project-key>/reports/<handle>/{daily,weekly,monthly}/` (`<handle>` =
 `DEVLOOP_ACTOR`). Daily = append-only
 at CLOSE, only when the fire did material work; period keys from `date -u` (`-u` load-bearing). At boot, act
 on any un-acted operator `<report>.review.md` (点评). `dry-run` writes nothing.

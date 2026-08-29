@@ -11,7 +11,7 @@ No change to ticket / product / board behavior — this is the audit trail only.
 
 ## Preconditions
 - Reports are machine-local, never committed, and §16-bound (no secrets, no verbatim PII).
-- Tree: `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<handle>/{daily,weekly,monthly}/`, one file
+- Tree: `${DEVLOOP_DATA_DIR}/<project-key>/reports/<handle>/{daily,weekly,monthly}/`, one file
   per period, `<handle>` = your runtime handle, the value of `DEVLOOP_ACTOR` (e.g. `pm`). `reports.sink:"linear"` is the opt-in
   alternative (pull `references/reports-linear-sink.md`).
 

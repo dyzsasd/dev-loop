@@ -6,8 +6,8 @@
 > verbatim from conventions.md; every §-anchor it cites is a conventions.md anchor.
 
 The worktree pattern (both cases): a dedicated `git worktree` on branch
-`dev-loop/<ticket-id>`, at a path **outside the repo** —
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` — created off the up-to-date
+`dev-loop/<ticket-id>`, at a path **outside the repo**. Ask for that path, never compose it:
+`dev-loop worktree path <ticket-id> --repo <repo-ref>` prints it (`<workspace>/.dev-loop/wt/<ticket-id>/<repo-ref>`). It is created off the up-to-date
 base before implementing and removed after the ticket lands. The shared checkout stays on
 `defaultBranch` throughout; nothing worktree-related ever lands in the repo tree;
 `git worktree prune` at fire-start reaps any left by a crashed fire. Base-clone mutations

@@ -191,6 +191,31 @@ for (const [label, build] of [
     `LOOP-473: the home anchor is composed in exactly ${expected.join(" + ")} (found ${JSON.stringify([...readers].sort())})`);
 }
 
+// ── …and no packaged prompt text still teaches it ────────────────────────────────────────────────
+// Every agent fire receives DEVLOOP_DATA_DIR (run-agents.ts sets it to the workspace's state root),
+// so `${DEVLOOP_DATA_DIR:-~/.dev-loop}` in a skill or a conventions file was a default that could
+// only fire when the variable was missing — and it taught the agent to write into the retired tree
+// when it did. The scheduler's substitution for that literal is gone with it, so a reappearance now
+// reaches the agent verbatim: an unexpanded `${...}` in a prompt, or a path under a home anchor.
+{
+  const repoRoot = join(srcDir, "..", "..");
+  const promptFiles: string[] = [];
+  const walkText = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) walkText(join(dir, e.name));
+      else if (e.name.endsWith(".md")) promptFiles.push(join(dir, e.name));
+    }
+  };
+  walkText(join(repoRoot, "skills"));
+  walkText(join(repoRoot, "references"));
+  ok(promptFiles.length > 20, `the prompt-text scan sees skills/ + references/ (${promptFiles.length} files)`);
+  const offenders = promptFiles
+    .filter((f) => readFileSync(f, "utf8").includes("~/.dev-loop"))
+    .map((f) => f.slice(repoRoot.length + 1));
+  ok(offenders.length === 0,
+    `LOOP-473: no packaged skill or reference names the retired ~/.dev-loop anchor (found ${JSON.stringify(offenders)})`);
+}
+
 // ── AC6 / the registry ───────────────────────────────────────────────────────────────────────────
 
 const row = DOCTOR_CODES.find((r) => r.code === "E20");

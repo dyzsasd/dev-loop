@@ -12,7 +12,8 @@ this file is the operator-facing field reference.
 Any dev-loop command resolves the workspace in this order:
 
 1. `DEVLOOP_WORKSPACE` — absolute path to the workspace.
-2. `DEVLOOP_TEAM` — team key resolved through the rebuildable `~/.dev-loop/workspaces.json` index.
+2. `DEVLOOP_TEAM` — team key resolved through the rebuildable workspace index at
+   `${XDG_CONFIG_HOME:-~/.config}/dev-loop/workspaces.json` (`DEVLOOP_HOME` relocates it).
 3. Cwd ascent — walk upward to the first directory containing a valid `dev-loop.json`.
 
 The index is only a convenience. The workspace folder itself is portable: copy it to another
@@ -352,8 +353,9 @@ a **semantics extension of the existing keys — no new keys were added**:
 
 The poller's dedup state is **machine-local**, not hub state:
 `<dataDir>/mirror-state/<projectKey>.json` (the reports-state pattern), where `<dataDir>`
-resolves from `DEVLOOP_DATA_DIR`, else `DEVLOOP_HOME`, else `~/.dev-loop`. Re-pointing the
-data dir therefore re-files intake at worst — it never corrupts hub state.
+resolves from `DEVLOOP_DATA_DIR`, else `DEVLOOP_HOME`, else the discovered workspace's
+`.dev-loop/`; with none of the three the command reports that it resolved no data dir.
+Re-pointing the data dir therefore re-files intake at worst — it never corrupts hub state.
 
 ## Operator-tunable fields (`dev-loop team set`)
 
@@ -460,7 +462,9 @@ Everything runtime-related lives under `<workspace>/.dev-loop/`:
 | `daemon.json` | Service hub daemon runfile. |
 | `secrets.env` | Optional `KEY=VALUE` file supplying the values for the env-var NAMES in `dev-loop.json` (e.g. `team.comms.webhookEnv`). Loaded into the process env at workspace resolution; a key already in the real env is never overwritten. Keep it `chmod 600`; never committed (it lives in the gitignored `.dev-loop/`). |
 
-`~/.dev-loop/` keeps only the rebuildable workspace index.
+Nothing else lives outside the workspace. The one exception is the rebuildable workspace index
+(`${XDG_CONFIG_HOME:-~/.config}/dev-loop/workspaces.json`), which is what maps `DEVLOOP_TEAM=<key>`
+to a workspace root and so cannot live inside one.
 
 ## Commands
 

@@ -719,7 +719,6 @@ function readPrompt(opts: Options, agent: Agent, project: string, profile: Launc
   const body = stripFrontmatter(readFileSync(skill, "utf8"))
     .replaceAll("${CLAUDE_PLUGIN_ROOT}", opts.root)
     .replaceAll("${CLAUDE_PLUGIN_DATA}", opts.dataDir)
-    .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
     .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
   const commsLine = teamScope

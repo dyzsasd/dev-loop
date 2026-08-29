@@ -17,7 +17,7 @@ Reports are **machine-local per-operator runtime state**, never committed (like
 **namespaced per project and per agent**:
 
 ```
-${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<handle>/
+${DEVLOOP_DATA_DIR}/<project-key>/reports/<handle>/
   daily/    2026-06-19.md        # one file per calendar day (ISO date, %F)
   weekly/   2026-W25.md          # one file per ISO week (%G-W%V)
   monthly/  2026-06.md           # one file per month (%Y-%m)
