@@ -238,6 +238,7 @@ type Options = {
   intervals: Record<SchedKey, number>;
   once: boolean;
   dryRun: boolean;
+  noDaemon: boolean;   // skip the board-daemon ensure (tests/CI) — mirrors `dev-loop up --no-daemon`
   devSplit: boolean;
   plan: number;          // team mode: print the next N (agent, project) picks and exit (0 = off)
   intervalsExplicit: Set<SchedKey>; // agents/lanes whose cadence came from --interval (beats config cadence)
@@ -356,6 +357,7 @@ Options:
   --interval <agent=dur>      override cadence, e.g. pm=2m, communication=24h; may repeat
   --once                      run each selected agent once, then exit
   --dry-run                   print resolved commands; do not launch Claude/Codex
+  --no-daemon                 skip the board-daemon ensure below (tests/CI); the scheduler itself is unaffected
   --root <path>               dev-loop checkout root (default: inferred, or DEVLOOP_PLUGIN_ROOT/CLAUDE_PLUGIN_ROOT)
   --data <path>               dev-loop data dir (default: DEVLOOP_DATA_DIR, else the workspace's .dev-loop)
   --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB, else the workspace's .dev-loop/hub.db)
@@ -488,6 +490,7 @@ function parseArgs(argv: string[]): Options {
     intervals,
     once: false,
     dryRun: false,
+    noDaemon: false,
     devSplit: false,
     plan: 0,
     intervalsExplicit: new Set<SchedKey>(),
@@ -535,6 +538,7 @@ function parseArgs(argv: string[]): Options {
     } else if (a === "--once") opts.once = true;
     else if (a === "--plan") { opts.plan = Number(next()); if (!Number.isInteger(opts.plan) || opts.plan <= 0) die("--plan must be a positive integer"); }
     else if (a === "--dry-run") opts.dryRun = true;
+    else if (a === "--no-daemon") opts.noDaemon = true;
     else if (a === "--root") opts.root = guardCliPath("--root", resolve(next()));
     else if (a === "--data") { opts.dataDir = guardCliPath("--data", resolve(next())); opts.dataDirExplicit = true; }
     else if (a === "--hub-db") { opts.hubDb = guardCliPath("--hub-db", resolve(next())); opts.hubDbExplicit = true; }
@@ -2328,7 +2332,12 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // Service backend: make sure the workspace hub daemon is up before the loop (operator needn't start it
   // by hand). Best-effort — a failed ensure logs but never blocks the scheduler.
-  if (backend === "service" && !opts.dryRun) {
+  //
+  // The daemon it starts is DETACHED and unref'd, so it outlives this process by design — that is what
+  // an operator wants and what a fixture does not. `up` already had --no-daemon "(tests/CI)" for the
+  // same reason; `run` had no such flag, so every suite firing a real scheduler tick against a service
+  // workspace left a daemon holding a production-band port after its fixture directory was deleted.
+  if (backend === "service" && !opts.dryRun && !opts.noDaemon) {
     try { const { ensureHub } = await import("./hub.ts"); const c = await ensureHub(ws); if (c !== 0) console.warn(`dev-loop run: hub ensure returned ${c} (continuing)`); }
     catch (e) { console.warn(`dev-loop run: hub ensure failed (${(e as Error).message}); continuing`); }
   }

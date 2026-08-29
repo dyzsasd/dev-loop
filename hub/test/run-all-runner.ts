@@ -24,9 +24,10 @@ const ok = (cond: boolean, m: string): void => { console.log((cond ? "✅ " : "�
 // It globs its own dir, so it discovers exactly the synthetic files we write. The env strips the
 // SUITE_ENV carve-out vars so AC5 observes only what run-all.ts itself injects, never an ambient one.
 //
-// The copy carries `env-scrub.ts` with it (LOOP-193). run-all.ts was previously dependency-free and
-// this harness relied on that; it now imports the ONE fire-marker union, because scrubbing at the
-// runner protects the suite PROCESSES themselves — a suite that resolves a workspace in-process picks
+// The copy carries run-all.ts's leaf imports with it (LOOP-193). run-all.ts was previously
+// dependency-free and this harness relied on that; it now imports the ONE fire-marker union and the
+// ONE daemon-process listing (its leaked-daemon gate), because scrubbing at the runner protects the
+// suite PROCESSES themselves — a suite that resolves a workspace in-process picks
 // up an ambient DEVLOOP_WORKSPACE no matter how carefully it scrubs its own child spawns. Copying the
 // leaf is the honest way to keep both properties. Inlining the var list here instead would recreate
 // the duplicated union that LOOP-156 wrote env-scrub.ts to remove.
@@ -34,7 +35,11 @@ function runSynthetic(files: Record<string, string>): { status: number | null; s
   const dir = mkdtempSync(join(tmpdir(), "run-all-runner-"));
   try {
     copyFileSync(RUNNER, join(dir, "run-all.ts"));
-    copyFileSync(join(dirname(RUNNER), "env-scrub.ts"), join(dir, "env-scrub.ts")); // run-all.ts's one import
+    // run-all.ts's imports, carried with the copy. env-scrub.ts (LOOP-193) is the ONE fire-marker
+    // union; daemon-pids.ts is the ONE daemon-process listing, which the runner's leaked-daemon gate
+    // reads. Both are leaves — copying them is what keeps run-all.ts free to import the single
+    // definition of a thing instead of restating it.
+    for (const leaf of ["env-scrub.ts", "daemon-pids.ts"]) copyFileSync(join(dirname(RUNNER), leaf), join(dir, leaf));
     for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
     const env = { ...scrubFireEnv() };
     delete env.DEVLOOP_CHANNEL_DRYRUN; delete env.DEVLOOP_CHANNEL_TOKEN; delete env.DEVLOOP_MIRROR_DRYRUN;

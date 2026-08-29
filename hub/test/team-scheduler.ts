@@ -16,8 +16,10 @@ const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sched-")));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const team = (args: string[], cwd: string) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env: env(), encoding: "utf8" });
+// --no-daemon on every tick: a real (non-dry) scheduler run ensures the board daemon, which forks a
+// DETACHED process that outlives this suite (measured: one survivor per run, cwd in a deleted fixture).
 const runAgents = (args: string[], cwd: string, extra: Record<string, string> = {}) => {
-  const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd, env: env(extra), encoding: "utf8" });
+  const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--no-daemon", ...args], { cwd, env: env(extra), encoding: "utf8" });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 };
 // Only the numbered plan rows ("  1  pm → alpha"), never the header line (which also contains →).
@@ -298,7 +300,7 @@ try {
   const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
   mkdirSync(dirname(lockPath), { recursive: true });
   writeFileSync(lockPath, JSON.stringify({ pid: process.pid, team: "sched-team", startedAt: new Date().toISOString() })); // THIS process = a live holder
-  const blocked = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--max-fires", "1"], { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: fakeBin }), encoding: "utf8", timeout: 8000 });
+  const blocked = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--no-daemon", "--agents", "pm", "--max-fires", "1"], { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: fakeBin }), encoding: "utf8", timeout: 8000 });
   ok((blocked.status ?? 1) !== 0 && /already running/.test(`${blocked.stdout}${blocked.stderr}`), "a second scheduler refuses while a live run lock is held");
   rmSync(lockPath, { force: true });
 

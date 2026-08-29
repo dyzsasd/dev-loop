@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runningDaemonPids, DAEMON_ENTRY_PATTERN } from "./daemon-pids.ts"; // the ONE daemon-pid listing
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +32,7 @@ const SUITE_ENV: Record<string, Record<string, string>> = {
 const NON_SUITES: Record<string, string> = {
   "daemon-harness.ts": "shared helper — exports startTestDaemon/registerDaemonPid/runDaemonCli/launchDaemonCli; no assertions, not a standalone suite (LOOP-138)",
   "env-scrub.ts": "shared helper — exports FIRE_MARKER_VARS/scrubFireEnv, the ONE fire-marker union (LOOP-156); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by env-scrub-guard.ts, which is a real suite and stays discovered.",
+  "daemon-pids.ts": "shared helper — exports runningDaemonPids/DAEMON_ENTRY_PATTERN, the ONE daemon-process listing this runner's leaked-daemon gate reads; no assertions, not a standalone suite.",
   "code-only.ts": "shared helper — exports codeOnly, the ONE source-to-executable-text reduction (LOOP-396, extracted from destructive-guard.ts); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by destructive-guard.ts's probe arms, which are a real suite and stay discovered.",
 };
 
@@ -52,6 +54,19 @@ const SUITE_TIMEOUT_MS = Number(process.env.DEVLOOP_SUITE_TIMEOUT_MS) || 300_000
 
 type Status = "pass" | "fail" | "crash";
 const results: { file: string; status: Status }[] = [];
+
+// ── Leaked-daemon gate ────────────────────────────────────────────────────────────────────────────
+// A `daemon up` (directly, or through `dev-loop up`'s board ensure) forks a DETACHED, unref'd child
+// that outlives the CLI that started it. A suite that starts one and does not stop it leaves a live
+// process holding a port in the production band — measured as nine of them at once, each with its cwd
+// in a fixture directory that had been deleted, and as EADDRINUSE in an unrelated repo that binds
+// 8790. Nothing failed; the run went green and the operator found the processes by hand.
+//
+// The gate compares the pid SET before and after: a daemon that was already running (the operator's
+// own board) is not this run's business, and a new one is, whatever suite produced it. pgrep only —
+// no cwd probing, so it costs nothing and reads the same on macOS and Linux. A machine without pgrep
+// prints that the gate did not run rather than passing silently.
+const daemonsBefore = runningDaemonPids();
 
 for (const file of suites) {
   const env = { ...scrubFireEnv(), ...(SUITE_ENV[file] ?? {}) };
@@ -107,4 +122,19 @@ if (nonPassing.length) {
 }
 
 console.log(`\nSUITES: ${passed} passed, ${failed} failed, ${crashed} crashed (${total} total)`);
-process.exit(nonPassing.length > 0 ? 1 : 0);
+
+let leakedDaemons = 0;
+if (daemonsBefore === null) {
+  console.log("DAEMON LEAK GATE: skipped — `pgrep` is not available on this machine.");
+} else {
+  const after = runningDaemonPids() ?? new Set<number>();
+  const leaked = [...after].filter((pid) => !daemonsBefore.has(pid));
+  leakedDaemons = leaked.length;
+  if (leaked.length) {
+    console.log(`\nLEAKED DAEMONS: ${leaked.length} process(es) matching '${DAEMON_ENTRY_PATTERN}' outlived this run: ${leaked.join(", ")}.`);
+    console.log("  A suite that starts a daemon must stop it (daemon-harness.ts registerDaemonPid covers the detached case).");
+    console.log("  Inspect one with: ps -o lstart=,command= -p <pid> ; lsof -p <pid> | awk '$4==\"cwd\"'");
+  }
+}
+
+process.exit(nonPassing.length > 0 || leakedDaemons > 0 ? 1 : 0);

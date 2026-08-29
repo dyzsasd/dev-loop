@@ -114,8 +114,11 @@ try {
   const fakeBin = join(ROOT, "fake-opencode");
   writeFileSync(fakeBin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(join(dumpDir, "args.txt"))}\nprintf '%s' "$OPENCODE_PERMISSION" > ${JSON.stringify(join(dumpDir, "perm.json"))}\nprintf '%s' "$DEVLOOP_ACTOR/$DEVLOOP_PROJECT" > ${JSON.stringify(join(dumpDir, "identity.txt"))}\nexit 0\n`);
   chmodSync(fakeBin, 0o755);
+  // --no-daemon on every tick: a real (non-dry) scheduler run ensures the board daemon, which forks a
+  // DETACHED process that outlives this suite. Two of them survived every run of this file, holding
+  // production-band ports with their cwd in a fixture directory that had already been deleted.
   const runSched = (args: string[], env: Record<string, string | undefined>) =>
-    spawnSync(process.execPath, [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd: ws, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_OPENCODE_BIN: fakeBin, ...env } as NodeJS.ProcessEnv });
+    spawnSync(process.execPath, [join(hubRoot, "src", "run-agents.ts"), "--no-daemon", ...args], { cwd: ws, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_OPENCODE_BIN: fakeBin, ...env } as NodeJS.ProcessEnv });
   const ledgerPath = join(ws, ".dev-loop", "team", "fires.jsonl");
   const ledgerRows = () => (existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 

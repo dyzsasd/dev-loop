@@ -232,7 +232,13 @@ export async function upCli(argv = process.argv.slice(2)): Promise<number> {
 
   // Board daemon (service backend, local only): idempotent, health-gated — the ticket UI is live
   // before the chat opens. Best-effort like run's ensure; --no-daemon skips (tests/CI).
-  if (ws && !o.attach && !o.noDaemon && ws.file.team.backend === "service") {
+  //
+  // --dry-launch skips it too, and that is not a convenience: a dry launch prints the launch it WOULD
+  // perform and starts nothing, but this ensure ran before the print and forked a DETACHED daemon that
+  // outlived the command. Every suite that previews a launch left one behind, holding a port in the
+  // production band (8787+) until something killed it — measured as nine live daemons whose cwd was a
+  // deleted fixture directory, and as EADDRINUSE in an unrelated repo that binds 8790.
+  if (ws && !o.attach && !o.noDaemon && !o.dryLaunch && ws.file.team.backend === "service") {
     try { const { ensureHub } = await import("./hub.ts"); const c = await ensureHub(ws); if (c !== 0) console.warn(`dev-loop up: hub ensure returned ${c} (continuing — board may be down; \`dev-loop hub status\`)`); }
     catch (e) { console.warn(`dev-loop up: hub ensure failed (${(e as Error).message}); continuing`); }
   }
