@@ -6,8 +6,8 @@
 // doctor check reports the stranded claim. The distinction was never a contract, only which killer
 // happened to be a timer; the agent's judgement ended the fire in neither case. In the jinko-browser-use
 // workspace session-limit was 20 of 30 failures in 24 h, so this was the common shape, not the rare one.
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +61,40 @@ const ledger = join(ws, ".dev-loop", "team", "fires.jsonl");
 const rows = spawnSync("cat", [ledger], { encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { errorClass?: string });
 ok(rows.some((r) => r.errorClass === "session-limit"), `the fire is still ledgered as session-limit (${rows.map((r) => r.errorClass ?? "none").join(", ")})`);
 
-if (fails) console.log(`\n--- run output ---\n${runOut.split("\n").slice(-10).join("\n")}`);
+// The note left on the ticket must name the cause the ledger recorded. The mapping defaulted to the
+// literal "timeout/stall", so every class added to the union was silently mislabelled — a reader of the
+// ticket was told the fire timed out while the fire's own row said session-limit.
+const note = spawnSync("node", [cliPath, "comments", id], { cwd: ws, env: env({ DEVLOOP_PROJECT: "alpha" }), encoding: "utf8" }).stdout;
+ok(/session limit/i.test(note), `the release note names the provider session limit${/session limit/i.test(note) ? "" : `\n${note.slice(-300)}`}`);
+ok(!/timeout\/stall/.test(note), "…and does not claim the fire timed out or stalled");
+
+// ---- the operator's own stop is the same shape: the claim must not outlive the fire ----------------
+const created2 = cli(["ticket", "create", "--title", "Claimed then stopped by the operator", "--type", "Improvement", "--assignee", "pm", "--priority", "1"], ws);
+const id2 = (created2.stdout.match(/\bALPHA-\d+\b/) ?? [])[0] ?? "";
+cli(["ticket", id2 ? "update" : "update", id2, "--state", "Todo"], ws);
+const marker = join(tmp, "claimed");
+const slowBin = join(tmp, "claim-then-hang.sh");
+writeFileSync(slowBin, `#!/bin/sh
+node "${cliPath}" ticket update ${id2} --state "In Progress" >/dev/null 2>&1
+touch "${marker}"
+exec sleep 30
+`);
+chmodSync(slowBin, 0o755);
+const sched = spawn("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--interval", "pm=1s", "--stagger", "0"],
+  { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: slowBin }), stdio: ["ignore", "pipe", "pipe"] });
+let schedOut = "";
+sched.stdout.on("data", (d) => { schedOut += d; }); sched.stderr.on("data", (d) => { schedOut += d; });
+const schedExit = new Promise<number | null>((res) => sched.on("exit", (c) => res(c)));
+for (let i = 0; i < 120 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 250));
+ok(existsSync(marker), "fixture: the fire claimed a ticket and is still running when the stop arrives");
+sched.kill("SIGTERM");
+await Promise.race([schedExit, new Promise((r) => setTimeout(r, 25_000))]);
+
+const shown2 = cli(["ticket", id2], ws).stdout;
+ok(!/In Progress/.test(shown2), `an operator stop does not strand the claim it interrupted (${/In Progress/.test(shown2) ? "still In Progress" : "released"})`);
+const note2 = spawnSync("node", [cliPath, "comments", id2], { cwd: ws, env: env({ DEVLOOP_PROJECT: "alpha" }), encoding: "utf8" }).stdout;
+ok(/operator stopped the scheduler/.test(note2), "…and the note says the operator stopped it, not that infrastructure killed it");
+
+if (fails) console.log(`\n--- run output ---\n${runOut.split("\n").slice(-10).join("\n")}\n--- sched ---\n${schedOut.split("\n").slice(-8).join("\n")}`);
 console.log(fails === 0 ? "\nINFRA_KILL_RELEASE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

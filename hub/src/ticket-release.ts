@@ -12,12 +12,42 @@ import { updateTicketRow, insertComment, readTicketUpdateFields } from "./ticket
 // In Progress + matching fireId), re-checks each is still In Progress (a legitimately-advanced claim stays
 // untouched), and moves it back to Todo with the tier assignee preserved (split-dev pick filter rides assignee
 // on service). Best-effort: no-op when db is null/undefined (linear/local has no hub events ledger → Sweep backstop).
+/**
+ * Why the fire that held the claim ended. Every member is something OTHER than the agent's judgement —
+ * the watchdogs, the provider-side kills the taxonomy names, and the operator's own stop.
+ */
+export type KillClass =
+  | "timeout" | "stall" | "budget"
+  | "session-limit" | "spend-limit" | "rate-limit" | "auth" | "network" | "budget-deadline"
+  | "interrupt";
+
+/**
+ * The comment left on a released ticket. Every class has its own name, and an unrecognised one falls back
+ * to the class itself rather than to a fixed string: the previous form defaulted to the literal
+ * "timeout/stall", so widening the union silently mislabelled every new member — a session-limit release
+ * (the most common kind in practice) told the reader the fire had timed out, contradicting the errorClass
+ * in the same fire's ledger row.
+ */
+function releaseNote(killClass?: KillClass): string {
+  if (killClass === "interrupt") {
+    return "Released to Todo — the operator stopped the scheduler while this fire held the claim; runner-side automatic, not agent judgment. Any work the fire pushed is on its branch.";
+  }
+  const named: Partial<Record<KillClass, string>> = {
+    timeout: "fire timeout", stall: "output stall", budget: "budget perFireUsd",
+    "budget-deadline": "budget deadline", "session-limit": "provider session limit",
+    "spend-limit": "provider spend limit", "rate-limit": "provider rate limit",
+    auth: "provider auth failure", network: "network failure",
+  };
+  const name = killClass ? (named[killClass] ?? killClass) : "unrecorded cause";
+  return `Released to Todo — fire killed by infrastructure (${name}); runner-side automatic, not agent judgment.`;
+}
+
 export function releaseClaimedTickets(
   db: DatabaseSync | null | undefined,
   project: string,
   actor: string,
   fireId: string,
-  killClass?: "timeout" | "stall" | "budget" | "session-limit" | "spend-limit" | "rate-limit" | "auth" | "network" | "budget-deadline",
+  killClass?: KillClass,
 ): void {
   if (!db) return;
   try {
@@ -33,9 +63,7 @@ export function releaseClaimedTickets(
         const cur = readTicketUpdateFields(db, projectId, ticket_id);
         if (!cur || cur.state !== "In Progress") continue;
         updateTicketRow(db, projectId, actor, ticket_id, "In Progress", { ...cur, state: "Todo" });
-        const killName = killClass === "timeout" ? "timeout" : killClass === "stall" ? "stall" : killClass === "budget" ? "budget perFireUsd" : "timeout/stall";
-        insertComment(db, projectId, actor, ticket_id,
-          `Released to Todo — fire killed by infrastructure (${killName}); runner-side automatic, not agent judgment.`);
+        insertComment(db, projectId, actor, ticket_id, releaseNote(killClass));
       } catch { /* best-effort per ticket */ }
     }
   } catch { /* best-effort — never crash teardown */ }

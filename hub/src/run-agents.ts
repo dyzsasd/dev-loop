@@ -31,7 +31,7 @@ import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker, formatBreakerMsg, providerOf, classifyFireError, producedNoWork, EXIT_NO_WORK, readBreakerState, createBreakerPersistence, type BreakerRestoreItem } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter, makeStdoutCapture, usageFromCapture } from "./fire-usage.ts";
-import { releaseClaimedTickets } from "./ticket-release.ts";
+import { releaseClaimedTickets, type KillClass } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
 import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, watchdogKindOf, DEFAULT_PER_FIRE_USD, type FireUsage, type WatchdogKind } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -1906,10 +1906,16 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       // auth / network) leaves the ticket In Progress forever: `pick` reads Todo, so no lane returns to
       // it, and no doctor check reports a claim that nothing owns. `errorClass` is computed above, so the
       // decision uses the taxonomy rather than re-deriving it from the exit code.
+      // …and the operator's own stop belongs in the same set. An interrupted fire carries no errorClass by
+      // construction (it is not a failure), so it reaches none of the arms above, and its claim outlived
+      // it exactly the way an infrastructure kill's did: In Progress, owned by nobody, invisible to `pick`.
+      // The ticket goes back to Todo with its tier assignee intact, so the same lane resumes it — the work
+      // the fire pushed is on its branch either way. Observed live: JBU-69 sat claimed for three hours
+      // after a stop, with 723 lines stranded on a branch no lane would return to.
       const infraKill = errorClass !== null && INFRA_KILL_CLASSES.has(errorClass);
-      if (timedOut || stalled || budgetKilled || infraKill) {
+      if (timedOut || stalled || budgetKilled || infraKill || interrupted) {
         releaseClaimedTickets(fireDb, project, actor, fireId,
-          budgetKilled ? "budget" : timedOut ? "timeout" : stalled ? "stall" : (errorClass as "session-limit"));
+          budgetKilled ? "budget" : timedOut ? "timeout" : stalled ? "stall" : infraKill ? (errorClass as KillClass) : "interrupt");
       }
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
