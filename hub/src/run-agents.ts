@@ -2064,6 +2064,79 @@ function resolveWs(opts: Options): Workspace | null {
   return ws;
 }
 
+/**
+ * Run-lock holder as it is written to disk. `startedAt` (project/team lock) and `at` (break mutex) are
+ * both accepted so one reader serves both files.
+ */
+type RunLockHolder = { pid?: number; startedAt?: string; at?: string };
+
+function readRunLockHolder(lockPath: string): RunLockHolder | null {
+  try { return JSON.parse(readFileSync(lockPath, "utf8")) as RunLockHolder; } catch { return null; } // unreadable = stale
+}
+
+function runLockHolderAlive(h: RunLockHolder | null): boolean {
+  if (!h || typeof h.pid !== "number") return false;
+  try { process.kill(h.pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } // EPERM = exists, not ours
+}
+
+/**
+ * Acquire the run lock, breaking a stale one SAFELY.
+ *
+ * `wx` (O_CREAT|O_EXCL) makes exactly one creator win, and that is the entire guarantee the lock offers —
+ * but the takeover path used to throw it away: unlink-then-create, with nothing between the two steps.
+ * Two racers that both observed the dead holder both unlinked and both created, and the second unlink
+ * removed the lock the first had just won. Two schedulers then ran for one project — the double-fire (and
+ * two same-actor fires on one checkout) this lock exists to prevent.
+ *
+ * The break is serialized under a dedicated break-mutex, the same shape locks.ts:37-42 uses for the repo
+ * locks, and staleness is RE-CHECKED under it so a racer that already took over is never evicted. A
+ * break-mutex whose own owner died is cleared and the break retried, so a crashed racer costs one loop
+ * iteration rather than wedging every later start. The retry bound is small and finite: each pass either
+ * makes progress or hands back a definite answer, and a caller that is genuinely contended should be told
+ * so rather than spin.
+ */
+function claimRunLock(lockPath: string, stamp: () => string): { refusedBy: RunLockHolder | null; refusedReason: "live-holder" | "concurrent-takeover" | null; tookOver: RunLockHolder | null } {
+  const breakFile = `${lockPath}.break`;
+  let broke: RunLockHolder | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { writeFileSync(lockPath, stamp(), { flag: "wx" }); return { refusedBy: null, refusedReason: null, tookOver: broke }; }
+    catch { /* someone holds it — decide below */ }
+
+    const holder = readRunLockHolder(lockPath);
+    if (runLockHolderAlive(holder)) return { refusedBy: holder ?? {}, refusedReason: "live-holder", tookOver: null };
+
+    try {
+      writeFileSync(breakFile, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+      try {
+        // Re-read under the mutex: a racer may have taken over between our create and our break.
+        if (!runLockHolderAlive(readRunLockHolder(lockPath))) { try { unlinkSync(lockPath); } catch { /* already gone */ } broke = holder ?? {}; }
+      } finally {
+        try { if (readRunLockHolder(breakFile)?.pid === process.pid) unlinkSync(breakFile); } catch { /* released */ }
+      }
+      continue; // retry the create, now that the stale lock is gone
+    } catch (be) {
+      if ((be as { code?: string }).code !== "EEXIST") throw be;
+      const breaker = readRunLockHolder(breakFile);
+      if (!runLockHolderAlive(breaker)) { try { unlinkSync(breakFile); } catch { /* raced */ } continue; } // dead breaker: clear and retry
+      // A LIVE racer is mid-break. Do not break underneath it — that is the two-scheduler window. Report
+      // the racer, not the corpse in the lock file: naming the dead pid would send an operator hunting a
+      // process that does not exist.
+      return { refusedBy: breaker ?? {}, refusedReason: "concurrent-takeover", tookOver: null };
+    }
+  }
+  return { refusedBy: readRunLockHolder(lockPath) ?? {}, refusedReason: "live-holder", tookOver: null };
+}
+
+/**
+ * Release the run lock only if this process still HOLDS it. The exit hooks unlinked unconditionally, so a
+ * process that had lost the lock to a takeover deleted the winner's lock on its way out — re-opening the
+ * same two-scheduler window from the other end.
+ */
+function releaseRunLockIfOurs(lockPath: string): void {
+  try { if (readRunLockHolder(lockPath)?.pid === process.pid) unlinkSync(lockPath); } catch { /* already gone */ }
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   // Nothing named the state paths and no workspace answered: refuse here rather than composing every
@@ -2172,17 +2245,14 @@ async function main(): Promise<void> {
   // a liveness-checked stale takeover — the same shape as the daemon lifecycle's cold-start lock.
   const lockPath = join(process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb), `run-${project}.lock`);
   if (!opts.dryRun) {
-    const takeLock = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), { flag: "wx" });
-    try { takeLock(); } catch {
-      let holder: { pid?: number } = {};
-      try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
-      const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
-      if (alive) die(`another \`dev-loop run\` for '${project}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
-      console.log(`dev-loop run: taking over stale run lock (pid ${holder.pid ?? "?"} is gone)`);
-      try { unlinkSync(lockPath); } catch { /* raced */ }
-      takeLock();
+    {
+      const { refusedBy, refusedReason, tookOver } = claimRunLock(lockPath, () => JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+      if (refusedBy) die(refusedReason === "concurrent-takeover"
+        ? `another \`dev-loop run\` for '${project}' is taking over the stale lock right now (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); let it finish, then retry`
+        : `another \`dev-loop run\` for '${project}' is already running (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+      if (tookOver) console.log(`dev-loop run: taking over stale run lock (pid ${tookOver.pid ?? "?"} is gone)`);
     }
-    process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
+    process.on("exit", () => releaseRunLockIfOurs(lockPath));
     wireBreakerPersistence(opts, join(process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb), `breaker-${project}.json`)); // WS-C review 4: no workspace ⇒ no team dir; beside the run lock, per project like it
   }
 
@@ -2809,17 +2879,12 @@ function pruneCursor(state: SchedulerState, keys: string[]): SchedulerState {
 // The team run lock (O_EXCL + liveness-checked stale takeover) — mirrors the fixed-project lock in main().
 function acquireRunLock(lockPath: string, teamKey: string): void {
   mkdirSync(dirname(lockPath), { recursive: true });
-  const take = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, team: teamKey, startedAt: new Date().toISOString() }), { flag: "wx" });
-  try { take(); } catch {
-    let holder: { pid?: number } = {};
-    try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
-    const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
-    if (alive) die(`another \`dev-loop run\` for team '${teamKey}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
-    console.log(`dev-loop run: taking over stale team run lock (pid ${holder.pid ?? "?"} is gone)`);
-    try { unlinkSync(lockPath); } catch { /* raced */ }
-    take();
-  }
-  process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
+  const { refusedBy, refusedReason, tookOver } = claimRunLock(lockPath, () => JSON.stringify({ pid: process.pid, team: teamKey, startedAt: new Date().toISOString() }));
+  if (refusedBy) die(refusedReason === "concurrent-takeover"
+    ? `another \`dev-loop run\` for team '${teamKey}' is taking over the stale lock right now (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); let it finish, then retry`
+    : `another \`dev-loop run\` for team '${teamKey}' is already running (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+  if (tookOver) console.log(`dev-loop run: taking over stale team run lock (pid ${tookOver.pid ?? "?"} is gone)`);
+  process.on("exit", () => releaseRunLockIfOurs(lockPath));
 }
 
 // main() runs unconditionally — this file is only ever the entry point (nothing imports it; recordFire
