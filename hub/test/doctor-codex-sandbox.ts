@@ -82,9 +82,17 @@ try {
     const mixed = runCheck(wsWith({ agents: { sweep: { codexSandbox: "bypass" } } }, { loop: { ...LOOP, agents: { sweep: { codingAgent: "codex" }, ops: { codingAgent: "codex" } } } }));
     ok(mixed.warns.length === 1 && /ops \(via/.test(mixed.warns[0]) && !/sweep/.test(mixed.warns[0]),
       "W45: with one handle pinned and one not, the warning names only the unpinned one");
+    // team.agents.<h>.codingAgent DOES route the handle: effectiveProject merges the team block into
+    // every project's, and the launch-profile resolver reads the merged one, so a lane set to codex
+    // at team level fires as codex. This arm used to assert the opposite — that the key routed
+    // nothing — which was a transcription of the defect that made the settable key unreadable, not a
+    // contract. W45 must warn about the lane, because that lane really does fire on the safe default.
     const teamAgentsOnly = wsWith({ agents: { sweep: { codingAgent: "codex" } } }, { loop: LOOP });
-    ok(codexRoutedHandles(teamAgentsOnly, AGENT_HANDLES).length === 0 && runCheck(teamAgentsOnly).warns.length === 0,
-      "W45 routing: team.agents.sweep.codingAgent=codex routes nothing — the scheduler's launch-profile resolver does not read it (an honest silence, not a false warning)");
+    ok(codexRoutedHandles(teamAgentsOnly, AGENT_HANDLES).map((x) => x.handle).join() === "sweep",
+      `W45 routing: team.agents.sweep.codingAgent=codex routes sweep (got ${JSON.stringify(codexRoutedHandles(teamAgentsOnly, AGENT_HANDLES))})`);
+    const teamAgentsWarns = runCheck(teamAgentsOnly).warns;
+    ok(teamAgentsWarns.length === 1 && /sweep/.test(teamAgentsWarns[0]),
+      `W45 routing: …so an unpinned sandbox on it warns, naming the lane (${teamAgentsWarns[0]?.slice(0, 120) ?? "no warning"})`);
   }
 
   // ── 5. project-scope routing: defaultCodingAgent=codex on an ENABLED project puts every handle without

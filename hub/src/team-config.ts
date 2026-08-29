@@ -171,7 +171,9 @@ export interface ProjectEntry {
   blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
   notify?: unknown;                   // per-project §9 notify webhook override (E15; team.comms is canonical on v2 and bridges into it)
   communication?: unknown;            // the communication agent's ARTICLE config (E14); NOT the §22a digest gate (that keys on team.comms)
-  agents?: unknown;
+  // Typed like team.agents (it was `unknown`): validateAgentConfigs checks BOTH sides against the same
+  // shape, and effectiveProject merges them per lane, so a reader that can hold one can hold the other.
+  agents?: Record<string, AgentLaunchConfig>;
   models?: unknown;
   efforts?: unknown;
   reports?: unknown;
@@ -795,6 +797,18 @@ export function resolveDefaultBranchForPath(ws: Workspace, absDir: string): stri
 }
 
 // Behavior fields resolve project ∥ team (nearest wins, §4.2). Physical fields live only on the registry.
+/** Union of the lanes named on either side, each lane's fields merged with the project's winning. */
+function mergeAgentBlocks(
+  team: Record<string, AgentLaunchConfig> | undefined,
+  project: Record<string, AgentLaunchConfig> | undefined,
+): Record<string, AgentLaunchConfig> {
+  const out: Record<string, AgentLaunchConfig> = {};
+  for (const lane of new Set([...Object.keys(team ?? {}), ...Object.keys(project ?? {})])) {
+    out[lane] = { ...team?.[lane], ...project?.[lane] };
+  }
+  return out;
+}
+
 export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
   const p = ws.file.projects[key];
   if (!p) throw new Error(`unknown project '${key}'`);
@@ -813,6 +827,16 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     // intake merges FIELD-WISE (not whole-block nearest-wins): mode and todoDepthCap are orthogonal
     // knobs, so a project tuning only its cap must not silently drop a team-level "passive".
     ...(p.intake || t.intake ? { intake: { ...t.intake, ...p.intake } } : {}),
+    // agents merges PER LANE, then per field. team.agents is the team-level launch default and
+    // projects.<key>.agents overrides it — the reading `dev-loop team set`'s whitelist has always
+    // implied (it offers team.agents.<a>.{codingAgent,model,effort,codexSandbox} and no project-level
+    // equivalent) and the one the built-in profile table's own comments state. Before this, the
+    // projection below emitted the PROJECT block alone, so the settable key reached no reader at all:
+    // an operator who set team.agents.pm-review.model got no error and no change.
+    //
+    // Per FIELD, not whole-block nearest-wins, for the reason intake and hub already merge that way:
+    // a project pinning only `model` must not silently drop the team's `effort` for that lane.
+    ...(p.agents || t.agents ? { agents: mergeAgentBlocks(t.agents, p.agents) } : {}),
     // hub merges FIELD-WISE too, one level deeper for agentInterface (a per-coding-agent map): a project
     // flipping only claude must not silently drop a team-level codex setting (D8 rollback granularity).
     ...(p.hub || t.hub ? {
@@ -830,12 +854,11 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
 // This mirrors run-agents' resolveCodingAgent EXACTLY — per-agent project override, else the project's
 // (team-merged) defaultCodingAgent — and consults only the projects a fire can launch on (enabled, not
 // scratch). Steward fires resolve their profile against the first enabled project, so the per-project
-// walk covers them too. `team.agents.<h>.codingAgent` is deliberately NOT a source: the scheduler reads
-// team.agents for cadence, timeouts and codexSandbox but the launch-profile resolver never grew a reader
-// for codingAgent/model (LOOP-327 made the path settable; a dry-run with team.agents.sweep.codingAgent=
-// codex still renders sweep as cli=claude — verified 2026-08-27). Counting it would make W45 warn about
-// a lane that does not fire. `handles` is passed in rather than imported from seed.ts so this module
-// keeps its zero-dependency shape.
+// walk covers them too. `team.agents.<h>.codingAgent` IS a source, through effectiveProject's per-lane
+// merge: the launch-profile resolver reads the same merged block, so a lane routed to codex at team
+// level fires as codex and W45 must warn about it. (It was excluded while the resolver had no reader
+// for the key — counting it then would have warned about a lane that did not fire.) `handles` is
+// passed in rather than imported from seed.ts so this module keeps its zero-dependency shape.
 export interface CodexRoute { handle: string; via: string }
 export function codexRoutedHandles(ws: Workspace, handles: readonly string[]): CodexRoute[] {
   const out = new Map<string, string>();
@@ -966,7 +989,7 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
       reports: eff.reports,
       intake: eff.intake,
       hub: eff.hub,
-      agents: p.agents,
+      agents: eff.agents,
       models: p.models,
       efforts: p.efforts,
       defaultCodingAgent: eff.defaultCodingAgent,
