@@ -2243,23 +2243,43 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     if (moved && !opts.dryRun)
       die(`this workspace was MOVED (bundle '${moved.bundle ?? "?"}' at ${moved.movedAt ?? "?"}) — the home now runs elsewhere; use \`dev-loop up --attach <url>\` here, or delete .dev-loop/moved.json to un-retire`, 1);
   } catch (e) { if ((e as { code?: string }).code !== "ERR_MODULE_NOT_FOUND") throw e; }
-  const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
-  (cfg as ProjectsConfig).repos = ws.file.repos as unknown as Record<string, unknown>;
+  // ── Everything a FIRE reads out of the workspace, applied in ONE place ────────────────────────────
+  // Boot and hot reload call the same function, so they cannot disagree about what an edit reaches.
+  // Before this they did: the reload refreshed `ws`, the rotation and the provider registry, and left
+  // `cfg` — the projection resolveLaunchProfile reads model/effort/codingAgent from — captured `const`
+  // at boot, along with the per-fire budget ceiling. An operator editing team.agents.<lane>.model
+  // watched the reload line print and the next fire launch the old model; a raised
+  // team.budget.perFireUsd never moved the in-flight watchdog. team.budget.dailyUsd, read through the
+  // reloaded `ws` at tick time, DID take effect — one file, two halves disagreeing about when an edit
+  // counts.
+  //
+  // Every knob here is a pure read with an absent ⇒ default reading, so REMOVING one reverts on the
+  // next reload. Cadence and the per-agent timeouts are deliberately NOT here: applyConfigCadence
+  // writes into opts.intervals and has no "unset" arm, so re-applying it would make an added cadence
+  // live and a deleted one permanent — a scheduling change that needs its own decision, not a
+  // side effect of this one.
+  let cfg!: ProjectsConfig;
+  const applyWorkspaceConfig = (w: Workspace): void => {
+    cfg = toLegacyView(w) as unknown as ProjectsConfig;
+    cfg.repos = w.file.repos as unknown as Record<string, unknown>;
+    // Providers/permission follow the reload: an operator adding a registry entry + key mid-run must
+    // not need a scheduler restart. The rest joined them when the projection did.
+    opts.providers = w.file.team.providers ?? {};
+    opts.opencodePermission = w.file.team.opencodePermission;
+    opts.wsRoot = w.root; // Q9: fire env strips this workspace's secrets.env-injected keys
+    // WS-A — the team-level knobs the legacy view carries no `team` for: the boot-corpus switch (A1),
+    // the codex sandbox posture + claude permission surface (C4), the workspace itself (A6).
+    opts.ws = w;
+    opts.teamBootCorpus = w.file.team.bootCorpus;
+    opts.teamCodexSandbox = w.file.team.codex?.sandbox;
+    opts.agentCodexSandbox = Object.fromEntries(Object.entries(w.file.team.agents ?? {}).flatMap(([a, c]) => c?.codexSandbox ? [[a, c.codexSandbox]] : [])) as Partial<Record<Agent, CodexSandbox>>;
+    opts.claudeAllowedTools = w.file.team.claude?.allowedTools;
+    opts.claudePermissionMode = w.file.team.claude?.permissionMode;
+    perFireCeilingUsd = w.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD; // LOOP-230 in-flight watchdog: default ON, config overrides (only teamMain sets it ⇒ legacy path stays inert)
+  };
+  applyWorkspaceConfig(ws);
   const backend = ws.file.team.backend;
   // Model-provider routing: the TEAM-level registry + permission override ride the run options into
-  // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
-  opts.providers = ws.file.team.providers ?? {};
-  opts.opencodePermission = ws.file.team.opencodePermission;
-  opts.wsRoot = ws.root; // Q9: fire env strips this workspace's secrets.env-injected keys
-  // WS-A — the team-level knobs that never reached runAgent before (the legacy view carries no `team`):
-  // the boot-corpus switch (A1), the codex sandbox posture + claude permission surface (C4), and the
-  // workspace itself for the resolved-config block (A6). Read once at boot, like providers above.
-  opts.ws = ws;
-  opts.teamBootCorpus = ws.file.team.bootCorpus;
-  opts.teamCodexSandbox = ws.file.team.codex?.sandbox;
-  opts.agentCodexSandbox = Object.fromEntries(Object.entries(ws.file.team.agents ?? {}).flatMap(([a, c]) => c?.codexSandbox ? [[a, c.codexSandbox]] : [])) as Partial<Record<Agent, CodexSandbox>>;
-  opts.claudeAllowedTools = ws.file.team.claude?.allowedTools;
-  opts.claudePermissionMode = ws.file.team.claude?.permissionMode;
   // C4 review 1 — the notice used to resolve against the FIRST project only, so a codex lane routed by a
   // second project's config (or by a project-scope agents{} block) printed nothing. Every enabled project
   // is consulted; the line prints ONCE at boot, never per fire.
@@ -2344,7 +2364,6 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   const fireLedger = wsFireLedger(ws);
   fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
-  perFireCeilingUsd = ws.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD; // LOOP-230 in-flight watchdog: default ON, config overrides (only teamMain sets it ⇒ legacy path stays inert)
   try { const { pruneFireLedger } = await import("./metrics.ts"); pruneFireLedger(fireLedger); } catch { /* best-effort */ }
 
   const cwdFor = (project: string): string | null => primaryRepo(ws, project);
@@ -2494,12 +2513,11 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       const fresh = tryResolveWorkspace(ws.root);
       if (fresh) {
         ws = fresh; const c = rotationCandidates(ws); candidates.length = 0; candidates.push(...(opts.project ? c.filter((x) => x.key === opts.project) : c)); schedState = pruneCursor(schedState, candidates.map((x) => x.key));
-        // Providers/permission follow the reload (the teamComms fire-time-read pattern): an operator adding
-        // a registry entry + key mid-run must not need a scheduler restart. (The cfg/launch-profile projection
-        // staying stale across reloads is a pre-existing class — see the 2026-07 review notes.)
-        opts.providers = ws.file.team.providers ?? {};
-        opts.opencodePermission = ws.file.team.opencodePermission;
-        console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}`);
+        applyWorkspaceConfig(ws); // the SAME derivation boot ran — see its comment for what an edit reaches
+        // The line names what the reload picked up, not just that one happened. An operator who edits a
+        // lane's model has no other way to tell a reload that refreshed the launch profiles from one
+        // that did not, which is exactly the state this used to be in.
+        console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}; launch profiles refreshed; per-fire ceiling $${usdLabel(perFireCeilingUsd as number)}`);
       }
     } catch (e) { console.error(`dev-loop run: dev-loop.json reload failed (${(e as Error).message}); keeping the last-good config`); }
   };
