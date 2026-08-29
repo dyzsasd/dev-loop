@@ -960,6 +960,13 @@ function displayCommand(command: string, args: string[], prompt: string): string
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 let perFireCeilingUsd: number | null = null;                         // team mode: the resolved per-fire $ ceiling (LOOP-230); null ⇒ watchdog inert (legacy path, mirrors fireLedgerPath)
+// Kills the environment inflicted, as named by the taxonomy (breaker.ts classifyFireError). They share
+// the watchdogs' property that the agent's judgement did not end the fire, so a claim the fire was
+// holding must go back to Todo rather than stay In Progress with nothing owning it. "stalled",
+// "retry-loop" and the budget classes are absent on purpose: their own booleans already trigger the
+// release, and adding them here would double-fire it.
+const INFRA_KILL_CLASSES = new Set(["session-limit", "spend-limit", "rate-limit", "auth", "network"]);
+
 // LOOP-155: latched by the scheduler's SIGINT/SIGTERM forwarding path. Module scope, not a parameter,
 // because the classifier runs inside runAgent while the signal arrives in the scheduler loop — and it
 // is one-way on purpose: once the operator has asked to stop, every fire still in flight is being
@@ -1894,7 +1901,16 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       // fire, never what `--once` reports to the shell that invoked it.
       recordFire(opts.hubDb, project, actor, profile, Date.now() - startedAt, noWork ? EXIT_NO_WORK : exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
-      if (timedOut || stalled || budgetKilled) releaseClaimedTickets(fireDb, project, actor, fireId, budgetKilled ? "budget" : timedOut ? "timeout" : "stall"); // a budget kill must free its claim too (reclaimable next fire)
+      // A claim is released whenever INFRASTRUCTURE ended the fire, not only when one of the in-process
+      // watchdogs did. A provider-side kill (session-limit above all, plus spend-limit / rate-limit /
+      // auth / network) leaves the ticket In Progress forever: `pick` reads Todo, so no lane returns to
+      // it, and no doctor check reports a claim that nothing owns. `errorClass` is computed above, so the
+      // decision uses the taxonomy rather than re-deriving it from the exit code.
+      const infraKill = errorClass !== null && INFRA_KILL_CLASSES.has(errorClass);
+      if (timedOut || stalled || budgetKilled || infraKill) {
+        releaseClaimedTickets(fireDb, project, actor, fireId,
+          budgetKilled ? "budget" : timedOut ? "timeout" : stalled ? "stall" : (errorClass as "session-limit"));
+      }
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
