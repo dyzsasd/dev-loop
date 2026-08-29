@@ -9,9 +9,10 @@
 // outside it is a NON-authoritative convenience index that any in-workspace run rebuilds, and it no
 // longer sits under ~/.dev-loop.
 import { realpathSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, isAbsolute } from "node:path";
 import { loadWorkspace, normalizedRel, type Workspace } from "./team-config.ts";
-import { hubDbPath, tryHubDbPath, workspacesIndexPath } from "./paths.ts";
+import { devloopHome, hubDbPath, tryHubDbPath, workspacesIndexPath } from "./paths.ts";
 import { loadWorkspaceSecrets } from "./secrets.ts";
 
 export class WsNotFound extends Error {
@@ -171,7 +172,33 @@ export function readWorkspaceIndex(): Record<string, string> {
   catch { return {}; }
 }
 
+// An index entry for a workspace under the OS temp dir can only go stale: the OS reclaims that path,
+// and every later `DEVLOOP_TEAM=<key>` lookup through it fails with "its path is gone". Test fixtures
+// build workspaces there by the hundred, and each one that resolved wrote itself into the machine's
+// index — measured as a real index holding entries for a dozen `/var/folders/.../dl-*` paths that had
+// not existed for weeks. So the MACHINE-DEFAULT index records durable roots only.
+//
+// An index the caller has explicitly relocated (DEVLOOP_HOME) is that caller's own file and records
+// everything, temp roots included: that is the isolation seam the suites use, and the one place a
+// temp-rooted entry is meaningful, because the file dies with the fixture that owns it.
+function indexRecordsEphemeralRoots(): boolean { return devloopHome() !== undefined; }
+// BOTH temp roots, because a machine has both: `os.tmpdir()` is the per-user one ($TMPDIR, e.g.
+// /var/folders/.../T on macOS) and `/tmp` is the POSIX one, and fixtures across this repo use each.
+// Checking only the first left entries for /private/tmp/... in the index. canon() resolves the
+// symlink hop (/tmp → /private/tmp) so a path under either spelling is recognized, and returns null
+// where the directory does not exist (Windows has no /tmp), which simply drops that root.
+function isEphemeralRoot(root: string): boolean {
+  const r = canon(root);
+  if (!r) return false;
+  // Each temp root in BOTH spellings — as written and realpath-resolved (/tmp → /private/tmp on
+  // macOS). canon() leaves a path that does not exist yet unresolved, so a root under the symlinked
+  // spelling would never match the resolved prefix, and vice versa.
+  const roots = [tmpdir(), "/tmp"].flatMap((t) => [t, canon(t)]).filter((t): t is string => !!t);
+  return roots.some((t) => r === t || r.startsWith(t + "/"));
+}
+
 export function upsertWorkspaceIndex(teamKey: string, root: string): void {
+  if (!indexRecordsEphemeralRoots() && isEphemeralRoot(root)) return;
   try {
     const idx = readWorkspaceIndex();
     if (idx[teamKey] === root) return;
