@@ -6,7 +6,7 @@
 //     accept rate = Done ÷ (Done + verify-fail Cancels, i.e. the §3 In Review→Canceled edge), blocked count.
 //     On linear there is no local board mirror — the digest agent computes board numbers via MCP queries
 //     at fire time, per the §22 digest contract; this CLI never guesses them.
-import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
@@ -503,6 +503,15 @@ export function pruneFireLedger(ledgerPath: string, keepMs = 90 * 86_400_000, no
     const keep = readFireRows(ledgerPath).filter((r) => Date.parse(r.ts) >= cutoff);
     const tmp = `${ledgerPath}.${process.pid}.tmp`;
     writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""));
+    // The rename REPLACES the ledger inode, so the replacement carries the temp file's umask-derived
+    // mode (0644 on a default umask) rather than the ledger's. Rotation therefore undid an operator's
+    // `chmod 600` on every scheduler start, and recordFire's hardening only warns about a
+    // pre-existing loose mode instead of tightening it — the ledger reverted to world-readable at
+    // each restart and the finding could never be closed. Carry the mode across the replacement:
+    // the ledger's own when it had one, 0600 when it is new.
+    let mode = 0o600;
+    try { mode = statSync(ledgerPath).mode & 0o777; } catch { /* no ledger yet ⇒ the 0600 default */ }
+    try { chmodSync(tmp, mode); } catch { /* a filesystem without modes ⇒ rename anyway */ }
     renameSync(tmp, ledgerPath);
   } catch { /* rotation is best-effort; never blocks the scheduler */ }
 }

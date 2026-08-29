@@ -1,6 +1,6 @@
 // metrics.ts — fire metrics from fires.jsonl (window, success, suspect, medians), the 90d prune,
 // board KPIs from issue.transition events (accept rate = Done ÷ (Done + In Review→Canceled)), and the CLI.
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync, existsSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -66,6 +66,22 @@ try {
   // ── prune keeps only the retention window ──
   pruneFireLedger(ledger, 10 * DAY, NOW);
   ok(readFireRows(ledger).length === 5 && !readFileSync(ledger, "utf8").includes("torn"), "prune drops old + torn rows, keeps the window");
+
+  // ── prune carries the ledger's mode across the rename (the rotation must not widen it) ──
+  // The ledger holds fire output that sits next to credentials, so an operator tightens it to 0600.
+  // Rotation replaces the inode; before this was carried, every scheduler start reverted the file to
+  // the umask default and the operator's chmod could never stick.
+  chmodSync(ledger, 0o600);
+  pruneFireLedger(ledger, 10 * DAY, NOW);
+  ok((statSync(ledger).mode & 0o777) === 0o600,
+    `prune preserves a tightened ledger mode (got 0${(statSync(ledger).mode & 0o777).toString(8)})`);
+  // A ledger the operator deliberately left group-readable keeps that mode: prune carries the mode it
+  // finds, it does not impose one.
+  chmodSync(ledger, 0o640);
+  pruneFireLedger(ledger, 10 * DAY, NOW);
+  ok((statSync(ledger).mode & 0o777) === 0o640,
+    `prune carries the mode it finds rather than imposing one (got 0${(statSync(ledger).mode & 0o777).toString(8)})`);
+  chmodSync(ledger, 0o600);
 
   // ── board KPIs from issue.transition events ──
   const db = openDb(join(tmp, "hub.db"));
