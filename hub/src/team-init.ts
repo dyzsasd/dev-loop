@@ -3,7 +3,7 @@
 // an operator-known fact; the output is deterministic scaffolding (dev-loop.json + .dev-loop/ tree, and
 // for a service backend the hub.db + seeded _team intake project). Backend writes (verify Linear team,
 // labels, create projects) are deferred to the first `/dev-loop:add-project`, which runs in a coding CLI.
-import { writeConfigAtomic } from "./destructive-guard.ts";
+import { writeConfigAtomic } from "./atomic-write.ts";
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";

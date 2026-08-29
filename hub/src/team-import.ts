@@ -6,7 +6,7 @@
 // (with --hub-db) copies each project's hub rows — re-keying AUTOINCREMENT events so ids never collide.
 // The legacy tree is never modified and never deleted: the operator keeps running against it until the
 // printed per-class report satisfies them, and removing it is a separate, explicit step (LOOP-473).
-import { writeConfigAtomic } from "./destructive-guard.ts";
+import { writeConfigAtomic } from "./atomic-write.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, basename, isAbsolute, relative } from "node:path";
 import { isMainEntry } from "./is-entry.ts";

@@ -395,11 +395,17 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
     ok(where.length > 0, `coverage map: ${name} is imported and exercised by a suite (${where.join(", ") || "NOTHING"})`);
   }
 
-  // writeConfigAtomic is NOT exported, so AC2's "direct unit test" is unreachable for it without a
-  // src change this ticket's scope forbids. That is recorded as a CHECKED fact — if it is ever
-  // exported, the inventory arm above fails and this one does too, and the direct test becomes due.
-  ok(/^function writeConfigAtomic\(/m.test(src) && !/^export function writeConfigAtomic/m.test(src),
-    "coverage map: writeConfigAtomic is module-private — its contract is reachable only through commitBothHalves");
+  // writeConfigAtomic MOVED to src/atomic-write.ts: three config writers outside this module needed the
+  // same guarantee (team-edit's `team set`/`add-project`/`add-repo`, team-init, team-import), and a
+  // shared guarantee cannot live behind one module's private helper. The old note here said that if it
+  // were ever exported "the direct test becomes due" — it is now due and it exists. This module's own
+  // export surface is unchanged: it imports the helper and does not re-export it, so the inventory arm
+  // above still holds.
+  ok(!/function writeConfigAtomic\(/m.test(src) && /import \{ writeConfigAtomic \} from "\.\/atomic-write\.ts"/.test(src),
+    "coverage map: writeConfigAtomic lives in atomic-write.ts and is imported here, neither defined nor re-exported");
+  const atomicSuite = readFileSync(join(hubRoot, "test", "atomic-write.ts"), "utf8");
+  ok(/writeConfigAtomic/.test(atomicSuite) && /tmp/.test(atomicSuite),
+    "coverage map: …and the direct unit test its move made due exists in test/atomic-write.ts");
   const commitSuite = readFileSync(join(hubRoot, "test", "destructive-commit.ts"), "utf8");
   ok(/no \.tmp- residue/.test(commitSuite) && /byte-complete on disk \(rename, not a partial write\)/.test(commitSuite),
     "coverage map: writeConfigAtomic's tmp+rename contract IS asserted — the atomic-write and residue arms in destructive-commit.ts");
