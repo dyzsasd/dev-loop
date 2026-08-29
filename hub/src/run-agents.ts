@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
+import { laneScheduleBlock, toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
 import { secretsDeclaredKeys, scopeFireSecrets } from "./secrets.ts"; // Q9/LOOP-432: the per-fire secret-scoping strip set
@@ -2355,6 +2355,12 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   }
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
+  // Named at boot, so "why is this lane silent?" is answered by the first screen of the run log rather
+  // than by reading config. A lane parked only for SOME projects is not listed here — its skip line
+  // prints per candidate project, where the decision actually happens.
+  const parkedAtBoot = opts.agents.map((a) => [a, laneScheduleBlock(ws, a)] as const).filter(([, b]) => b);
+  if (parkedAtBoot.length)
+    console.log(`dev-loop run: ${parkedAtBoot.length} selected lane(s) PARKED in config and will not fire: ${parkedAtBoot.map(([a, b]) => `${a} (${b!.key})`).join(", ")}`);
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence, agentsWithCadence(ws.file.team.agents as Record<string, { cadence?: string }> | undefined));
   applyConfigTimeouts(opts, (agent) => ws.file.team.agents?.[agent]);
   preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
@@ -2470,6 +2476,11 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         warnUnseeded(agent, p);
         if (!opts.dryRun) continue; // skip the token burn; a dry-run previews on (same shape as the legacy preflight)
       }
+      // Project-scope park — checked before the lane/gate branches because it applies to every agent
+      // kind, and `continue` here tries the NEXT candidate project: a lane parked for one project keeps
+      // serving its siblings, which is the whole reason the switch resolves per project.
+      const projectPark = laneScheduleBlock(ws, agent, p);
+      if (projectPark) { console.log(`[${agent}] skipped: ${projectPark.reason}`); continue; }
       if (isLane(agent)) {
         // A pm/qa lane owns its own gate: the scheduler picks the lane's job from THIS project's board rows
         // (+ the change-gate for review/hunt). null ⇒ nothing eligible here ⇒ try the next candidate project.
@@ -2516,6 +2527,8 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, Date.now());
     for (const a of opts.agents) {
       if (budgetReason !== null) { console.log(`[${a}] launch refused: ${budgetReason}`); continue; } // refuse, loudly (AC3)
+      const parked = laneScheduleBlock(ws, a); // --once bypasses tick(), so the team-scope park is applied here too
+      if (parked) { console.log(`[${a}] skipped: ${parked.reason}`); continue; }
       await fireAgentOnce(a, ONCE_REASON);
     }
     process.exit(0);
@@ -2647,6 +2660,14 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       // immediately before the spawn, or nothing prints it and the gate's own skip line stands instead.
       const bootAnnounce = slot.bootLog;
       slot.bootLog = null;
+      // Team-scope park (agents.<h>.enabled:false / manual:true). Read through `ws`, which the hot
+      // reload replaces, so parking a lane mid-run takes effect on its next due tick without a restart.
+      const parked = laneScheduleBlock(ws, slot.agent);
+      if (parked) {
+        console.log(`[${slot.agent}] skipped: ${parked.reason}`);
+        slot.nextAt = now + opts.intervals[slot.agent]; // its own cadence — un-parking is a config edit, not a probe
+        continue;
+      }
       if (pauseReason !== null) {
         console.log(`[${slot.agent}] launch refused: ${pauseReason}`);
         // The slot's OWN cadence, never the breaker's probe cadence the budget arm below backs off to.

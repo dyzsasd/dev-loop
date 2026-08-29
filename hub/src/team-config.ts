@@ -7,7 +7,7 @@
 // config through here, and legacy consumers get an unchanged view via `toLegacyView` (the M1 de-risk).
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { AGENT_HANDLES, AGENT_HANDLE_SET, LANES, LANE_SET } from "./agent-handles.ts";
+import { AGENT_HANDLES, AGENT_HANDLE_SET, LANES, LANE_SET, LANE_ACTOR, STEWARD_HANDLES, type Lane } from "./agent-handles.ts";
 import { actionClasses } from "./approvals.ts"; // LOOP-394 — the ONE action-class registry (design §4)
 
 // ─── Types (impl §2.1) ───────────────────────────────────────────────────────
@@ -15,7 +15,11 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 
 // `manual:true` (P1-4): the operator runs this role by hand (no scheduled fires) — owner-liveness
 // (doctor W16 / the Sweep digest) reports its stranded tickets as "awaiting a human", never as a warn.
-export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean; fireTimeout?: string; stallTimeout?: string;
+export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean;
+  // The scheduling switch. `false` ⇒ the scheduler does not fire this lane; absent/true ⇒ it does.
+  // Distinct from `manual` on purpose — see laneScheduleBlock for which question each one answers.
+  enabled?: boolean;
+  fireTimeout?: string; stallTimeout?: string;
   // LOOP-237 — point THIS agent at the on-demand conventions slice instead of pushing the corpus.
   // Per-agent and default OFF: with it off the fire prompt is byte-identical to today.
   conventionsPull?: boolean;
@@ -403,6 +407,18 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
       W("W04", apath, `'${agent}' is not a known agent — this block is never applied (known: ${[...AGENT_HANDLES, ...LANES].join(", ")}). Check the spelling.`);
     if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) { E("E17", apath, "agent config must be an object"); continue; }
     const a = cfg as Record<string, unknown>;
+    // Both scheduling switches are typed. `manual` was accepted-and-unread for its scheduling meaning
+    // until 2026-08-29 (the scheduler contained no occurrence of the word), which is how an operator
+    // set it to stop a lane, watched the lane fire 11 minutes later, and got no line explaining why.
+    for (const field of ["manual", "enabled"] as const) {
+      if (a[field] !== undefined && typeof a[field] !== "boolean")
+        E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a boolean (got ${JSON.stringify(a[field])})`);
+      // A steward (sweep/ops/reflect/communication) fires at TEAM scope against `_team`, never per
+      // delivery project, so a project-scope park could only be accepted and ignored — the defect this
+      // switch exists to fix. Refused the same way project-scope `cadence` already is.
+      if (isProjectScope && a[field] !== undefined && (STEWARD_HANDLES as readonly string[]).includes(agent))
+        E("E17", `${apath}.${field}`, `projects.<key>.agents.${agent}.${field} is not honoured — ${agent} is a steward and fires at team scope, not per project; set it under team.agents.${agent}.${field} instead`);
+    }
     for (const field of ["fireTimeout", "stallTimeout"] as const) {
       if (a[field] !== undefined) {
         const v = a[field];
@@ -809,6 +825,50 @@ export function resolveDefaultBranchForPath(ws: Workspace, absDir: string): stri
 }
 
 // Behavior fields resolve project ∥ team (nearest wins, §4.2). Physical fields live only on the registry.
+/**
+ * Should the scheduler REFUSE to fire this lane, and why? `null` ⇒ fire it.
+ *
+ * Two keys, because the operator has two different intents and conflating them cost a lane's liveness
+ * warning during the incident that produced this function:
+ *
+ *   • `enabled: false` — "do not run this lane for now". The scheduler skips it; doctor's W16
+ *     owner-liveness warning is UNAFFECTED, because a deliberately parked lane still has stranded
+ *     tickets worth reporting. This is the stop-gap switch.
+ *   • `manual: true` — "a human runs this role BY HAND" (config-schema's own words). The scheduler
+ *     skips it AND W16 downgrades to an info line, because "no fires in 7d" is the expected state for
+ *     a human-run role rather than a finding.
+ *
+ * Until 2026-08-29 `manual` did neither of the first halves: run-agents.ts contained no occurrence of
+ * the word, so the key was accepted, never read, and doctor's own W16 remedy told operators to set it
+ * to stop a lane. An operator set it at 15:30Z and the lane fired again at 15:41:03Z for $3.91, with
+ * no skip line anywhere. `cadence: 0` is refused by E17 as "a hot loop, not a disable", and
+ * project-scope `cadence` is refused outright — so before `enabled` there was no per-lane off switch
+ * at all.
+ *
+ * Scope: `projectKey` given ⇒ the project's merged view (effectiveProject already layers
+ * projects.<key>.agents over team.agents per field), so a lane can be parked for ONE project and keep
+ * serving its siblings. Omitted ⇒ the team block alone, which is the whole-lane answer.
+ *
+ * Key lookup is the exact SchedKey first, then the lane's owning ACTOR — so `agents.pm.enabled:false`
+ * parks pm-maintenance/groom/review together, while `agents.pm-groom.enabled:false` parks just one.
+ */
+export function laneScheduleBlock(
+  ws: Workspace, agent: string, projectKey?: string,
+): { key: string; reason: string } | null {
+  const blocks = projectKey && ws.file.projects[projectKey]
+    ? (effectiveProject(ws, projectKey).agents ?? {})
+    : (ws.file.team.agents ?? {});
+  const actor = LANE_ACTOR[agent as Lane] ?? agent;
+  const scope = projectKey ? `projects.${projectKey}.agents` : "team.agents";
+  for (const key of agent === actor ? [agent] : [agent, actor]) {
+    const c = blocks[key];
+    if (!c) continue;
+    if (c.enabled === false) return { key, reason: `${scope}.${key}.enabled is false — this lane is parked in config` };
+    if (c.manual === true) return { key, reason: `${scope}.${key}.manual is true — this role is run by a human, not the scheduler` };
+  }
+  return null;
+}
+
 /** Union of the lanes named on either side, each lane's fields merged with the project's winning. */
 function mergeAgentBlocks(
   team: Record<string, AgentLaunchConfig> | undefined,

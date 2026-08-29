@@ -629,7 +629,7 @@ export function checkOwnerLiveness(ctx: BoardCtx): void {
   for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
     const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
     if (f.manual) out.info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open servable ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
-    else out.warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
+    else out.warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or say why the lane is silent in config: agents.${f.owner}.manual true if a HUMAN runs this role (the scheduler then skips it and this warning becomes an info line), or agents.${f.owner}.enabled false to park the lane while KEEPING this warning (both are config edits)`);
   }
 }
 
