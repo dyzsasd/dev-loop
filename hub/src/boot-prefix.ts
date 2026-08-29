@@ -153,7 +153,7 @@ export interface ResolvedFireConfig {
   projectKey: string;          // "" / "_team" on a team-scope fire
   teamKey?: string;
   backend: string;
-  mode?: string; autonomy?: string; devSplit?: boolean; intakeMode?: string; docSystem?: string;
+  mode?: string; autonomy?: string; humanBlocked?: string; devSplit?: boolean; intakeMode?: string; docSystem?: string;
   deployPolicy?: Record<string, string>;
   strategyDoc?: string;        // the resolved form label ("docs/STRATEGY.md" / "hubDoc:strategy" / "linearDocument:…") — never doc CONTENT
   repos: ResolvedRepoFact[];
@@ -163,7 +163,9 @@ export function renderResolvedConfig(r: ResolvedFireConfig): string {
   const kv = (k: string, v: unknown): string | null => (v === undefined || v === null || v === "" ? null : `${k}: ${String(v)}`);
   const head = [kv("project", r.projectKey || "(team scope — no single project)"), kv("team", r.teamKey), kv("backend", r.backend)].filter(Boolean).join(" · ");
   const lines: string[] = [`### Resolved config (§0a step 2, pre-assembled) — ${head}`];
-  const knobs = [kv("mode", r.mode), kv("autonomy", r.autonomy), kv("devSplit", r.devSplit === undefined ? undefined : r.devSplit ? "true" : "false"), kv("intake.mode", r.intakeMode), kv("docSystem", r.docSystem)].filter(Boolean);
+  // humanBlocked rides beside mode/autonomy: a fire that cannot see it would park a ticket for a human
+  // who is not coming (§9). The three together are the governance posture of this fire.
+  const knobs = [kv("mode", r.mode), kv("autonomy", r.autonomy), kv("humanBlocked", r.humanBlocked), kv("devSplit", r.devSplit === undefined ? undefined : r.devSplit ? "true" : "false"), kv("intake.mode", r.intakeMode), kv("docSystem", r.docSystem)].filter(Boolean);
   if (knobs.length) lines.push(`- ${knobs.join(" · ")}`);
   const dp = r.deployPolicy && Object.keys(r.deployPolicy).length ? Object.entries(r.deployPolicy).map(([e, v]) => `${e}=${v}`).join(", ") : null;
   lines.push(`- deployPolicy: ${dp ?? "(none — no ceiling)"}`);

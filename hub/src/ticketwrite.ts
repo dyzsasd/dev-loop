@@ -14,6 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { nowIso, nextTicketId, logEvent, actorExists, actorIsHuman, listHumanActorHandles, STATES, type State } from "./db.ts";
 import { designParentIds, isDesignParent, designPointerOf, docSlugOf, designOwnerOfSlug, designChildrenOf } from "./design-parent.ts"; // LOOP-344/345: ONE predicate, shared with opQueue
 import { handoffGateRejection } from "./handoff-gate.ts";
+import { effectiveProject, type HumanBlockedMode } from "./team-config.ts";
 import { acCompletenessRejection, unlandedWorkRejection } from "./ac-gate.ts"; // LOOP-198: the COMPLETENESS axis of acceptance; LOOP-575: the UNLANDED axis // LOOP-309: In Progress → In Review requires a COMMIT (local git only — never the forge)
 import { tryResolveWorkspace } from "./workspace.ts";
 import { effectiveRepo, reposOfProject } from "./team-config.ts";
@@ -268,6 +269,46 @@ function unlandedGateEnabled(): boolean {
   } catch { return false; }
 }
 
+/**
+ * Is `Human-Blocked` a parking place for THIS project? (`team.humanBlocked`, project override.)
+ *
+ * Resolved the way landingContextFor resolves its config: the write layer carries the project's UUID,
+ * so the key is translated here rather than threaded through every caller. Unreadable config ⇒ "on",
+ * the default and today's behaviour — a config the gate cannot read must not silently remove the
+ * operator's parking place.
+ */
+function humanBlockedModeFor(db: DatabaseSync, projectId: string): HumanBlockedMode {
+  try {
+    const ws = tryResolveWorkspace();
+    if (!ws) return "on";
+    const row = db.prepare("SELECT key FROM projects WHERE id=?").get(projectId) as { key?: string } | undefined;
+    if (!row?.key || !ws.file.projects[row.key]) return "on";
+    return effectiveProject(ws, row.key).humanBlocked;
+  } catch { return "on"; }
+}
+
+/**
+ * `humanBlocked:"off"` — an agent may not park a ticket for a human who is not coming.
+ *
+ * The state itself still exists and existing parked tickets are left exactly where they are (doctor
+ * lists them; rewriting somebody else's parking decision automatically is worse than leaving a visible
+ * to-do). What `off` removes is the ENTRY: PM decides on the strategy doc and the ticket's own facts
+ * and records a `Ruling:`, and only a genuinely external prerequisite still waits — parked at
+ * `Backlog` + `blocked` + its external-* labels, which is the §9c tracker, not the decision queue.
+ *
+ * The operator is never gated: a human parking a ticket for themselves is the one case that always
+ * makes sense.
+ */
+function humanBlockedEntryRejection(db: DatabaseSync, projectId: string, actor: string, fromState: string, toState: string): string | null {
+  if (toState !== "Human-Blocked" || fromState === "Human-Blocked") return null;
+  if (actorIsHuman(db, actor)) return null;
+  if (humanBlockedModeFor(db, projectId) !== "off") return null;
+  return `this project runs humanBlocked:"off" — Human-Blocked is not a parking place here, so '${actor}' cannot move ${"a ticket"} into it. `
+    + `Decide it: read the strategy doc and the ticket's own facts, then record the call as a Ruling comment and move the ticket accordingly (PM may post a Ruling while this project is "off"). `
+    + `Only a prerequisite ONLY A HUMAN can supply (a credential, an approval, an account) still waits — park that at Backlog + blocked + its external-prereq/external-access labels, which the §9c tracker reads. `
+    + `Nothing has been written.`;
+}
+
 function commentBodiesFor(db: DatabaseSync, ticketId: string): string[] {
   try {
     return (db.prepare("SELECT body FROM comments WHERE ticket_id=?").all(ticketId) as unknown as { body: string }[]).map((r) => r.body ?? "");
@@ -462,11 +503,17 @@ export function parseRuling(body: string): ParsedRuling | string | null {
 }
 export type RulingPolicy = { status: 400 | 403; error: string; ruling: null } | { status: 200; error: null; ruling: ParsedRuling | null };
 /** The policy half: is this body a ruling, and may THIS actor post one. */
-export function rulingCommentPolicy(db: DatabaseSync, actor: string, body: string): RulingPolicy {
+export function rulingCommentPolicy(db: DatabaseSync, actor: string, body: string, opts: { projectId?: string } = {}): RulingPolicy {
   const parsed = parseRuling(body);
   if (parsed === null) return { status: 200, error: null, ruling: null };
   if (typeof parsed === "string") return { status: 400, error: parsed, ruling: null };
-  if (!actorIsHuman(db, actor)) {
+  // `humanBlocked:"off"` moves the decision to PM, so PM must be able to record one. ONLY pm, and only
+  // while the project is "off": the reason a ruling is operator-only is that PM's next pass reads it as
+  // the human's answer, and with no human in the loop PM reading its OWN recorded decision is the
+  // intended shape rather than a confusion. Every other agent identity stays refused, and with the
+  // project "on" nothing changes at all.
+  const pmRules = actor === "pm" && opts.projectId !== undefined && humanBlockedModeFor(db, opts.projectId) === "off";
+  if (!pmRules && !actorIsHuman(db, actor)) {
     return { status: 403, error: `a ${RULING_PREFIX} comment is the operator's act — '${actor}' is an agent identity, and a ruling recorded against an agent would be read by PM's next pass as the human's answer. Nothing has been written. Human identities in this workspace: ${listHumanActorHandles(db).join(", ") || "(none seeded)"}. To ASK for a ruling, park the ticket Human-Blocked with a Bail-shape comment; the operator rules with: dev-loop rule <id> approve|reject|defer --reason "<why>"`, ruling: null };
   }
   return { status: 200, error: null, ruling: parsed };
@@ -592,7 +639,8 @@ export function updateTicketRow(
   // LOOP-575: resolved ONCE — the LOOP-309 handoff axis and the unlanded axis measure against the
   // same checkout, and re-resolving it per axis would re-read the workspace file on every write.
   const landingCtx = landingContextFor(db, projectId);
-  const gate = terminalExitRejection(actor, fromState, resolved)
+  const gate = humanBlockedEntryRejection(db, projectId, actor, fromState, resolved.state)
+    ?? terminalExitRejection(actor, fromState, resolved)
     ?? stagingDeployRejection(db, projectId, fromState, resolved)
     ?? designParentGate(db, projectId, id, actor, fromState, resolved, storedRow)   // LOOP-345 (R1+R2)
     ?? handoffGateRejection({ id, fromState, toState: resolved.state, actor, ...landingCtx,        // LOOP-309
@@ -683,7 +731,7 @@ export function createTicket(
 export function addComment(db: DatabaseSync, projectId: string, actor: string, id: string, body: string): WriteResult {
   if (!exists(db, projectId, id)) return { ok: false, status: 404, error: `no such ticket ${id}` };
   if (!(body ?? "").trim()) return { ok: false, status: 400, error: "comment body required" };
-  const pol = rulingCommentPolicy(db, actor, body); // WS-C review 3: the web form is a comment writer too — same ruling policy
+  const pol = rulingCommentPolicy(db, actor, body, { projectId }); // WS-C review 3: the web form is a comment writer too — same ruling policy
   if (pol.error !== null) return { ok: false, status: pol.status, error: pol.error };
   insertComment(db, projectId, actor, id, body);
   if (pol.ruling) recordRuling(db, projectId, actor, id, pol.ruling);

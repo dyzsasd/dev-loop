@@ -235,7 +235,7 @@ state** (below + §9). These state names are authoritative in both backends.
 | `Todo` | Groomed, ready to be picked up. **Reachable ONLY via PM promotion (§5a)** — with three carve-outs: an owner's verify-fail follow-up (already-groomed work, stays Todo), an un-block re-queue, and a CONFIRMED ops incident (prod-down cannot wait a PM fire). | PM (promotion, §5a); owner (verify-fail follow-up); Dev (un-block); Ops (confirmed incident only) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
 | `In Review` | Dev finished; awaiting verification by the owner. **Re-read the ticket immediately before this move** — see below | Dev (done coding) |
-| `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
+| `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9). Resumes to `Todo` on resolution. **Only while `humanBlocked:"on"` (the default)**: under `"off"` nobody is coming, the write layer refuses an agent's move into it, and PM decides and records a `Ruling:` instead (§9). | PM (when it can't resolve a block) / operator |
 | `Done` | Verified passing against acceptance criteria | Owner (PM/QA) |
 | `Canceled` | Won't-do / obsolete / superseded | Any agent, with a comment why |
 | `Duplicate` | Same as another ticket; set `duplicateOf` | Dev (during grooming) |
@@ -527,7 +527,8 @@ scan `project` + `dev-loop` + `blocked` + their owner label (always `project`-sc
 additionally scans `blocked`+`needs-pm` ACROSS owner labels** — and for each either **resolve** (answer /
 fix, remove `blocked` + `needs-*`, leave `Todo`, encode any safety in the ACs — resolving MEANS unblocking,
 never replying and leaving it parked; a standing block is reserved for human-only calls: irreversible prod
-actions, money, legal, security) or **cancel** (`Canceled`/`Duplicate` + comment). **Re-scan, don't
+actions, money, legal, security — and under **`team.humanBlocked:"off"`** even those are not parked: PM
+rules on them itself and only an external prerequisite waits, at `Backlog`+`blocked`+its labels) or **cancel** (`Canceled`/`Duplicate` + comment). **Re-scan, don't
 fire-and-forget:** an escalation resolves out-of-band as a comment and `blocked` may be stripped while
 `needs-*` lingers — re-read the latest comment on tickets you parked, treat `needs-*` without `blocked` as
 "finish the job", clear the stale label and act (a sensitive/irreversible action is executed ATTENDED by

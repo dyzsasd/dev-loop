@@ -47,6 +47,16 @@ labels workstream alongside the existing `external-prereq`. Reference them by na
    only after a successful POST; drop it on unpark). Pull `references/notify.md`. A just-authorized
    sensitive/irreversible op you execute ATTENDED yourself this fire — never hand it to unattended Dev.
 
+   **Under `humanBlocked:"off"` (the fire's knobs line says which) there is nobody to park for.** The write
+   layer refuses the move. Instead: **PM decides it** from `team.docs.vision`/the project's strategyDoc and
+   the ticket's own facts, records the call as a `Ruling: approve|reject — <why>` comment (PM is the one
+   agent identity allowed to post one while "off"), and moves the ticket accordingly. The exception is a
+   prerequisite ONLY a human can supply — a credential, an account, an approval (`external-prereq` /
+   `external-access`): that still waits, but at **`Backlog` + `blocked` + those labels**, where the §9c
+   tracker reads it, NOT in the decision queue. An irreversible prod/money/legal/security action you cannot
+   take unattended is not a park either — leave the ticket `Todo` + `blocked` with the `Bail-shape:` comment
+   saying what an attended operator must run.
+
 ## Exit criteria
 Every scanned ticket is resolved (unblocked to `Todo`), routed to its owner, or parked with a real edge /
 `Human-Blocked` + notify. No ticket left with a supplied answer still wearing `blocked`.

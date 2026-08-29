@@ -90,6 +90,12 @@ export type Autonomy = (typeof AUTONOMIES)[number];
 // through, never stored and never resolved. It exists so a workspace written by an older
 // `team init` keeps loading without a migration touching the operator's file.
 export const AUTONOMY_INPUTS = ["ask", "full", "guarded"] as const;
+// Whether `Human-Blocked` exists as a PARKING PLACE. Orthogonal to autonomy on purpose: `autonomy`
+// decides how boldly an agent decides, `humanBlocked` decides whether there is still anybody to wait
+// for. `ask` + `off` is a legal, meaningful pair — PM decides cautiously, by itself. The STATE always
+// exists (history is never migrated); `off` changes who may park a ticket there and who may take it out.
+export const HUMAN_BLOCKED_MODES = ["on", "off"] as const;
+export type HumanBlockedMode = (typeof HUMAN_BLOCKED_MODES)[number];
 export type AutonomyInput = (typeof AUTONOMY_INPUTS)[number];
 
 // The alias DIRECTION is the safety property, not an implementation detail: `guarded` meant
@@ -114,6 +120,7 @@ export interface TeamBlock {
   comms?: { provider: "slack" | "lark"; webhookEnv: string };
   reports?: unknown;
   agents?: Record<string, AgentLaunchConfig>;
+  humanBlocked?: HumanBlockedMode;   // "on" (default) ⇒ Human-Blocked is a parking place; "off" ⇒ PM rules instead
   defaultCodingAgent?: string;
   codingAgentDefaults?: Record<string, { model?: string; effort?: string }>;
   hub?: HubBlock;
@@ -174,6 +181,7 @@ export interface ProjectEntry {
   // Typed like team.agents (it was `unknown`): validateAgentConfigs checks BOTH sides against the same
   // shape, and effectiveProject merges them per lane, so a reader that can hold one can hold the other.
   agents?: Record<string, AgentLaunchConfig>;
+  humanBlocked?: HumanBlockedMode;   // per-project override of team.humanBlocked
   models?: unknown;
   efforts?: unknown;
   reports?: unknown;
@@ -269,11 +277,13 @@ type Emit = (code: string, path: string, message: string) => void;
 // silence and then resolved to itself, so `"fulll"` reached an agent's prose as an autonomy posture
 // no section defines — the operator's typo decided nothing and said nothing. The path in the message
 // is the exact key to fix, which is the whole point of naming it here rather than at the read site.
-function checkGovernanceTokens(o: { mode?: unknown; autonomy?: unknown }, base: string, E: Emit): void {
+function checkGovernanceTokens(o: { mode?: unknown; autonomy?: unknown; humanBlocked?: unknown }, base: string, E: Emit): void {
   if (o.mode !== undefined && !(MODES as readonly unknown[]).includes(o.mode))
     E("E19", `${base}.mode`, `mode must be one of ${MODES.join("|")} (got ${JSON.stringify(o.mode)})`);
   if (o.autonomy !== undefined && !(AUTONOMY_INPUTS as readonly unknown[]).includes(o.autonomy))
     E("E19", `${base}.autonomy`, `autonomy must be one of ${AUTONOMIES.join("|")} (got ${JSON.stringify(o.autonomy)}) — "guarded" is also accepted as a legacy alias and resolves to "ask"`);
+  if (o.humanBlocked !== undefined && !(HUMAN_BLOCKED_MODES as readonly unknown[]).includes(o.humanBlocked))
+    E("E19", `${base}.humanBlocked`, `humanBlocked must be one of ${HUMAN_BLOCKED_MODES.join("|")} (got ${JSON.stringify(o.humanBlocked)}) — "off" means Human-Blocked is not a parking place and PM rules instead (§9)`);
 }
 
 // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
@@ -777,7 +787,9 @@ export function loadWorkspace(root: string): Workspace {
 // ─── Resolution API (impl §2.3) ───────────────────────────────────────────────
 export interface ResolvedRepo extends RepoEntry { ref: string; absPath: string; defaultBranch: string }
 // `autonomy` NARROWS on resolution: the input alias set goes in, the canonical §12a pair comes out.
-export interface ResolvedProject extends Omit<ProjectEntry, "autonomy"> { key: string; backend: string; mode?: Mode; autonomy?: Autonomy; docSystem?: string; reports?: unknown }
+export interface ResolvedProject extends Omit<ProjectEntry, "autonomy" | "humanBlocked"> { key: string; backend: string; mode?: Mode; autonomy?: Autonomy; docSystem?: string; reports?: unknown;
+  /** Always resolved (absent config ⇒ "on"), so no reader re-defaults it and they cannot disagree. */
+  humanBlocked: HumanBlockedMode }
 
 export function effectiveRepo(ws: Workspace, ref: string): ResolvedRepo {
   const r = ws.file.repos[ref];
@@ -821,6 +833,8 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     // legacy `guarded` keeps working untouched and every reader sees the canonical `ask`.
     autonomy: normalizeAutonomy(p.autonomy ?? t.autonomy),
     docSystem: p.docSystem ?? t.docSystem,
+    humanBlocked: p.humanBlocked ?? t.humanBlocked ?? "on", // absent ⇒ "on": today's behaviour, byte for byte
+
     reports: p.reports ?? t.reports,
     defaultCodingAgent: p.defaultCodingAgent ?? t.defaultCodingAgent,
     codingAgentDefaults: p.codingAgentDefaults ?? t.codingAgentDefaults,

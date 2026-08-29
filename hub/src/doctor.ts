@@ -413,13 +413,24 @@ export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string;
       // the arm W20 prescribes has to be decided from the OLDEST item's own project — a workspace can
       // hold one project with the board writable and another without.
       const allItems: Array<{ item: DecisionItem; enteredAt: string; pid: string; key: string }> = [];
+      // `humanBlocked:"off"` means this project has nobody to wait for: PM decides and records a
+      // Ruling. A queue W20 counts for such a project would be a stall report against a queue that is
+      // not supposed to drain by human action — so its items are reported as an informational line
+      // instead, including the ones parked BEFORE the switch, which are deliberately not migrated
+      // (rewriting someone else's parking decision automatically is worse than a visible to-do).
+      const offParked: string[] = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findHubProject(db, key);
         if (!pid) continue;
-        for (const t of decisionQueue(db, pid) as DecisionItem[]) {
-          allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t), pid, key });
+        const items = decisionQueue(db, pid) as DecisionItem[];
+        if (effectiveProject(ws, key).humanBlocked === "off") {
+          for (const t of items) if (t.kind !== "approval") offParked.push(`${t.id} (${key})`);
+          continue;
         }
+        for (const t of items) allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t), pid, key });
       }
+      if (offParked.length)
+        ctx.out.info(`decision queue: ${offParked.length} ticket(s) sit in Human-Blocked on a project running humanBlocked:"off" (${offParked.slice(0, 5).join(", ")}${offParked.length > 5 ? ", …" : ""}) — nothing will come for them, because the decision is PM's here. Clear each with \`dev-loop rule <id> approve|reject --reason "<why>"\`, or set the project back to "on". They were left where they were on purpose: the switch never rewrites a parking decision somebody already made.`);
       if (allItems.length > 0) {
         allItems.sort((a, b) => a.enteredAt < b.enteredAt ? -1 : a.enteredAt > b.enteredAt ? 1 : 0);
         const { item: oldest, enteredAt: oldestEnteredAt, pid: oldestPid, key: oldestKey } = allItems[0];

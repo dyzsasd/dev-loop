@@ -9,7 +9,7 @@ import { join, isAbsolute } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveWorkspace, wsHubDb, wsStateRoot } from "./workspace.ts";
-import { validateTeamFile, referencingProjects, isTeamProject, normalizeAutonomy, MODES, AUTONOMY_INPUTS, CODEX_SANDBOX_MODES, type TeamFile, type Workspace, type AutonomyInput } from "./team-config.ts";
+import { HUMAN_BLOCKED_MODES, validateTeamFile, referencingProjects, isTeamProject, normalizeAutonomy, MODES, AUTONOMY_INPUTS, CODEX_SANDBOX_MODES, type TeamFile, type Workspace, type AutonomyInput } from "./team-config.ts";
 import { confirmationToken, isolationVerdict, commitBothHalves, TOKEN_PREFIX } from "./destructive-guard.ts";
 import { openDb } from "./db.ts";
 import { ensureSeed, findProject, AGENT_HANDLES } from "./seed.ts";
@@ -47,6 +47,9 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   // legacy `guarded` because it is genuinely accepted; the write below stores the canonical `ask`, so
   // the settable surface can never put the deprecated token back into the file.
   { re: /^team\.autonomy$/, kind: AUTONOMY_INPUTS },
+  // Beside mode/autonomy because it is the third governance knob (§9): they decide how boldly an
+  // agent decides; this decides whether there is still anybody to wait for.
+  { re: /^team\.humanBlocked$/, kind: HUMAN_BLOCKED_MODES },
   { re: /^projects\.[^.]+\.autonomy$/, kind: AUTONOMY_INPUTS },
   { re: /^projects\.[^.]+\.mode$/, kind: MODES },
   { re: /^team\.linearTeam$/, kind: "string" },
@@ -124,8 +127,8 @@ export const SETTABLE: ReadonlyArray<{ re: RegExp; kind: SetKind }> = [
   { re: /^repos\..+?\.deploy\.environments\.[^.]+\.healthCheck$/, kind: "string" },
 ];
 const SETTABLE_SUMMARY =
-  "team.{mode,autonomy,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,codex.sandbox,agents.<a>.{codingAgent,model,effort,codexSandbox}}, " +
-  "projects.<key>.{enabled,weight,devSplit,scratch,mode,autonomy,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
+  "team.{mode,autonomy,humanBlocked,linearTeam,git.defaultBranch,comms.provider,comms.webhookEnv,intake.mode,intake.todoDepthCap,agentReviewers,budget.dailyUsd,budget.perFireUsd,backup.{everyHours,keep,dir},approvals.enforce,codex.sandbox,agents.<a>.{codingAgent,model,effort,codexSandbox}}, " +
+  "projects.<key>.{enabled,weight,devSplit,scratch,mode,autonomy,humanBlocked,testEnv.baseUrl,testEnv.authConstraint,intake.mode,intake.todoDepthCap," +
   "communication.{cadence,language,audience,tone,maxWords,sourceWindowDays,output,outputDir,repoOutputDir,includeUnreleased}," +
   "notify.{type,webhookEnv,secretEnv}}, " +
   "repos.<ref>.deploy.{style,healthCheck,environments.<env>.{auto,deployPrPrefix,command,healthCheck}}, " +

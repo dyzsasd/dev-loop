@@ -802,6 +802,7 @@ function resolvedConfigFor(opts: Options, cfg: ProjectsConfig | null, project: s
     const eff = effectiveProject(ws, profileProject);
     return {
       projectKey: project, teamKey: t.key, backend, mode: eff.mode, autonomy: eff.autonomy, devSplit,
+      humanBlocked: eff.humanBlocked,
       intakeMode: eff.intake?.mode, docSystem: eff.docSystem, deployPolicy: t.deployPolicy,
       strategyDoc: strategyLabel(p.strategyDoc), repos: repoFacts(profileProject),
     };

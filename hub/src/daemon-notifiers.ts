@@ -10,6 +10,8 @@ import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
 import { fireMetrics, decisionQueue } from "./metrics.ts"; // LOOP-393: the approval arm of the queue, so the notifier shares its scope rule
+import { tryResolveWorkspace } from "./workspace.ts";
+import { effectiveProject } from "./team-config.ts";
 
 // ─── DL-59 send-target resolution, shared by every notifier tick ───────────────────────────────────
 // ONE send target: the DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project with a
@@ -56,6 +58,19 @@ export function resolveBlockedReminderHours(settings: unknown, commsConfigured: 
 // the events ledger, so a daemon restart never double-sends and needs no counter. This is the daemon's
 // ONE write to the SoR (the human_blocked.notified event), done via the writable `writeDb`, NEVER the
 // query_only read connection. Absent a channel OR humanBlockedReminderHours≤0 ⇒ no timer (true no-op).
+/**
+ * Does this project run `humanBlocked:"off"`? Resolved from the workspace by project KEY, which the
+ * daemon carries. Unreadable config ⇒ false (reminders keep working): a notifier that goes silent
+ * because it could not read a file is the failure the reminder exists to prevent.
+ */
+function humanBlockedOffFor(projectKey: string): boolean {
+  try {
+    const ws = tryResolveWorkspace();
+    if (!ws || !ws.file.projects[projectKey]) return false;
+    return effectiveProject(ws, projectKey).humanBlocked === "off";
+  } catch { return false; }
+}
+
 export async function blockedNotifyTick(opts: {
   writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
   cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
@@ -64,6 +79,11 @@ export async function blockedNotifyTick(opts: {
   // DL-59: ONE send target (DB channel wins over the §9 notify webhook — see resolveTarget) or a true no-op.
   const target = resolveTarget(writeDb, projectId, opts.notify);
   if (!target) return 0;
+  // `humanBlocked:"off"` (§9): this project has nobody to remind. Reminding anyway would page a human
+  // about a queue the configuration says PM owns, every cadence, forever — the shape that trains an
+  // operator to mute the channel. The In-Review-for-operator arm below is NOT affected: that is a
+  // human's own review, not a park.
+  if (humanBlockedOffFor(projectKey)) return 0;
   // P1-3: the operator's DECISION QUEUE is ONE set — Human-Blocked (the loop parked on a human) ∪
   // In Review assigned to the operator (§9a board-approval stops; the field's MP-211 sat 4 days with
   // no wire because only Human-Blocked was covered). Human-Blocked wording + markers stay byte-identical;
