@@ -105,7 +105,7 @@ level (trim by moving, never dropping history). If `team.docs.lessons.mirror` is
 INDEX as a backend document afterwards (one-way — the workspace file stays authoritative). **Weekly,
 additionally:** ONE consolidated team retrospective (per-project one-liners, the KPI table verbatim
 from `dev-loop metrics --window 7d --json`, cross-project patterns, library health) to
-`.dev-loop/team/reports/reflect-agent/`, plus the **north-star delta** (§22a): read `team.docs.vision`
+`${DEVLOOP_DATA_DIR:-~/.dev-loop}/_team/reports/reflect/`, plus the **north-star delta** (§22a): read `team.docs.vision`
 + each enabled project's strategyDoc and answer in ≤5 lines which vision goals moved this week (newly
 ✅/shipped), which Decisions were appended, and any recorded vision-tension — it feeds the
 communication agent's §22a digest. Nudge PM with a comment when ✅/Decisions markers are undated, so

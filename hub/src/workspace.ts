@@ -91,6 +91,11 @@ const canon = (p: string): string | null => { try { return realpathSync(p); } ca
 // ─── The .dev-loop/ path API (impl §3.2, R1) ─────────────────────────────────
 export function wsStateRoot(ws: Workspace): string { return join(ws.root, ".dev-loop"); }
 export function wsProjectDir(ws: Workspace, key: string): string { return join(wsStateRoot(ws), key); }
+// The §22 reports tree for one project key (`_team` for the team scope). It is the path a fire
+// composes itself: DEVLOOP_DATA_DIR is set to wsStateRoot(ws) at launch (run-agents.ts), and the
+// agent appends <project-key>/reports/<handle>/. A reader that resolves it from the environment
+// instead gets a different tree whenever the environment is unset, which is every CLI invocation.
+export function wsReportsRoot(ws: Workspace, projectKey: string): string { return join(wsProjectDir(ws, projectKey), "reports"); }
 export function wsTeamDir(ws: Workspace): string { return join(wsStateRoot(ws), "team"); }
 export function wsLessonsDir(ws: Workspace): string { return join(wsStateRoot(ws), "lessons"); }
 export function wsWorktree(ws: Workspace, ticket: string, ref: string): string { return join(wsStateRoot(ws), "wt", ticket, ref); }

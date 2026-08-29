@@ -309,7 +309,7 @@ model.
 
 You steer the loop by reviewing its trail, not by editing code inside the loop.
 - **Reports.** Each agent writes a daily log rolled up weekly/monthly under
-  `<workspace>/.dev-loop/<project-key>/reports/<agent>/` — machine-local, never committed,
+  `<workspace>/.dev-loop/<project-key>/reports/<handle>/` — machine-local, never committed,
   secret/PII-safe. A no-op fire writes nothing.
 - **点评.** Drop a sibling `<report>.review.md` with free-form prose; at its next run the
   agent distills your critique into one `lessons.md` rule under its own section and obeys it

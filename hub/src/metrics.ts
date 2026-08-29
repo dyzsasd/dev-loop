@@ -1212,9 +1212,12 @@ export function reportTrailGaps(
   for (const h of handles) {
     const days = firedDays.get(h);
     if (!days?.size) continue;                       // zero fires in the window is W16's business
-    // §22's tree is <reports>/<handle>-agent/daily/<YYYY-MM-DD>.md. The `-agent` suffix is the
-    // mapping, and getting it wrong would make every agent look untraced.
-    const dir = join(reportsRootDir, `${h}-agent`, "daily");
+    // §22's tree is <reports>/<handle>/daily/<YYYY-MM-DD>.md. The directory segment is the RUNTIME
+    // handle — the identity a fire receives as DEVLOOP_ACTOR and writes under — and getting it wrong
+    // would make every agent look untraced. Measured: 8 of 8 agents on a live workspace wrote
+    // `<handle>/`, while this check and the §22 prose both said `<handle>-agent/`; the prose was
+    // corrected to the runtime name rather than the runtime to the prose.
+    const dir = join(reportsRootDir, h, "daily");
     let present: Set<string>;
     try { present = new Set(readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3))); }
     catch { present = new Set(); }                   // no tree yet ⇒ nothing reported, which IS the finding

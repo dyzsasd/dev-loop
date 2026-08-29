@@ -1208,8 +1208,8 @@ capability, on by default, with no change to ticket / product / board behavior.
 
 **Resident rules (every agent, every fire):**
 - **Where:** machine-local, never committed, §16-bound (no secrets / verbatim PII) —
-  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/{daily,weekly,monthly}/` (`<agent>` = the
-  full skill name, e.g. `pm-agent`), one file per period (`%F` / `%G-W%V` / `%Y-%m`), lazily created; `reports.sink:"linear"` (§23) is the opt-in alternative.
+  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<handle>/{daily,weekly,monthly}/` (`<handle>` = the
+  agent's runtime handle, the value of `DEVLOOP_ACTOR` — e.g. `pm`, `junior-dev`), one file per period (`%F` / `%G-W%V` / `%Y-%m`), lazily created; `reports.sink:"linear"` (§23) is the opt-in alternative.
 - **Markers = the tree + a UTC shell call, never date reasoning:** `TODAY=$(date -u +%F)`,
   `WEEK=$(date -u +%G-W%V)`, `MONTH=$(date -u +%Y-%m)` (`-u` is load-bearing); the newest report per level
   matches ONLY the dated grammar (`^\d{4}-\d{2}-\d{2}\.md$` etc.), never a bare `*.md` glob.

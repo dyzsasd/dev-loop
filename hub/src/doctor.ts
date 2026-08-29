@@ -18,14 +18,13 @@ import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP
 import { tryResolveStrategyDocStat, type StrategyDocStat } from "./context-bill.ts"; // LOOP-282: the §20 form-rule resolver, shared with the bill
 import { STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "./lessons.ts";
 import { reportTrailGaps, type DecisionItem } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
-import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { platform } from "node:os";
 import { sameDaemonCode, readAutostartBinding, describeAutostartBinding, listSystemdBindings } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
+import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, wsReportsRoot, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, codexRoutedHandles, codexSandboxUnpinned, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { projectRowDivergences } from "./project-row-sync.ts"; // LOOP-410: W42 shares the ONE "diverged" definition with the projection that repairs it
@@ -1174,15 +1173,20 @@ export function checkReportTrail(ws: Workspace, warn: (msg: string) => void): vo
     const sink = (ws.file.team.reports as { sink?: unknown } | undefined)?.sink;
     if (typeof sink === "string" && sink !== "files") return;
     const ledger = wsFireLedger(ws);
+    // Both roots come from `ws`, the same handle the ledger comes from. They used to be resolved by
+    // reportsRoot(), whose ladder is environment-only (DEVLOOP_REPORTS_DIR > DEVLOOP_DATA_DIR >
+    // DEVLOOP_HUB_DB-derived > the home default): a CLI `dev-loop doctor` sets none of those, so the
+    // check compared this workspace's ledger against a machine-global tree and reported every agent
+    // as untraced while its reports sat in the workspace.
     // Delivery-project scope: each project's fires checked against its own reports root.
     for (const key of deliveryProjects(ws)) {
-      for (const f of reportTrailGaps(ledger, reportsRoot(key), { project: key })) {
+      for (const f of reportTrailGaps(ledger, wsReportsRoot(ws, key), { project: key })) {
         warn(`[W35] [${key}] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
       }
     }
     // Team scope: team-scoped fires and legacy rows (no project field) checked
     // against the _team reports root, tagged with [_team] rather than a project key.
-    const teamReportsRoot = reportsRoot("_team");
+    const teamReportsRoot = wsReportsRoot(ws, TEAM_INTAKE_PROJECT);
     for (const f of reportTrailGaps(ledger, teamReportsRoot, { project: "_team" })) {
       warn(`[W35] [_team] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
     }
