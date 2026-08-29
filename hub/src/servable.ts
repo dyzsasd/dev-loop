@@ -202,6 +202,27 @@ export function servableBacklogDepth(db: DatabaseSync, projectId: string): { tot
   return { total, "senior-dev": senior, "junior-dev": junior, dev };
 }
 
+/**
+ * A fingerprint of the Backlog Job B2 actually reads — count + newest touch, over the SAME non-blocked
+ * rows servableBacklogDepth counts, so the depth and the fingerprint can never describe different sets.
+ *
+ * It exists so the scheduler can tell "this lane already looked at exactly these rows" from "new work
+ * arrived". It moves when a Backlog row is created, edited, promoted or canceled — INCLUDING by the
+ * lane's own grooming, so a fire that shapes something is never mistaken for one that changed nothing.
+ * Deliberately Backlog-scoped rather than the board-wide change cursor: on a busy board that cursor
+ * moves on every unrelated dev write, which would make the predicate that reads this always trip.
+ */
+export function backlogFingerprint(db: DatabaseSync, projectId: string): string {
+  const rows = (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state='Backlog'").all(projectId) as unknown as TicketRow[]).map(toTicket);
+  let count = 0, newest = "";
+  for (const t of rows) {
+    if (t.labels.includes("blocked")) continue; // the same exclusion servableBacklogDepth applies
+    count++;
+    if (t.updated_at > newest) newest = t.updated_at;
+  }
+  return `${count}|${newest}`;
+}
+
 // servableTodoDepth — the §5a todoDepth cap input, computed from the SAME servable-Todo
 // predicate as `servableSlice`, not a raw `assignee ===` filter over non-blocked Todo.
 // Makes a SINGLE pass over all non-blocked Todo rows and counts per tier through the shared

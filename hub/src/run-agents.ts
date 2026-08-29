@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { laneScheduleBlock, toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
+import { resolveTodoDepthCap, laneScheduleBlock, toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
 import { secretsDeclaredKeys, scopeFireSecrets } from "./secrets.ts"; // Q9/LOOP-432: the per-fire secret-scoping strip set
@@ -22,7 +22,7 @@ import { openDb, logEvent } from "./db.ts";
 import { readPause } from "./scheduler-pause.ts"; // the pause the operator writes — read here EVERY tick, not merely rendered by status
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { LANE_ACTOR, LANE_JOBS, isLane, isQaLane, type Lane } from "./agent-handles.ts"; // job-scoped prompts: the pm/qa job-lanes (scheduler fire units that fire as their owning actor)
-import { servableBacklogDepth, pmMaintenanceSlice, qaMaintenanceSlice, seniorDevModePick } from "./servable.ts"; // lane-gate board reads: Backlog depth (groom), pm/qa In-Review+unblock counts (maintenance), the senior-dev Mode pick
+import { servableBacklogDepth, backlogFingerprint, servableTodoDepth, pmMaintenanceSlice, qaMaintenanceSlice, seniorDevModePick } from "./servable.ts"; // lane-gate board reads: Backlog depth (groom), pm/qa In-Review+unblock counts (maintenance), the senior-dev Mode pick
 import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases shared with the bundle-load validator — a zod-free leaf (roster still sourced from seed.ts AGENT_HANDLES)
 import { writeSchedulerBuild, teamDirOf, breakerStatePath } from "./scheduler-build.ts"; // LOOP-253: which build is orchestrating this loop — a zod-free leaf, same LOOP-58 reason
 import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fire copy of the shared checkout — a zod-free leaf, for the same LOOP-58 reason as servable.ts below
@@ -1153,6 +1153,36 @@ function fireReasonFor(opts: Options, agent: SchedKey, project: string, gated: b
  * exactly when `job` is null, and names the lane, the project and the board counts the decision was
  * made from, so the printed line explains itself without the reader re-deriving the query.
  */
+// What this lane last groomed, per project — the "have I already looked at exactly these rows?" half of
+// the pm-groom gate. In memory, not on disk, and that is deliberate: a restart re-reads the Backlog
+// once, which is the safe direction (one extra fire, never a suppressed one), and it keeps the gate
+// from needing state whose staleness would be a second thing to get wrong.
+const groomSeen = new Map<string, string>();
+const groomKey = (project: string): string => `pm-groom:${project}`;
+
+/**
+ * Is any dev tier under its Todo cap, i.e. could a promotion land? Returns the reason when none can.
+ *
+ * Reads the same cap resolver §5a uses (resolveTodoDepthCap, project override then team default) and
+ * the same servable depth the queue reports, so the gate and the board cannot disagree about "full".
+ * A tier with no promotable candidate in the Backlog is not capacity either — promoting into it is
+ * impossible regardless of its depth.
+ */
+function promotionCapacity(opts: Options, backlog: { "senior-dev": number; "junior-dev": number; dev: number }, project: string): { free: boolean; why: string } {
+  const ws = opts.ws;
+  if (!ws || !fireDb) return { free: true, why: "" }; // no workspace/board ⇒ fail open (groom)
+  const projectId = findProject(fireDb, project);
+  if (!projectId) return { free: true, why: "" };
+  const cap = resolveTodoDepthCap(ws, project);
+  const depth = servableTodoDepth(fireDb, projectId);
+  const tiers = (["senior-dev", "junior-dev", "dev"] as const)
+    .filter((t) => backlog[t] > 0)                       // a tier with no candidate cannot be promoted into
+    .map((t) => ({ tier: t, depth: depth[t], free: depth[t] < cap }));
+  if (!tiers.length) return { free: false, why: `no promotable Backlog candidate for any tier (${backlog["senior-dev"]} senior / ${backlog["junior-dev"]} junior / ${backlog.dev} dev)` };
+  if (tiers.some((t) => t.free)) return { free: true, why: "" };
+  return { free: false, why: `every tier with a candidate is at/over the Todo cap of ${cap} (${tiers.map((t) => `${t.tier} ${t.depth}/${cap}`).join(", ")})` };
+}
+
 interface LaneDecision { job: string | null; reason: string | null }
 const laneRuns = (job: string): LaneDecision => ({ job, reason: null });
 const laneIdle = (lane: string, project: string, counts: string): LaneDecision =>
@@ -1183,8 +1213,29 @@ function pmLaneGate(opts: Options, lane: string, project: string, gateTripped: b
       return laneIdle(lane, project, "0 In Review rows owned by pm to verify, 0 decision-needed / scope-design / needs-pm rows to unblock");
     }
     if (lane === "pm-groom") {
-      const backlog = servableBacklogDepth(fireDb, projectId).total;
-      return backlog > 0 ? laneRuns("groom") : laneIdle(lane, project, "0 non-blocked Backlog rows to groom");
+      const backlog = servableBacklogDepth(fireDb, projectId);
+      if (backlog.total === 0) return laneIdle(lane, project, "0 non-blocked Backlog rows to groom");
+      // Job B2 has TWO outputs and only one of them needs capacity: it promotes Backlog→Todo while a
+      // tier is under its cap, and it shapes/dedupes/cancels whatever it cannot promote. The SKILL is
+      // explicit that "at/over the cap, groom only — still a valid fire", so capacity ALONE must not
+      // gate this lane; that would suppress work the job is defined to do.
+      //
+      // What it may not do is re-read the same Backlog forever. Measured: four consecutive fires
+      // reported `promoted 0`, the last of them reviewing all 34 Backlog rows and finishing
+      // `groomed 0, 0 board writes` — with junior-dev at 16/10 over its cap and senior-dev holding no
+      // promotable candidate. The pm lane spent $11.47 in an hour, ~27% of all spend, on scans that
+      // could not produce anything: nothing was promotable, and everything had already been shaped.
+      //
+      // So the predicate is "no capacity AND nothing has changed since this lane last looked", never
+      // capacity alone. The fingerprint covers the rows Job B2 reads and moves on any create/edit/
+      // promote/cancel — including the lane's OWN grooming, so a fire that shapes something is never
+      // read as one that changed nothing, and the next tick fires again to continue.
+      const capacity = promotionCapacity(opts, backlog, project);
+      if (capacity.free) return laneRuns("groom");
+      const fp = backlogFingerprint(fireDb, projectId);
+      const seen = groomSeen.get(groomKey(project));
+      if (seen === fp) return laneIdle(lane, project, `${capacity.why}, and the Backlog is unchanged since this lane last groomed it (${backlog.total} row(s), fingerprint ${fp})`);
+      return laneRuns("groom");
     }
     // pm-review: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
     return gateTripped ? laneRuns("review")
@@ -2513,6 +2564,14 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
     // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
     // A pm/qa lane records under its lane:project slot (pm-review/qa-hunt read it; the mechanical lanes never do).
+    // Record what pm-groom just looked at, UNCONDITIONALLY — its capacity gate is not the opt-in
+    // change-gate and must work without `--change-gate`. Written after the fire, so the value is the
+    // Backlog as the fire LEFT it: anything the fire groomed moves the fingerprint and the next tick
+    // fires again to continue, while a fire that changed nothing records the state that skips it.
+    if (agent === "pm-groom" && !opts.dryRun && fireDb) {
+      const pid = findProject(fireDb, project);
+      if (pid) groomSeen.set(groomKey(project), backlogFingerprint(fireDb, pid));
+    }
     const gateRec = isLane(agent) ? gateActive : (gateActive && GATED_AGENTS.has(agent));
     if (gateRec && !opts.dryRun) {
       const key = changeKey(opts, cfg, project);
