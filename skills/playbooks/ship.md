@@ -97,6 +97,11 @@ Only if you actually deployed to prod this step (a `deploy.command` ran):
    restored.
 
 ## Step 7 — Hand off to In Review
+**First re-read the ticket** (§3): re-fetch it and read `.state`, `.labels` and every comment added since you
+claimed it. A claimed ticket has no inbound channel (§7), so this is the only point where a `blocked` label,
+a `Blocked-by:` edge or a stop instruction written while you worked is collected. Found one ⇒ **park instead
+of handing off**: `Todo` + `blocked` + a `Bail-shape:` comment naming the marker (§9), and do not move to
+`In Review`. Otherwise:
 `state:"In Review"` (verify, §10) + a comment: what changed, where (files/routes), how you verified the gates,
 the commit/deploy ref if shipped, and a pointer to the ACs so the owner (PM for features, QA for bugs) can
 verify. A partial ship MUST cite the follow-up ID filed this run (Step-4 split); a `Bug`/`Feature` hand-off

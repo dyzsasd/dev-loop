@@ -234,11 +234,21 @@ state** (below + §9). These state names are authoritative in both backends.
 | `Backlog` | **The universal intake state (§5a)**: EVERY newly-discovered ticket lands here — PM ideation, QA bugs, Architect tech-debt, human intake (§9a) — plus a design's staged children (§21a). Not yet visible to any dev pick-query. | every filing agent + humans (on create); senior-dev (design-child staging, §21a) |
 | `Todo` | Groomed, ready to be picked up. **Reachable ONLY via PM promotion (§5a)** — with three carve-outs: an owner's verify-fail follow-up (already-groomed work, stays Todo), an un-block re-queue, and a CONFIRMED ops incident (prod-down cannot wait a PM fire). | PM (promotion, §5a); owner (verify-fail follow-up); Dev (un-block); Ops (confirmed incident only) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
-| `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
+| `In Review` | Dev finished; awaiting verification by the owner. **Re-read the ticket immediately before this move** — see below | Dev (done coding) |
 | `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
 | `Done` | Verified passing against acceptance criteria | Owner (PM/QA) |
 | `Canceled` | Won't-do / obsolete / superseded | Any agent, with a comment why |
 | `Duplicate` | Same as another ticket; set `duplicateOf` | Dev (during grooming) |
+
+**Re-read before the hand-off (`In Progress` → `In Review`).** A claimed ticket has no inbound channel
+(§7): everything written on it after your claim — a `blocked` label, a `Blocked-by:` edge, a comment
+telling you to stop — arrives where nothing is reading. So immediately before moving to `In Review`,
+re-fetch the ticket and read its `.state`, its `.labels`, and every comment added since you claimed it.
+If a `blocked` label or a `Blocked-by:` edge appeared in that window, **park instead of handing off**:
+`Todo` + `blocked` + a `Bail-shape:` comment naming the marker you found (§9). This is the same
+verify-after-write action §10 already requires on every state move; the only new part is that it also
+reads what arrived while you worked. Measured: a park instruction landed 13 minutes before a hand-off,
+the fire never saw it, and the ticket was canceled after the most expensive fire of its window.
 
 **Verify-fail ⇒ close + follow-up (the universal rule).** An `In Review` ticket that does NOT meet its ACs
 is `Canceled` with `review failed: <what failed / observed behaviour>; superseded by <new-id>` and a
@@ -411,6 +421,18 @@ Two Dev runs could race for the same ticket. The claim **is** the state move:
 3. Re-fetch the ticket. If `assignee` is not you or `state` isn't `In Progress`,
    another Dev won the race — drop it and pick the next one.
 4. Only then start coding.
+
+**A claimed ticket has no inbound channel.** The claim moves the ticket, not a mailbox: once a fire is
+running, nothing it holds is re-read until it chooses to re-read it, and a fire is a single forward pass.
+A comment you write on an `In Progress` ticket therefore reaches the **verifier** — whoever picks it up at
+`In Review` — and not the fire holding it. Two consequences, both binding:
+
+- **Writing to a held ticket:** address the verifier. Say what to check at `In Review` ("verify X was not
+  touched; if it was, verify-fail and re-file"), not what the holder should stop doing — the holder will
+  not read it. A stop instruction phrased at the holder reads as satisfied when the work lands anyway.
+- **Holding a ticket:** the §3 re-read before the hand-off is the one point where that mail is collected.
+  It is also why a REPLACE-style field (`labels`, §10) on a held ticket is safe to leave alone: the holder
+  will overwrite it. Carry the intent in a comment written for the verifier instead of racing the write.
 
 Same idea for verification: an owner verifying an `In Review` ticket should leave
 a comment as it starts, so a second verifier sees it's in progress. For an
