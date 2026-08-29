@@ -78,7 +78,17 @@ export interface FiresSection {
 export interface DaemonProject { key: string; running: boolean; pid: number | null; url: string | null; healthy: boolean | null; version: string | null; buildCommit: string | null; skew: boolean }
 export interface DaemonSection { cli: { version: string; buildCommit: string | null }; projects: DaemonProject[] }
 export interface BoardSection { byProject: Record<string, Record<string, number>>; totals: Record<string, number> }
-export interface CostSection { windowMs: number; fires: number; costUsd: number | null; meteredFires: number; noopFires: number; noopShare: number | null; successRate: number | null }
+/**
+ * `meteredFires` and `pricedFires` are two different counts and both are needed. A fire carrying usage is
+ * METERED; a fire whose usage also has a non-zero costUsd is PRICED. A zero-cost failure — a rate-limit
+ * refusal, say — is metered but not priced, so the two diverge (184 vs 201 on one 24 h window).
+ *
+ * This section used to publish the PRICED count under the name `meteredFires`, which made `dev-loop
+ * status` print "(184 metered)" while `dev-loop metrics` printed "201 of 208 metered fires" for the same
+ * window, and gave `status --json`'s `cost.meteredFires` a different meaning from the identically named
+ * field in metrics. Each name now carries the quantity it says.
+ */
+export interface CostSection { windowMs: number; fires: number; costUsd: number | null; meteredFires: number; pricedFires: number; noopFires: number; noopShare: number | null; successRate: number | null }
 
 export interface StatusReport {
   ok: true;
@@ -312,7 +322,8 @@ function costSection(ledger: string, rows: FireRow[], nowMs: number): CostSectio
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= nowMs - windowMs && t <= nowMs; });
   const noopFires = inWindow.filter((r) => r.exitCode === EXIT_NO_WORK).length;
   return {
-    windowMs, fires: fm?.fires ?? 0, costUsd: fm?.costUsd ?? null, meteredFires: fm?.costMeteredFires ?? 0,
+    windowMs, fires: fm?.fires ?? 0, costUsd: fm?.costUsd ?? null,
+    meteredFires: fm?.meteredFires ?? 0, pricedFires: fm?.costMeteredFires ?? 0,
     noopFires, noopShare: inWindow.length ? noopFires / inWindow.length : null, successRate: fm?.successRate ?? null,
   };
 }
@@ -466,7 +477,11 @@ export function renderStatus(r: StatusReport): string {
   const f = r.fires, c = r.cost24h;
   if (isSectionError(f)) L.push("fires 24h:", err(f));
   else {
-    const cost = isSectionError(c) ? "" : ` · ${usd(c.costUsd)} (${c.meteredFires} metered) · no-op ${c.noopShare === null ? "n/a" : `${Math.round(c.noopShare * 100)}%`}`;
+    // Both counts are shown when they differ, because the gap IS the information: a metered-but-unpriced
+    // fire is one that cost nothing, and hiding that made the same window read two different ways here
+    // and in `dev-loop metrics`.
+    const priced = isSectionError(c) ? "" : c.pricedFires === c.meteredFires ? `${c.pricedFires} metered` : `${c.pricedFires} priced / ${c.meteredFires} metered`;
+    const cost = isSectionError(c) ? "" : ` · ${usd(c.costUsd)} (${priced}) · no-op ${c.noopShare === null ? "n/a" : `${Math.round(c.noopShare * 100)}%`}`;
     L.push(`fires 24h: ${f.fires} fires · ${f.failures} failed${cost}`);
     for (const [agent, a] of Object.entries(f.perAgent)) {
       const marks = a.recent.map((x) => (x.noop ? "noop" : x.exitCode === 0 ? "ok" : `fail(${x.errorClass ?? x.exitCode})`)).join(" ");
