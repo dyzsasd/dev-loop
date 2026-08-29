@@ -2082,6 +2082,12 @@ async function main(): Promise<void> {
     // §16 (LOOP-93): run.log holds the FULL unredacted detached fire stream (every agent's stdout+stderr) in the
     // .dev-loop data home alongside secrets.env — owner-only on create, a pre-existing loose one warned once. openSync
     // is synchronous, so hardenLedgerPerms' chmod acts on a file that already exists (no createWriteStream race here).
+    // Rotate at 50MB (single .1 generation), the same ceiling and shape the per-agent runner logs use
+    // above. run.log is the UNION of every agent's stdout+stderr, so it is the fastest-growing log of the
+    // three and was the only one with no bound at all — an unattended loop appended to it forever.
+    // Rotation happens BEFORE the `existed` read for the same reason it does there: a freshly rotated log
+    // is a new file and must be re-hardened to owner-only rather than inherit the default umask.
+    try { if (statSync(logPath).size > 50 * 1024 * 1024) renameSync(logPath, `${logPath}.1`); } catch { /* no log yet */ }
     const runLogExisted = existsSync(logPath);
     const fd = openSync(logPath, "a");
     hardenLedgerPerms(logPath, runLogExisted, 0o600, "600");
