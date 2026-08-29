@@ -229,15 +229,20 @@ export const breaker = {
       if (e.open) this.onEvent?.(agent, "close", e.key ?? "", e.streak);
       if (e.open || e.streak > 0 || e.cooldownUntil) changed = true;
       this.byAgent.set(agent, { key: null, streak: 0, open: false });
-      // Close all open provider breakers for this agent's provider.
+      // Close every provider breaker for this agent's provider, open or not. The per-agent entry above
+      // resets unconditionally for the same reason: the field this feeds is `consecutiveFailures`, so one
+      // success on the provider ends the run. Gating the RESET on `pe.open` (as this once did) let a
+      // sub-threshold streak accumulate for the scheduler's whole life, and the provider breaker then
+      // tripped on failures that were never consecutive — a lifetime count rendered as a streak. The close
+      // EVENT stays gated on `pe.open`: there is nothing to announce closing when it was never open.
       if (p) {
         const prefix = `${p}:`;
         for (const [k, pe] of this.byProvider) {
-          if (k.startsWith(prefix) && pe.open) {
-            this.onEvent?.(agent, "close", k, pe.streak);
-            this.byProvider.set(k, { key: null, streak: 0, open: false });
-            changed = true;
-          }
+          if (!k.startsWith(prefix)) continue;
+          if (!pe.open && !pe.streak && !pe.cooldownUntil) continue; // already clear — nothing to write
+          if (pe.open) this.onEvent?.(agent, "close", k, pe.streak);
+          this.byProvider.set(k, { key: null, streak: 0, open: false });
+          changed = true;
         }
       }
       if (changed) this.onChange?.("record"); // a healthy fire on a healthy lane changes nothing — no write
