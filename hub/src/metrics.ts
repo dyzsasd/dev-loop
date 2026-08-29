@@ -2165,7 +2165,13 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   }
 
   // ── default team-KPI path ─────────────────────────────────────────────────────
-  const fires = fireMetrics(wsFireLedger(ws), windowMs);
+  // `nowMs` is the era's END, not the wall clock: resolveEra maps --since/--until to
+  // { windowMs: until - since, nowMs: until }. Omitting it here let fireMetrics fall back to its
+  // `nowMs = Date.now()` default, so the fire half of the report silently measured [now - windowMs, now]
+  // while `windowDays` and the board half (which are handed nowMs on the two lines below) measured the
+  // era the operator asked for. A before/after comparison — the reason --since/--until exist — then read
+  // the same trailing window twice and always reported no difference.
+  const fires = fireMetrics(wsFireLedger(ws), windowMs, nowMs);
   const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
 
   await collectBoardMetrics(ws, windowMs, out, boardDb, escapeSignalSourceRan(fires), nowMs);
