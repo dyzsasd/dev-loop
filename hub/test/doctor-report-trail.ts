@@ -47,7 +47,7 @@ function fixture(name: string): ReturnType<typeof loadWorkspace> {
     projects: { [KEY]: { prefix: "BU" } },
   }));
   writeFileSync(join(root, ".dev-loop", "team", "fires.jsonl"),
-    [fireRow("pm", KEY), fireRow("reflect", "_team")].join("\n") + "\n");
+    [fireRow("pm", KEY), fireRow("reflect", "_team"), fireRow("ops", "_team"), fireRow("sweep", "_team")].join("\n") + "\n");
   return loadWorkspace(root);
 }
 
@@ -78,6 +78,26 @@ try {
       `project scope: a report at <ws>/.dev-loop/${KEY}/reports/pm/daily clears W35 (got ${JSON.stringify(lines)})`);
     ok(w35For(lines, "reflect").length === 0,
       `team scope: a report at <ws>/.dev-loop/_team/reports/reflect/daily clears W35 (got ${JSON.stringify(lines)})`);
+  }
+
+  // ── Arm 1b: a STEWARD lane is ledgered `_team` but reports where its state lives ─────────────
+  // ops keeps `ops-state.json` in the project dir and writes its daily report beside it, under the
+  // PROJECT scope. Checking only `_team` reported ops as having left no trail while two daily reports
+  // sat in `<project>/reports/ops/daily` — a false warning that an operator can only silence by
+  // writing a report where the runtime does not put one. sweep in the same fixture writes nowhere,
+  // and must still be reported: widening the search must not blind the check.
+  {
+    const ws = fixture("steward-project-scope");
+    mkdirSync(join(wsStateRoot(ws), KEY, "reports", "ops", "daily"), { recursive: true });
+    writeFileSync(join(wsStateRoot(ws), KEY, "reports", "ops", "daily", `${TODAY}.md`), "# ops\n");
+
+    const lines = warnings(ws);
+    ok(w35For(lines, "ops").length === 0,
+      `steward: a team-scoped ops fire is cleared by a report under the PROJECT scope (got ${JSON.stringify(w35For(lines, "ops"))})`);
+    ok(w35For(lines, "sweep").length === 1,
+      `steward: sweep wrote nothing anywhere and is still reported — the widened search is not a blanket pass (got ${JSON.stringify(w35For(lines, "sweep"))})`);
+    ok(w35For(lines, "sweep")[0]?.includes(join(wsStateRoot(ws), "_team", "reports", "sweep", "daily")),
+      `steward: the finding still names the TEAM root as the expected place (got ${w35For(lines, "sweep")[0]})`);
   }
 
   // ── Arm 2: the ROOT — a report in the home-anchored tree does not clear the check ───────────

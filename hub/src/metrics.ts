@@ -1176,7 +1176,14 @@ export interface ReportTrailFinding { agent: string; fires: number; expectedDir:
 
 export function reportTrailGaps(
   ledgerPath: string,
-  reportsRootDir: string,
+  /**
+   * One reports root, or several searched together. A STEWARD lane (ops, sweep) is ledgered under the
+   * team scope but writes its daily report where its state lives — the project it stewards — so checking
+   * only `_team` reported `ops` as having left no trail while its reports sat in
+   * `<project>/reports/ops/daily`. A report found under ANY of the given roots satisfies the trail; the
+   * first root is what the finding names as the expected place.
+   */
+  reportsRootDir: string | readonly string[],
   opts: { windowMs?: number; nowMs?: number; handles?: readonly string[]; project?: string } = {},
 ): ReportTrailFinding[] {
   const windowMs = opts.windowMs ?? 7 * 86_400_000;
@@ -1217,12 +1224,14 @@ export function reportTrailGaps(
     // would make every agent look untraced. Measured: 8 of 8 agents on a live workspace wrote
     // `<handle>/`, while this check and the §22 prose both said `<handle>-agent/`; the prose was
     // corrected to the runtime name rather than the runtime to the prose.
-    const dir = join(reportsRootDir, h, "daily");
-    let present: Set<string>;
-    try { present = new Set(readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3))); }
-    catch { present = new Set(); }                   // no tree yet ⇒ nothing reported, which IS the finding
-    if ([...days].some((d) => present.has(d))) continue;
-    out.push({ agent: h, fires: [...rows].filter((r) => r.agent === h && r.ts >= since).length, expectedDir: dir, windowDays: Math.round(windowMs / 86_400_000) });
+    const dirs = (typeof reportsRootDir === "string" ? [reportsRootDir] : reportsRootDir).map((root) => join(root, h, "daily"));
+    const present = new Set<string>();
+    for (const dir of dirs) {
+      try { for (const f of readdirSync(dir)) if (f.endsWith(".md")) present.add(f.slice(0, -3)); }
+      catch { /* no tree under this root — another root may still hold the report */ }
+    }
+    if ([...days].some((d) => present.has(d))) continue; // reported somewhere ⇒ the trail exists
+    out.push({ agent: h, fires: [...rows].filter((r) => r.agent === h && r.ts >= since).length, expectedDir: dirs[0]!, windowDays: Math.round(windowMs / 86_400_000) });
   }
   return out;
 }

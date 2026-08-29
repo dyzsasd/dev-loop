@@ -1202,8 +1202,13 @@ export function checkReportTrail(ws: Workspace, warn: (msg: string) => void): vo
     }
     // Team scope: team-scoped fires and legacy rows (no project field) checked
     // against the _team reports root, tagged with [_team] rather than a project key.
+    // A steward lane is ledgered `_team` but writes its report where its state lives — ops keeps
+    // `ops-state.json` in the project dir and writes `<project>/reports/ops/daily/` beside it. Checking
+    // only `_team` reported ops as untraced while two daily reports sat in the project scope. The team
+    // root stays FIRST so it is what the finding names; the project roots are searched behind it.
     const teamReportsRoot = wsReportsRoot(ws, TEAM_INTAKE_PROJECT);
-    for (const f of reportTrailGaps(ledger, teamReportsRoot, { project: "_team" })) {
+    const stewardRoots = [teamReportsRoot, ...deliveryProjects(ws).map((k) => wsReportsRoot(ws, k))];
+    for (const f of reportTrailGaps(ledger, stewardRoots, { project: "_team" })) {
       warn(`[W35] [_team] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
     }
   } catch { /* best-effort — never fails doctor */ }
