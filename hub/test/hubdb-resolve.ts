@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveHubDbPath, wsHubDb, tryResolveWorkspace } from "../src/workspace.ts";
 import { hubDbPath } from "../src/paths.ts";
@@ -33,8 +33,24 @@ try {
   // ── unit: the ladder itself ──────────────────────────────────────────────────────────────────────
   delete process.env.DEVLOOP_HUB_DB;
   ok(resolveHubDbPath(ws) === wsHubDb(tryResolveWorkspace(ws)!), "ladder: inside a workspace → its .dev-loop/hub.db");
+  // No workspace and no env: there is no rung left below the workspace. ~/.dev-loop/hub.db used to
+  // be that rung, which is how a command run outside every workspace opened — and created — a
+  // machine-global board. The ladder now refuses, naming both ways to supply a path.
   const bare = join(ROOT, "bare"); mkdirSync(bare, { recursive: true });
-  ok(resolveHubDbPath(bare) === hubDbPath(), "ladder: no workspace → the machine-global default");
+  const savedHome = process.env.DEVLOOP_HOME;
+  delete process.env.DEVLOOP_HOME;
+  const cwdBefore = process.cwd();
+  process.chdir(bare); // the last rung is cwd ascent, so the probe must stand outside every workspace
+  let bareErr = "";
+  try { bareErr = `resolved to ${resolveHubDbPath(bare)}`; } catch (e) { bareErr = (e as Error).message; }
+  process.chdir(cwdBefore);
+  if (savedHome === undefined) delete process.env.DEVLOOP_HOME; else process.env.DEVLOOP_HOME = savedHome;
+  ok(bareErr.includes("no hub database resolved"), `ladder: no workspace → an explicit refusal, not a machine-global default (${bareErr.slice(0, 90)})`);
+  ok(!bareErr.includes(".dev-loop/hub.db") || !bareErr.includes(homedir()), "ladder: …and the refusal names no home-anchored path");
+  process.env.DEVLOOP_HOME = join(ROOT, "home");
+  ok(resolveHubDbPath(bare) === hubDbPath() && hubDbPath() === join(ROOT, "home", "hub.db"),
+    "ladder: an EXPLICIT DEVLOOP_HOME is still honoured — only the implicit home anchor is gone");
+  delete process.env.DEVLOOP_HOME;
   process.env.DEVLOOP_HUB_DB = join(ROOT, "explicit.db");
   ok(resolveHubDbPath(ws) === join(ROOT, "explicit.db"), "ladder: explicit DEVLOOP_HUB_DB beats the workspace");
   delete process.env.DEVLOOP_HUB_DB;

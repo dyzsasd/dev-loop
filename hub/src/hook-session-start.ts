@@ -16,7 +16,6 @@
 // parse the JSON, read the one key if present — validation of the key lives in team-config.ts.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findCompatibleNode } from "./node-runtime.ts";
@@ -49,7 +48,10 @@ if (sessionHookEnabled(process.env, root)) {
   const here = dirname(fileURLToPath(import.meta.url)); // hub/src (source) | dist (published)
   const ext = fileURLToPath(import.meta.url).endsWith(".js") ? ".js" : ".ts";
   const node = findCompatibleNode();
-  const runDir = process.env.DEVLOOP_RUN_DIR ?? (root ? join(root, ".dev-loop") : join(homedir(), ".dev-loop"));
+  // The log follows the workspace. With neither DEVLOOP_RUN_DIR nor a workspace root there is
+  // nowhere to write it — ~/.dev-loop was retired, and a hook that re-created it would undo the
+  // operator's removal on the next session. `daemon up` still runs; only the log line is skipped.
+  const runDir = process.env.DEVLOOP_RUN_DIR ?? (root ? join(root, ".dev-loop") : null);
   let line: string;
   if (node) {
     const r = spawnSync(node, [join(here, `cli${ext}`), "daemon", "up"], { encoding: "utf8", env: { ...process.env, DEVLOOP_NODE: node } });
@@ -59,8 +61,10 @@ if (sessionHookEnabled(process.env, root)) {
     line = "skipped: no compatible node (>= 23.6) found — set DEVLOOP_NODE";
   }
   try {
-    mkdirSync(runDir, { recursive: true });
-    appendFileSync(join(runDir, "hook.log"), `${new Date().toISOString()} session-start cwd=${process.cwd()} ${line}\n`);
+    if (runDir) {
+      mkdirSync(runDir, { recursive: true });
+      appendFileSync(join(runDir, "hook.log"), `${new Date().toISOString()} session-start cwd=${process.cwd()} ${line}\n`);
+    }
   } catch { /* the log is best-effort; the hook must never fail a session */ }
 }
 

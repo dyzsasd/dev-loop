@@ -3,14 +3,15 @@
 // A workspace is a directory holding a `dev-loop.json` (schema v2). Discovery precedence:
 //   1. DEVLOOP_WORKSPACE (absolute path — a bad/missing value is a HARD error, no fall-through)
 //   2. DEVLOOP_HUB_DB → derive workspace root (<ws>/.dev-loop/hub.db)
-//   3. DEVLOOP_TEAM (key) → ~/.dev-loop/workspaces.json index → path
+//   3. DEVLOOP_TEAM (key) → the workspace index (paths.ts workspacesIndexPath) → path
 //   4. cwd realpath walked upward to the first dir that has a valid dev-loop.json
-// All run/state paths live UNDER the workspace (I4: copy the folder = migrate the machine); the only thing
-// in ~/.dev-loop is a NON-authoritative convenience index that any in-workspace run rebuilds.
+// All run/state paths live UNDER the workspace (I4: copy the folder = migrate the machine); the one file
+// outside it is a NON-authoritative convenience index that any in-workspace run rebuilds, and it no
+// longer sits under ~/.dev-loop.
 import { realpathSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join, isAbsolute } from "node:path";
 import { loadWorkspace, normalizedRel, type Workspace } from "./team-config.ts";
-import { devloopHome, hubDbPath } from "./paths.ts";
+import { hubDbPath, tryHubDbPath, workspacesIndexPath } from "./paths.ts";
 import { loadWorkspaceSecrets } from "./secrets.ts";
 
 export class WsNotFound extends Error {
@@ -114,6 +115,14 @@ export function resolveHubDbPath(startDir?: string): string {
   const ws = tryResolveWorkspace(startDir);
   return ws ? wsHubDb(ws) : hubDbPath();
 }
+// The same ladder for callers that DEGRADE on an unresolvable board rather than failing (the merge
+// guard's board axis reports skipReason "no-hub-db"). undefined is that answer; hubDbPath()'s throw
+// is for callers whose whole job is the board.
+export function tryResolveHubDbPath(startDir?: string): string | undefined {
+  if (process.env.DEVLOOP_HUB_DB?.trim()) return tryHubDbPath();
+  const ws = tryResolveWorkspace(startDir);
+  return ws ? wsHubDb(ws) : tryHubDbPath();
+}
 export function wsDaemonRunfile(ws: Workspace): string { return join(wsStateRoot(ws), "daemon.json"); }
 export function wsFireLedger(ws: Workspace): string { return join(wsTeamDir(ws), "fires.jsonl"); }
 export function wsScheduler(ws: Workspace): string { return join(wsTeamDir(ws), "scheduler.json"); }
@@ -151,8 +160,11 @@ export function resolveRepoFromCwd(ws: Workspace, cwd: string): string | null {
   return best && !tie ? best.ref : null;
 }
 
-// ─── The convenience index (~/.dev-loop/workspaces.json) — NON-authoritative ──
-export function workspacesIndexPath(): string { return join(devloopHome(), "workspaces.json"); }
+// ─── The convenience index — NON-authoritative, defined in paths.ts ──────────
+// Re-exported here because this module owns its only readers/writers. It is the one file that
+// cannot live inside a workspace (it is what maps DEVLOOP_TEAM=<key> to a workspace root), and it
+// no longer lives under ~/.dev-loop — see paths.ts for where it went and why.
+export { workspacesIndexPath } from "./paths.ts";
 
 export function readWorkspaceIndex(): Record<string, string> {
   try { const j = JSON.parse(readFileSync(workspacesIndexPath(), "utf8")); return j && typeof j === "object" ? j : {}; }

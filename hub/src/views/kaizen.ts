@@ -7,16 +7,19 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { esc, href } from "./ui.ts";
 import { kaizenReport } from "../metrics.ts";
-import { devloopDataDir } from "../paths.ts";
+import { tryDevloopDataDir } from "../paths.ts";
 
 // Resolve the lessons directory: workspace-specific path derived from DEVLOOP_HUB_DB
 // (hub.db lives at <workspace>/.dev-loop/hub.db; lessons are beside it).
-// DEVLOOP_LESSONS_DIR overrides for tests; falls back to devloopDataDir() when neither is set.
-function kaizenLessonsDir(): string {
+// DEVLOOP_LESSONS_DIR overrides for tests; else the workspace's state dir. undefined when nothing
+// resolves — the report already reads an absent lessons dir as "no lessons", which is the answer the
+// retired home anchor used to give by naming a directory that was not there.
+function kaizenLessonsDir(): string | undefined {
   if (process.env.DEVLOOP_LESSONS_DIR) return process.env.DEVLOOP_LESSONS_DIR;
   const hubDb = process.env.DEVLOOP_HUB_DB;
   if (hubDb) return join(dirname(hubDb), "lessons");
-  return join(devloopDataDir(), "lessons");
+  const data = tryDevloopDataDir();
+  return data ? join(data, "lessons") : undefined;
 }
 
 // Ratchet sources resolved relative to this file's location.
@@ -42,7 +45,7 @@ export function kaizenPage(db: DatabaseSync, projectId: string, projectKey: stri
   const lessonsDir = kaizenLessonsDir();
   const report = kaizenReport(db, projectId, {
     nowMs,
-    lessonsDir: existsSync(lessonsDir) ? lessonsDir : undefined,
+    lessonsDir: lessonsDir && existsSync(lessonsDir) ? lessonsDir : undefined,
     ratchetSources: { pkgJson: _pkgJson, gauntletDoc: _gauntletDoc },
   });
   const si = report.selfImprovement;

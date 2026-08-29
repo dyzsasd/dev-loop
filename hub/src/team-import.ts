@@ -11,7 +11,10 @@ import { join, resolve, basename, isAbsolute, relative } from "node:path";
 import { isMainEntry } from "./is-entry.ts";
 import { resolveWorkspace, wsProjectDir, wsLessonsDir, wsHubDb, ensureStateDirs } from "./workspace.ts";
 import { normalizedRel, validateTeamFile, type TeamFile, type RepoEntry, type ProjectEntry, type Workspace } from "./team-config.ts";
-import { projectConfigCandidates, devloopDataDir } from "./paths.ts";
+// legacyDataDir(), not devloopDataDir(): every path below names the tree this verb copies OUT of,
+// which is the retired ~/.dev-loop anchor. This verb and doctor's E20 are the only two readers of
+// that location left in the codebase — draining it is the reason the verb exists.
+import { projectConfigCandidates, legacyDataDir } from "./paths.ts";
 
 function die(msg: string, code = 2): never { console.error(`dev-loop team import: ${msg}`); process.exit(code); }
 const log = (m: string) => console.log(m);
@@ -64,7 +67,7 @@ interface V1Project {
 }
 
 function readV1(from: string | undefined): { path: string; cfg: { projects?: Record<string, V1Project>; defaultProject?: string } } {
-  const candidates = from ? [from] : projectConfigCandidates(devloopDataDir());
+  const candidates = from ? [from] : projectConfigCandidates(legacyDataDir());
   for (const p of candidates) {
     if (!existsSync(p)) continue;
     try { return { path: p, cfg: JSON.parse(readFileSync(p, "utf8")) }; }
@@ -381,13 +384,13 @@ export function teamImport(argv = process.argv.slice(2)): number {
     // State dir copy: <dataDir>/<srcKey>/ → <ws>/.dev-loop/<key>/ ; lessons.md → lessons/<key>.md.
     // COPY, not move (AC3) — the operator keeps running against the legacy tree until they confirm
     // this report, and LOOP-473 is what removes it.
-    const oldStateDir = join(devloopDataDir(), srcKey);
+    const oldStateDir = join(legacyDataDir(), srcKey);
     if (existsSync(oldStateDir)) plan.push(`STATE  copy ${oldStateDir} → ${wsProjectDir(ws, key)} (source left in place)`);
     const oldLessons = join(oldStateDir, "lessons.md");
     if (existsSync(oldLessons)) plan.push(`LESSON ${oldLessons} → ${join(wsLessonsDir(ws), `${key}.md`)}`);
-    const rootState = srcKey === defaultProject ? rootStateFiles(devloopDataDir()) : [];
+    const rootState = srcKey === defaultProject ? rootStateFiles(legacyDataDir()) : [];
     if (rootState.length) plan.push(`STATE  copy ${rootState.length} root-level ${rootState.join(", ")} → ${wsProjectDir(ws, key)} ('${srcKey}' is the legacy registry's defaultProject, so the pre-per-project state files are its own)`);
-    const strandedRoot = srcKey !== defaultProject ? rootStateFiles(devloopDataDir()) : [];
+    const strandedRoot = srcKey !== defaultProject ? rootStateFiles(legacyDataDir()) : [];
     if (strandedRoot.length) plan.push(`WARN  ${strandedRoot.length} root-level state file(s) (${strandedRoot.join(", ")}) belong to defaultProject '${defaultProject ?? "<unset>"}', not '${srcKey}' — NOT carried by this run; import that project too before deleting the legacy tree`);
     if (o.hubDb) plan.push(`HUBDB  copy project '${srcKey}' rows from ${o.hubDb} → ${wsHubDb(ws)} (events re-keyed)`);
   }
@@ -424,7 +427,7 @@ export function teamImport(argv = process.argv.slice(2)): number {
   let anyFailed = false;
   for (const srcKey of selected) {
     const key = o.renames[srcKey] ?? srcKey;
-    const oldStateDir = join(devloopDataDir(), srcKey);
+    const oldStateDir = join(legacyDataDir(), srcKey);
     const rep = newReport();
 
     // lessons.md is re-homed into the library rather than copied in place, so it is handled here and
@@ -439,10 +442,10 @@ export function teamImport(argv = process.argv.slice(2)): number {
     if (existsSync(oldStateDir)) copyClassified(oldStateDir, wsProjectDir(ws, key), rep, new Set<FileClass>(["worktrees"]), new Set<FileClass>(["lessons"]));
     // The pre-per-project root state files, for the defaultProject only (see rootStateFiles).
     if (srcKey === defaultProject) {
-      for (const n of rootStateFiles(devloopDataDir())) {
-        const { outcome, error } = copyFileOnce(join(devloopDataDir(), n), join(wsProjectDir(ws, key), n));
+      for (const n of rootStateFiles(legacyDataDir())) {
+        const { outcome, error } = copyFileOnce(join(legacyDataDir(), n), join(wsProjectDir(ws, key), n));
         rep["state-json"][outcome]++;
-        if (outcome === "failed") rep.failures.push(`state-json: ${join(devloopDataDir(), n)} → ${join(wsProjectDir(ws, key), n)}: ${error}`);
+        if (outcome === "failed") rep.failures.push(`state-json: ${join(legacyDataDir(), n)} → ${join(wsProjectDir(ws, key), n)}: ${error}`);
       }
     }
     if (o.hubDb) copyHubRows(o.hubDb, wsHubDb(ws), srcKey, key);
@@ -467,7 +470,7 @@ export function teamImport(argv = process.argv.slice(2)): number {
   }
   if (movedNeeded) { log("Some repos are outside the workspace — run the printed `mv` commands, then `dev-loop doctor`."); return 1; }
   log("Run `dev-loop doctor` to verify, then `/dev-loop:sync-project` to reconcile backend ids.");
-  log(`Once this report shows everything you need, remove the legacy tree yourself (${devloopDataDir()}) — this verb never deletes it.`);
+  log(`Once this report shows everything you need, remove the legacy tree yourself (${legacyDataDir()}) — this verb never deletes it.`);
   return 0;
 }
 

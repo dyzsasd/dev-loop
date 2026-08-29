@@ -5,8 +5,10 @@
 // `daemon up` even exited 0. The guard must refuse the value LOUDLY, naming the env var at fault,
 // BEFORE any directory is created.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, readdirSync, realpathSync } from "node:fs";
-import { devloopHome, devloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath, guardCliPath } from "../src/paths.ts";
+import { mkdirSync, mkdtempSync, rmSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { devloopHome, devloopDataDir, tryDevloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath, tryHubDbPath, workspacesIndexPath, guardCliPath } from "../src/paths.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
@@ -52,6 +54,68 @@ ok(hubDbPath() === "/tmp/hub-paths/home/hub.db", "an EMPTY DEVLOOP_HUB_DB falls 
 reset(); process.env.DEVLOOP_HUB_DB = "/tmp/undefined-behavior/hub.db";
 ok(hubDbPath() === "/tmp/undefined-behavior/hub.db", "'undefined-behavior' as a segment is NOT junk (segment match only)");
 reset();
+
+// ── unit: the retired home anchor — a state path comes from a workspace, or from nothing ──────────
+// `~/.dev-loop` was the last rung of every state ladder, so a command run outside every workspace
+// silently opened (and CREATED) a machine-global board and data dir instead of saying it had found
+// none. The measured symptom was doctor checking one machine's fire ledger against another tree's
+// reports (W35). The rung is gone: a workspace answers, or the caller gets an error naming the ways
+// to supply the path.
+{
+  const WS_KEYS = ["DEVLOOP_WORKSPACE", "DEVLOOP_TEAM", "DEVLOOP_HOME", "DEVLOOP_HUB_DB", "DEVLOOP_DATA_DIR", "DEVLOOP_PROJECTS_JSON"] as const;
+  const savedWs = Object.fromEntries(WS_KEYS.map((k) => [k, process.env[k]]));
+  const cwd0 = process.cwd();
+  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-paths-ws-")));
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "dl-paths-none-")));
+  const legacyHome = join(homedir(), ".dev-loop");
+  writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
+    schemaVersion: 2, team: { key: "pathsws", backend: "service" }, repos: {}, projects: {},
+  }));
+  try {
+    for (const k of WS_KEYS) delete process.env[k];
+
+    // The workspace answers, without any env var naming the db.
+    process.env.DEVLOOP_WORKSPACE = wsRoot;
+    ok(hubDbPath() === join(wsRoot, ".dev-loop", "hub.db"),
+      `no DEVLOOP_HUB_DB + DEVLOOP_WORKSPACE → the workspace's own board (${hubDbPath()})`);
+    ok(devloopDataDir() === join(wsRoot, ".dev-loop"),
+      `…and the data dir is that workspace's state root (${devloopDataDir()})`);
+
+    // Nothing answers: an error, not a home-anchored path.
+    delete process.env.DEVLOOP_WORKSPACE;
+    process.chdir(outside);
+    ok(tryHubDbPath() === undefined, "outside every workspace with no env set, the hub-db ladder resolves NOTHING");
+    ok(tryDevloopDataDir() === undefined, "…and so does the data-dir ladder");
+    let dbErr = "";
+    try { dbErr = `resolved to ${hubDbPath()}`; } catch (e) { dbErr = (e as Error).message; }
+    ok(dbErr.includes("no hub database resolved"), `…so hubDbPath() reports it cannot resolve one (${dbErr.slice(0, 90)})`);
+    ok(!dbErr.includes(legacyHome), "…and never returns or names ~/.dev-loop/hub.db");
+    ok(dbErr.includes("DEVLOOP_HUB_DB") && dbErr.includes("dev-loop team init"),
+      "…and the message names both ways to supply one (the env var, or a workspace)");
+    let dataErr = "";
+    try { dataErr = `resolved to ${devloopDataDir()}`; } catch (e) { dataErr = (e as Error).message; }
+    ok(dataErr.includes("no dev-loop data dir resolved") && !dataErr.includes(legacyHome),
+      `devloopDataDir() refuses the same way (${dataErr.slice(0, 90)})`);
+
+    // The workspace index is the ONE file that cannot live in a workspace. It left the retired tree
+    // too, or the next command would re-create what the operator had just deleted.
+    ok(!workspacesIndexPath().startsWith(legacyHome + "/"),
+      `the workspace index is not under ~/.dev-loop (${workspacesIndexPath()})`);
+    ok(workspacesIndexPath().endsWith(join("dev-loop", "workspaces.json")),
+      `…it is an XDG-style config path (${workspacesIndexPath()})`);
+    process.env.DEVLOOP_HOME = join(outside, "home");
+    ok(workspacesIndexPath() === join(outside, "home", "workspaces.json"),
+      "…and DEVLOOP_HOME still relocates it, which is how the suites keep it out of a real home directory");
+    ok(devloopHome() === join(outside, "home"), "devloopHome() is that explicit override and nothing more");
+    delete process.env.DEVLOOP_HOME;
+    ok(devloopHome() === undefined, "…and it is undefined when unset, rather than ~/.dev-loop");
+  } finally {
+    process.chdir(cwd0);
+    for (const k of WS_KEYS) { if (savedWs[k] === undefined) delete process.env[k]; else process.env[k] = savedWs[k]!; }
+    rmSync(wsRoot, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+}
 
 // ── integration: the ORIGINAL incident — a hub boot / daemon-up probe with a junk db path must fail
 // LOUDLY and create NOTHING (before the fix, both silently mkdir'd `<cwd>/undefined/` with a schema-only

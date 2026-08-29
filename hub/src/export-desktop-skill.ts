@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { tryResolveWorkspace } from "./workspace.ts";
 import { toLegacyView, deliveryProjects, WsValidationError } from "./team-config.ts";
 
@@ -76,7 +76,15 @@ if (ws) {
     teamContext = `\n## Team context\n- **team**: ${ws.file.team.key} · **backend**: ${ws.file.team.backend}\n- **sibling projects**: ${siblings.length ? siblings.join(", ") : "(none)"}\n- This export is for **${project}** only; coordinate cross-project work through the team intake, not here.\n`;
   }
 } else {
-  const projectsJson = process.env.DEVLOOP_PROJECTS_JSON ?? join(process.env.DEVLOOP_DATA_DIR ?? join(homedir(), ".dev-loop"), "projects.json");
+  // No workspace resolved, so the project can only come from an EXPLICITLY named v1 config. The
+  // implicit ~/.dev-loop/projects.json rung is gone (state-locality I3) — without one of these the
+  // exporter has no project registry to read, and saying so beats exporting from a retired tree.
+  const dataDir = process.env.DEVLOOP_DATA_DIR;
+  const projectsJson = process.env.DEVLOOP_PROJECTS_JSON ?? (dataDir ? join(dataDir, "projects.json") : null);
+  if (!projectsJson) {
+    console.error("export-desktop-skill: no workspace found from the current directory, and neither DEVLOOP_PROJECTS_JSON nor DEVLOOP_DATA_DIR is set — run it inside a workspace (dev-loop team init) or name the config explicitly.");
+    process.exit(1);
+  }
   const cfg = existsSync(projectsJson) ? (JSON.parse(readFileSync(projectsJson, "utf8")) as { projects?: Record<string, Record<string, unknown>> }) : { projects: {} };
   p = cfg.projects?.[project];
   cfgSource = projectsJson;

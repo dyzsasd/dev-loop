@@ -29,7 +29,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, repoFileStrategyPath } from "./resolve-project.ts"; // + docs P3b: the ONE strategyDoc→repo-file rule (doc-home, §19)
-import { hubDbPath, pkgVersion, pkgVersionFresh, pkgBuildCommit, pkgBuildCommitFresh } from "./paths.ts";
+import { hubDbPath, tryHubDbPath, pkgVersion, pkgVersionFresh, pkgBuildCommit, pkgBuildCommitFresh } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -782,7 +782,10 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
   // WS_ID is the authenticated surface's identity affordance — shows which workspace's board you're on.
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
   const DAEMON_BUILD_COMMIT = pkgBuildCommit();
-  const WS_ID = daemonDbPath ?? hubDbPath();
+  // Empty when the caller named no db AND nothing resolves: WS_ID is a display identity and the
+  // inode probe's input, so an unresolvable board is "no identity to show", not a reason to refuse
+  // to construct the daemon. The processes that need a real board resolve it before they get here.
+  const WS_ID = daemonDbPath ?? tryHubDbPath() ?? "";
   // LOOP-367: the inode this daemon actually opened. Captured here rather than accepted as an option so no
   // caller can forget to pass it — every daemon, including the ones tests spawn, gets the swap check.
   const OPENED = ((): { path: string; ino: number } | undefined => {

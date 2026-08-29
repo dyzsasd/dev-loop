@@ -162,6 +162,35 @@ for (const [label, build] of [
   ok(emitted(fixture(build)).length === 1, `AC3: ${label} alone fires E20`);
 }
 
+// ── The retired anchor has exactly two readers ───────────────────────────────────────────────────
+// `~/.dev-loop` is no longer the last rung of any state ladder (design/state-locality, I3): a
+// workspace answers, or the resolver reports that it cannot. Two callers still NAME the location on
+// purpose — the migration verb that copies state OUT of it (paths.ts legacyHomeRoot, read by
+// team-import.ts) and the E20 row that reports it is still occupied (doctor-registry.ts). A third
+// caller is how the fallback grows back, so the set is asserted from the source rather than
+// remembered. Comment lines are skipped: this file's own prose names the path it is about.
+{
+  const srcFiles: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(join(dir, e.name));
+      else if (e.name.endsWith(".ts")) srcFiles.push(join(dir, e.name));
+    }
+  };
+  walk(srcDir);
+  ok(srcFiles.length > 50, `the source scan sees the whole tree (${srcFiles.length} files)`);
+  const readers = new Set<string>();
+  for (const file of srcFiles) {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (line.trim().startsWith("//") || line.trim().startsWith("*")) continue;
+      if (/homedir\(\)/.test(line) && line.includes(".dev-loop")) readers.add(file.slice(srcDir.length + 1));
+    }
+  }
+  const expected = ["doctor-registry.ts", "paths.ts"];
+  ok(JSON.stringify([...readers].sort()) === JSON.stringify(expected),
+    `LOOP-473: the home anchor is composed in exactly ${expected.join(" + ")} (found ${JSON.stringify([...readers].sort())})`);
+}
+
 // ── AC6 / the registry ───────────────────────────────────────────────────────────────────────────
 
 const row = DOCTOR_CODES.find((r) => r.code === "E20");

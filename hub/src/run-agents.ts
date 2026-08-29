@@ -17,7 +17,7 @@ import { notify } from "./comms.ts";
 import { secretsDeclaredKeys, scopeFireSecrets } from "./secrets.ts"; // Q9/LOOP-432: the per-fire secret-scoping strip set
 import { assembleBootCorpus, type ResolvedFireConfig } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
-import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
+import { tryDevloopDataDir, devloopProjectsPath, tryHubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { LANE_ACTOR, LANE_JOBS, isLane, isQaLane, type Lane } from "./agent-handles.ts"; // job-scoped prompts: the pm/qa job-lanes (scheduler fire units that fire as their owning actor)
@@ -324,8 +324,12 @@ const defaultRoot = () => {
   const candidates = [resolve(here, ".."), resolve(here, "..", "..")];
   return candidates.find(isPluginRoot) ?? resolve(here, "..", "..");
 };
-const defaultDataDir = () => devloopDataDir();
-const defaultHubDb = () => hubDbPath();
+// Both defaults are composed while ARGUMENTS are still being parsed — before `--help`, before
+// --data/--hub-db have been seen, and before the workspace is resolved for real. So they resolve
+// without throwing: an unresolvable path stays empty here and main() refuses with one message that
+// names every way to supply it. The retired ~/.dev-loop is not one of them.
+const defaultDataDir = () => tryDevloopDataDir() ?? "";
+const defaultHubDb = () => tryHubDbPath() ?? "";
 
 function usage(): void {
   console.log(`dev-loop run — schedule dev-loop agents with a headless CLI
@@ -353,8 +357,8 @@ Options:
   --once                      run each selected agent once, then exit
   --dry-run                   print resolved commands; do not launch Claude/Codex
   --root <path>               dev-loop checkout root (default: inferred, or DEVLOOP_PLUGIN_ROOT/CLAUDE_PLUGIN_ROOT)
-  --data <path>               dev-loop data dir (default: DEVLOOP_DATA_DIR or ~/.dev-loop)
-  --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB or ~/.dev-loop/hub.db)
+  --data <path>               dev-loop data dir (default: DEVLOOP_DATA_DIR, else the workspace's .dev-loop)
+  --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB, else the workspace's .dev-loop/hub.db)
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
@@ -1934,6 +1938,11 @@ function resolveWs(opts: Options): Workspace | null {
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  // Nothing named the state paths and no workspace answered: refuse here rather than composing every
+  // gate/log/db path under an empty string. ~/.dev-loop is no longer a fallback (state-locality I3).
+  if (!opts.dataDir || !opts.hubDb) {
+    die("no workspace resolved and no state paths named — pass --data/--hub-db, set DEVLOOP_DATA_DIR/DEVLOOP_HUB_DB, or run inside a workspace (`dev-loop team init` creates one).", 1);
+  }
   // --background (operator-console flow): re-spawn THIS entry detached with the same args and return the
   // shell. The child owns the run lock as usual (a second scheduler is still refused), output appends to
   // the workspace run log, and `dev-loop stop` is the matching off switch. Deliberately BEFORE workspace
