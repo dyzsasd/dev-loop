@@ -90,7 +90,13 @@ export const APPROVALS_UNVERIFIABLE = "unverifiable";
 export interface PushGuardResult { branch: string; ahead: number; unknownRefs: string[]; findings: PushGuardFinding[]; passengers: PushGuardPassenger[]; governance: PushGuardGovernance[]; approvals: PushGuardApproval[]; unresolvedDefaultBranch?: string; note?: string;
   // LOOP-567 — set ONLY when this push would put code on the default branch of a `landing:"pr"`
   // repo. Present ⇒ refuse. Absent is the normal case for every branch push and for `doc-land`.
-  landing?: DefaultBranchPushVerdict }
+  landing?: DefaultBranchPushVerdict;
+  // Merge commits inside the range, on a `landing:"direct"` repo. §7's merge-back rebases onto the
+  // base and lands `--ff-only` precisely so the default branch keeps a linear history; a merge commit
+  // in the range becomes a merge knot on it the moment the branch is fast-forwarded in. Absent (not
+  // an empty array) when there are none, so a clean result keeps its pre-change shape.
+  mergeCommits?: PushGuardMergeCommit[] }
+export interface PushGuardMergeCommit { sha: string; subject: string }
 
 /** The key grammar for this class, in ONE place — the guard, the refusal, and the tests all read it. */
 export const pushApprovalKey = (branch: string, sha: string): string => `push:${branch}:${sha}`;
@@ -641,12 +647,32 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // the question is what would REACH the branch, not what a rebase dragged through the branch ref.
   // One `git log --name-only` spawn over the same range the approvals gate used, so the class cannot
   // disagree with the receipt about which commits were judged.
+  // One config read for both landing-mode classes below (the resolved mode, absent ⇒ "direct", §12b).
+  const landingFacts = range ? readLandingFactsFor(repoDir) : null;
+  const landingMode = landingFacts ? (landingFacts.landing ?? "direct") : null;
+
+  // The merge-knot class. On `landing:"direct"` the branch is landed by fast-forwarding the default
+  // branch onto it, so every merge commit in the range becomes a merge commit on the default branch —
+  // which is what §7's "rebase onto the base, land --ff-only, never create a merge knot on
+  // defaultBranch" exists to prevent. Measured on JBU-44: the fire merged origin/main INTO its branch
+  // and then fast-forwarded main onto the result, and the knot landed. The instruction was already in
+  // the conventions; push-guard is the only hard gate in front of a direct landing, so it is where
+  // the rule can actually stop one. `pr` is exempt: the forge lands that branch under its own merge
+  // setting, and the branch's shape is not the base's business.
+  const mergeCommits: PushGuardMergeCommit[] = [];
+  if (range && landingMode === "direct") {
+    try {
+      for (const c of parseLog(git(["log", "--merges", "-z", "--pretty=format:%H%n%B", range])))
+        mergeCommits.push({ sha: c.sha.slice(0, 7), subject: c.subject });
+    } catch { /* an unreadable range is already reported by `note`; this class adds nothing there */ }
+  }
+
   let landingVerdict: DefaultBranchPushVerdict | undefined;
   if (range && br === defaultBranch) {
-    const facts = readLandingFactsFor(repoDir);
+    const facts = landingFacts!;
     // Only pay for the path scan once the cheap config predicate says the mode can trip. A `direct`
     // repo — the majority — spawns no extra git.
-    if ((facts.landing ?? "direct") === "pr") {
+    if (landingMode === "pr") {
       let changedPaths: string[] = [];
       try {
         changedPaths = [...new Set(git(["log", "--name-only", "--pretty=format:", range]).split("\n").map((f) => f.trim()).filter(Boolean))];
@@ -666,7 +692,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const note = hasUpstream ? undefined
     : range ? `no upstream ${remote}/${br} — first push of this branch; gated over ${range}`
     : `no upstream ${remote}/${br} and no ${hasRemote ? `${remote}/${defaultBranch}` : `local ${defaultBranch}`} or local ${br} — the range could not be resolved, so findings/passengers/governance did NOT run`;
-  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}), ...(landingVerdict ? { landing: landingVerdict } : {}) };
+  return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}), ...(landingVerdict ? { landing: landingVerdict } : {}), ...(mergeCommits.length ? { mergeCommits } : {}) };
 }
 
 // CLI: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] [--strict] [--json]
@@ -760,11 +786,15 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     // LOOP-567 — the refusal for code on a `landing:"pr"` default branch. Printed alongside the
     // other classes rather than short-circuiting, so one run still reports everything it found.
     if (r.landing) console.log(defaultBranchPushRefusalLine(r.landing));
+    // The remedy is the one §7 already prescribes, named so the agent has a legal next move: rebase,
+    // do not merge. Printed per commit so a branch that merged twice shows both.
+    for (const m of r.mergeCommits ?? [])
+      console.log(`⛔ merge commit: ${m.sha} "${m.subject}" — a direct landing fast-forwards ${defaultBranch} onto this branch, so this would put a merge commit on ${defaultBranch}. Rebase onto the base instead (§7: rebase, then land --ff-only), then re-run this guard.`);
     // Names the ref that was actually missing. A repo with no remote has no `origin/main` to be
     // missing — saying so sent an operator looking for a remote that was never configured.
     if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: no base ref for '${r.unresolvedDefaultBranch}' (neither origin/${r.unresolvedDefaultBranch} nor a local ${r.unresolvedDefaultBranch}) — passenger detection did NOT run (a safety gate must not pass silently)`);
     if (r.unknownRefs.length) console.log(`note: ${r.unknownRefs.length} ticket ref(s) not verifiable here (${r.unknownRefs.slice(0, 5).join(", ")}${r.unknownRefs.length > 5 ? ", …" : ""}) — no matching row in the local hub`);
-    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.landing && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, or §17 governing-file edits aboard");
+    if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.landing && !r.mergeCommits?.length && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, merge commits, or §17 governing-file edits aboard");
   }
-  process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || r.approvals.length || !!r.landing || !!r.unresolvedDefaultBranch) ? 1 : 0);
+  process.exit(strict && (r.findings.length || r.passengers.length || r.governance.length || r.approvals.length || !!r.landing || !!r.mergeCommits?.length || !!r.unresolvedDefaultBranch) ? 1 : 0);
 }

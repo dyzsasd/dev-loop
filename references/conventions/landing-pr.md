@@ -16,9 +16,8 @@
   4. Comments the PR URL on the ticket, then moves it to **`In Review`** (Step 7).
   It **never deploys** in `pr` mode — `autoDeploy` is ignored and dev-agent **Step 6.5
   (post-deploy smoke + rollback) does not run**; the human's merge is what ships (their
-  CI/CD deploys on merge). `git.autoPush` must be effectively true to open a PR (the branch
-  has to reach origin); with `autoPush:false`, Dev commits the branch locally and reports
-  that a human must push + open the PR (no `gh` call).
+  CI/CD deploys on merge). `pr` REQUIRES a remote — the branch has to reach origin before a PR
+  can exist — so a repo with none cannot run this mode; it lands `direct` (§7) instead.
 
 **Artifact / resume detection (every Dev fire's Step 0) in `pr` mode:** "already shipped
 this ticket" = an **open or merged PR referencing the ticket id**

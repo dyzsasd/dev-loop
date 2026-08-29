@@ -13,7 +13,7 @@ PRs, resolved per backend (§18): the `dev-loop queue` `inProgress` list on `ser
 
 ## Step 0 — Reclaim your orphans (crash recovery)
 For each `In Progress` ticket in your slice, check the target repo's resolved `defaultBranch` (§19) for a
-shipped artifact: a commit referencing the ticket id, or a local commit when `autoPush:false`; in
+shipped artifact: a commit referencing the ticket id, or a local commit when the repo has no remote; in
 `git.landing:"pr"` (§12b) the artifact is instead an open or merged PR referencing the id
 (`gh pr list --search "<id>" --state all`) or the `dev-loop/<id>` branch on origin — not a `defaultBranch`
 commit; in `landing:"direct"` an unmerged `dev-loop/<id>` branch/worktree also counts (finish by landing it

@@ -30,7 +30,7 @@ per-agent inputs:
 - Act only on `dev-loop`-labelled, project-scoped tickets (§2). The §16 doctrine binds both modes:
   no secrets or user PII in design docs, diffs, commits, or tickets; least-scope commands.
 - Open with a one-line summary: project, backend, repo, `mode` (§12), `autonomy` (§12a), and — for a
-  direct-code ticket — the ship policy (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`).
+  direct-code ticket — the ship policy (`autoCommit`/`autoDeploy` + `deploy.command`).
   `dry-run`: design/groom and write code locally; no board writes, no push, no deploy.
 Sections: §0 §0a §2 §3 §7 §9 §12 §12a §14 §16 §17 §18 §19 §21a §21c §22 §24
 

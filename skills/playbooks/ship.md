@@ -67,16 +67,17 @@ worktree on `dev-loop/<id>` (§7), commit only this ticket's files, push, open t
 comment the URL.
 - `git.autoMerge:true` (§12c) ⇒ the ticket STAYS `In Progress` (you own landing it) until Step 0.5 merges the
   green PR — only then `In Review`. Poll the checks yourself; never GitHub `--auto`/branch protection.
-- `autoMerge` absent/false ⇒ Step 7 now (a human reviews + merges); `autoPush:false` ⇒ commit locally, note a
-  human must push + open the PR.
+- `autoMerge` absent/false ⇒ Step 7 now (a human reviews + merges). `pr` needs a remote by definition; a
+  repo with none lands `direct` instead.
 - NEVER deploy in pr mode — `autoDeploy` is ignored and Step 6.5 does not run.
 
 **`landing:"direct"`:** a split tier lands via the §7 merge-back (sync / rebase-if-stale → ONE `with-repo-lock`
 wrapping the `--ff-only` merge + push → cleanup; pull `references/conventions/worktree-landing.md`); only the
 legacy solo dev commits in place.
 - `git.autoCommit` ⇒ commit on the resolved `defaultBranch` (§19; if absent, on the current branch, noted —
-  never a divergent branch), message referencing the id + co-author trailer. `git.autoPush` ⇒ push (the
-  constitution's push-guard / fast-forward-only rule binds).
+  never a divergent branch), message referencing the id + co-author trailer. **Push when the repo has a
+  remote** — it is part of the landing, not a flag; the constitution's push-guard / fast-forward-only rule
+  binds, and a merge commit in the range is a push-guard refusal (rebase, never merge the base in).
 - **Before ANY deploy step apply the constitution's Deploy ceiling (§12d):** a `"manual"` `team.deployPolicy`
   env is a HARD BAIL + operator park, never a prompt (command-shape deploys with no env mapping = prod).
 - `git.autoDeploy` + a resolved `deploy.command` ⇒ run it and confirm success. A repo with NO deploy skips it

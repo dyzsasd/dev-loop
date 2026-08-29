@@ -37,14 +37,15 @@ the repo's own value **if present**, else the **top-level** value.
 **Multi-repo pr mode:** `landing`/`autoMerge`/`mergeChecks`/`deploy` all resolve per-repo, so one
 repo can run `"pr"`+`autoMerge` with its own `mergeChecks` + release-PR deploy while a sibling runs
 `"direct"` — Dev reads the **ticket's target repo** (its `repo:<name>` label) and applies that
-repo's resolved landing/deploy. `autoCommit`/`autoPush`/`autoDeploy` stay product-level in `git`.
+repo's resolved landing/deploy. `autoCommit`/`autoDeploy` stay product-level in `git`.
 
 The synthesized single-repo entry inherits **all** top-level `build`/`git`/`deploy`,
 which remain the authoritative single-repo source — so resolution on a single-repo
 project returns exactly today's values.
 
-- `autoCommit` / `autoPush` / `autoDeploy` are **product-level**, in the `git` block —
-  they are **not** per-repo. Only `defaultBranch` is per-repo overridable.
+- `autoCommit` / `autoDeploy` are **product-level**, in the `git` block — they are **not**
+  per-repo. Only `defaultBranch` is per-repo overridable. Pushing is not a flag: a landing
+  publishes when the repo has a remote (§7).
 - A repo whose resolved `deploy` is empty (neither `repos[].deploy` nor a top-level
   `deploy`) **skips deploy entirely** and NEVER inherits another repo's
   `deploy.command`/`healthCheck`.

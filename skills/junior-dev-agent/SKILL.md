@@ -31,7 +31,7 @@ per-agent inputs:
 - Lessons (§14): `## junior-dev` + `## Dev` + `## Shared`. Codex (§24): the same sub-flags as `dev`.
 - Open with a one-line summary: project, board, repo, `mode` (§12), `autonomy` (§12a), the dev model
   detected (split vs the legacy no-op), and the ship policy
-  (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`). `dry-run`: code locally; no board writes,
+  (`autoCommit`/`autoDeploy` + `deploy.command`). `dry-run`: code locally; no board writes,
   no push, no deploy.
 Sections: §0 §0a §2 §7 §9 §12 §12a §14 §16 §17 §18 §20 §21c §22 §24
 

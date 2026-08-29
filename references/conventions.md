@@ -709,8 +709,9 @@ else proceeds. Under `full`, escalate only those. Full text: `references/convent
 Orthogonal to `mode`/`autonomy`, each project's **`git.landing`** chooses HOW Dev lands a
 finished ticket. **Absent ⇒ `"direct"`.**
 
-- **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch` and,
-  per `git.autoPush`/`autoDeploy`, pushes and (if a `deploy.command` resolves) deploys
+- **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch`, **pushes it
+  when the repo has a remote configured** (no remote ⇒ the merge-back is the whole landing), and per
+  `git.autoDeploy` (if a `deploy.command` resolves) deploys
   (dev-agent Step 6/6.5). The human is not in the landing loop. **In a split-dev project
   (§21a) the commit still happens in the ticket's isolated worktree and reaches
   `defaultBranch` via the §7 direct merge-back sequence** — `direct` names WHERE the change
@@ -719,7 +720,7 @@ finished ticket. **Absent ⇒ `"direct"`.**
 - **`"pr"`** — Dev never commits to `defaultBranch`: per finished ticket it branches `dev-loop/<ticket-id>`
   off `origin/<defaultBranch>`, commits ONLY that ticket's files (§7), pushes, opens the PR (`gh pr create`),
   comments the URL and moves the ticket to **`In Review`**; it **never deploys** in `pr` mode (no Step 6.5);
-  `autoPush:false` ⇒ commit locally, report that a human must push. "Already shipped" (Step 0) = an
+  a repo with no remote cannot run `pr` at all. "Already shipped" (Step 0) = an
   open/merged PR referencing the id or the `dev-loop/<id>` branch on origin — never a commit on
   `defaultBranch`.
 
@@ -1012,7 +1013,7 @@ target decides your action):**
   `repos[]` wins.
 - **Resolution:** a per-repo setting = the repo's own value if present, else top-level — `build`,
   `defaultBranch` (⇐ `git.defaultBranch`), `landing`, `autoMerge`, `mergeChecks`, `deploy`,
-  `contributorSkill`; `autoCommit`/`autoPush`/`autoDeploy` stay product-level; an empty resolved `deploy`
+  `contributorSkill`; `autoCommit`/`autoDeploy` stay product-level; an empty resolved `deploy`
   skips deploy, never inheriting a sibling's; `role` is load-bearing, `lang` informational.
 - **The target is the `repo:<name>` label** (both backends; full-set re-pass §10 #1), **required** in a
   multi-repo project: missing/contradictory ⇒ Dev BLOCKS (`info-needed`/`scope-design`), Sweep flags,

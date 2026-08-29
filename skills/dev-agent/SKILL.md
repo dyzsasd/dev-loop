@@ -28,7 +28,7 @@ per-agent inputs:
   scoping needs it.
 - Lessons (§14): your **Dev** section + `## Shared`.
 - Open with a one-line summary: project, board, repo, `mode`, `autonomy`, and the ship policy
-  (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`) — a red build or an unresolved
+  (`autoCommit`/`autoDeploy` + `deploy.command`) — a red build or an unresolved
   Critical/High finding never ships. `dry-run`: groom and code locally; no board writes, no push,
   no deploy.
 Sections: §0 §0a §2 §7 §10 §12 §12a §14 §16 §17 §18 §19 §20a §21c §22 §24
