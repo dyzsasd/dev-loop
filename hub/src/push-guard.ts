@@ -453,12 +453,28 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // its own cause. Null while enforcement is off, so those axes behave exactly as before (AC2).
   const rejectedDb = recordUnusable ? approvalsDbFile : null;
 
+  // ── The base this push is measured against — resolved ONCE, read by all four classes ──────────
+  // With a remote: origin/<defaultBranch>, as always. With NO remote — a `git init` workspace on
+  // `landing:"direct"`, which is a supported shape and the one worktree reap was fixed for in
+  // 6c61f0e — the LOCAL <defaultBranch>. Every ref under `origin/` is unresolvable there, so the
+  // guard used to report that passenger detection had not run (exit 1 under --strict, so nothing
+  // could ever land) and to widen its range to the branch's whole history, which on a direct-landing
+  // repo IS main's history: it re-flagged commits that landed weeks ago as ride-alongs.
+  //
+  // The predicate is whether THIS REPOSITORY has the remote, not whether the registry declares one:
+  // the question being asked is "can origin/<defaultBranch> resolve", the registry can be stale in
+  // either direction, and push-guard also runs on repos that are in no registry at all.
+  const hasRemote = gitOk(["remote", "get-url", remote]);
+  const baseRef = hasRemote
+    ? (gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`]) ? `${remote}/${defaultBranch}` : null)
+    : (gitOk(["rev-parse", "--verify", "--quiet", defaultBranch]) ? defaultBranch : null);
+
   const passengers: PushGuardPassenger[] = [];
   let unresolvedDefaultBranch: string | undefined;
   const ownId = branchTicketId(br);
   if (ownId) {
-    if (gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`])) {
-      const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${remote}/${defaultBranch}..${br}`]));
+    if (baseRef) {
+      const pCommits = parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${baseRef}..${br}`]));
       // Open hub.db for passenger ticket-state lookups (read-only).
       const pgDb = dbPath ?? resolveHubDbPath(workspaceRootForRepoDir(repoDir) ?? repoDir);
       // An unreadable db degrades to the SAME path an absent one already takes (no state lookups,
@@ -491,7 +507,8 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
         }
       } finally { pgConn?.close(); }
     } else {
-      // origin/<defaultBranch> doesn't resolve — record it; the caller must fail loud (AC4: never silent).
+      // No base ref at all — neither origin/<defaultBranch> nor a local one. Record it; the caller
+      // must fail loud (AC4: never silent).
       unresolvedDefaultBranch = defaultBranch;
     }
   }
@@ -502,7 +519,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // forge yet), so it is gated on the same footing rather than skipped with the note below.
   const hasUpstream = gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${br}`]);
   const range = hasUpstream ? `${remote}/${br}..${br}`
-    : gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`]) ? `${remote}/${defaultBranch}..${br}`
+    : baseRef ? `${baseRef}..${br}`
     // Neither remote ref resolves — an empty or brand-new remote, i.e. the first push the forge has
     // ever seen from this repo. That push publishes the branch's ENTIRE history, so that history is
     // the range. Absent refs make the published set WIDER, never narrower, and a `null` here read as
@@ -559,10 +576,10 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // no-refs arm has no default-branch ref to subtract. Only the tracked-branch arm narrows.
   // `ahead` keeps counting `range` — it is printed as "ahead of origin/<branch>", which for a
   // rebased branch genuinely IS the wider number.
-  const subtractPublished = hasUpstream && gitOk(["rev-parse", "--verify", "--quiet", `${remote}/${defaultBranch}`]);
+  const subtractPublished = hasUpstream && !!baseRef;
   const scanCommits = !range ? []
     : subtractPublished
-      ? parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range, "--not", `${remote}/${defaultBranch}`]))
+      ? parseLog(git(["log", "-z", "--pretty=format:%H%n%B", range, "--not", baseRef!]))
       : commits;
   // Every referenced id, so `unknownRefs` still reports a ghost ref wherever it appears (LOOP-25).
   // Whether a reference is this commit's WORK is a separate question, asked per finding below.
@@ -648,7 +665,7 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   // reader judging a clean verdict needs to know WHICH commits were clean (LOOP-528 AC1).
   const note = hasUpstream ? undefined
     : range ? `no upstream ${remote}/${br} — first push of this branch; gated over ${range}`
-    : `no upstream ${remote}/${br} and no ${remote}/${defaultBranch} or local ${br} — the range could not be resolved, so findings/passengers/governance did NOT run`;
+    : `no upstream ${remote}/${br} and no ${hasRemote ? `${remote}/${defaultBranch}` : `local ${defaultBranch}`} or local ${br} — the range could not be resolved, so findings/passengers/governance did NOT run`;
   return { branch: br, ahead: commits.length, unknownRefs, findings, passengers, governance, approvals, unresolvedDefaultBranch, ...(note ? { note } : {}), ...(landingVerdict ? { landing: landingVerdict } : {}) };
 }
 
@@ -743,7 +760,9 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     // LOOP-567 — the refusal for code on a `landing:"pr"` default branch. Printed alongside the
     // other classes rather than short-circuiting, so one run still reports everything it found.
     if (r.landing) console.log(defaultBranchPushRefusalLine(r.landing));
-    if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: origin/${r.unresolvedDefaultBranch} does not exist — passenger detection did NOT run (a safety gate must not pass silently)`);
+    // Names the ref that was actually missing. A repo with no remote has no `origin/main` to be
+    // missing — saying so sent an operator looking for a remote that was never configured.
+    if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: no base ref for '${r.unresolvedDefaultBranch}' (neither origin/${r.unresolvedDefaultBranch} nor a local ${r.unresolvedDefaultBranch}) — passenger detection did NOT run (a safety gate must not pass silently)`);
     if (r.unknownRefs.length) console.log(`note: ${r.unknownRefs.length} ticket ref(s) not verifiable here (${r.unknownRefs.slice(0, 5).join(", ")}${r.unknownRefs.length > 5 ? ", …" : ""}) — no matching row in the local hub`);
     if (!r.findings.length && !r.passengers.length && !r.governance.length && !r.approvals.length && !r.landing && !r.unresolvedDefaultBranch && !r.note) console.log("clean: no canceled/duplicate ticket refs, passengers, or §17 governing-file edits aboard");
   }

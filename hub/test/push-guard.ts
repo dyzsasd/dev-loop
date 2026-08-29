@@ -286,7 +286,11 @@ try {
     // CLI: --strict must exit 1 (fails-before: today exits 0 because it silently skips)
     const pg4bStrict = cli(["--repo", work, "--branch", "dev-loop/CERT-41", "--default-branch", "nonexistent", "--strict"]);
     ok(pg4bStrict.status === 1, "AC4 CLI --strict: unresolvable defaultBranch ⇒ exit 1 (a safety gate must not pass silently)");
-    ok(/does not exist/.test(pg4bStrict.stdout), "AC4 CLI: output names the missing origin/<branch>");
+    // Names BOTH refs it looked for, not just `origin/<branch>`: a repo with no remote has no
+    // origin/<branch> to be missing, and the old wording sent an operator looking for a remote that
+    // was never configured (push-guard-no-remote.ts).
+    ok(/neither origin\/nonexistent nor a local nonexistent/.test(pg4bStrict.stdout),
+      `AC4 CLI: output names both refs it looked for (${pg4bStrict.stdout.split("\n").find((l) => l.includes("push-guard:")) ?? pg4bStrict.stdout.slice(0, 120)})`);
 
     git(work, ["checkout", "-q", "main"]);
   }
