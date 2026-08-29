@@ -2,7 +2,7 @@
 // never on local HEAD. A branch cut off a local main that is ahead of origin carries the operator's
 // unpushed doc commits as passengers in every dev PR (LOOP-48 / PR #28 field incident).
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -202,6 +202,10 @@ try {
     const wtUnmerged = run(["add", "RL-2", "--repo", "repo"], lws).stdout.trim();
     git(wtUnmerged, ["commit", "--allow-empty", "-qm", "work for RL-2"]);
 
+    // A ticket can hold one worktree per repo, so reaping one ref must not remove a parent that still
+    // has siblings. Planting an entry beside RL-2's ref reproduces that shape without a second repo.
+    mkdirSync(join(lws, ".dev-loop", "wt", "RL-2", "other-repo"), { recursive: true });
+
     const reap = run(["reap", "--repo", "repo"], lws);
     const out = `${reap.stdout}${reap.stderr}`;
     ok(reap.status === 0, `D4: reap on a no-remote repo exits 0 (out: ${out.trim()})`);
@@ -211,6 +215,13 @@ try {
       `D4: no remote + terminal but NOT merged ⇒ the branch is kept, its only copy is local (out: ${out.trim()})`);
     ok(/UNRECOVERABLE/.test(out) && /not merged into main/.test(out),
       `D4: the kept-branch reason names the base it was compared against (out: ${out.trim()})`);
+    // The worktree path is <state>/wt/<ticket>/<ref>: removing the leaf used to leave the per-ticket
+    // parent behind, one empty directory per reaped ticket, forever (10 in one workspace inside a day).
+    // The KEPT ticket's parent must survive — its worktree is still there and still holds the only copy.
+    ok(!existsSync(join(lws, ".dev-loop", "wt", "RL-1")),
+      "D4: the reaped ticket's now-empty wt/<ticket> parent is removed, not left as litter");
+    ok(existsSync(join(lws, ".dev-loop", "wt", "RL-2", "other-repo")),
+      "D4: …while a ticket dir that still holds a sibling ref is left alone — the removal is empty-only");
   }
 
   {

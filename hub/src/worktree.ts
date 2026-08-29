@@ -10,7 +10,8 @@
 //                                       silent `remove --force` / `branch -D` of the only copy (LOOP-106).
 // Importable: exports worktreeReap() so team-repair.ts can call it as part of its pass (isMainEntry guard).
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, rmdirSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { resolveWorkspace, wsWorktree, wsLockPath, wsHubDb } from "./workspace.ts";
 import { effectiveRepo, type Workspace } from "./team-config.ts";
 import { withRepoLockPath } from "./locks.ts";
@@ -249,6 +250,15 @@ export async function worktreeReap(
           continue;       // keep the branch too: its worktree still holds the only copy
         }
         print(`[reap] removed worktree '${e.path}' (${e.ticketId} is ${e.state})`);
+      }
+      // The worktree path is <state>/wt/<ticket>/<ref>, so removing the leaf leaves the per-ticket
+      // parent behind. One empty directory per reaped ticket accumulated in the state dir forever
+      // (10 of them in one workspace inside a day). Removed only when it is EMPTY — a ticket with a
+      // worktree per repo keeps its other refs — and only when it really is the `wt/<ticket>` level,
+      // so a path shape change cannot turn this into a wider delete.
+      const ticketDir = dirname(e.path);
+      if (basename(dirname(ticketDir)) === "wt") {
+        try { if (readdirSync(ticketDir).length === 0) rmdirSync(ticketDir); } catch { /* raced, or not ours to remove */ }
       }
 
       // 2. Delete the local branch ONLY when the work is recoverable elsewhere — merged into the base,
