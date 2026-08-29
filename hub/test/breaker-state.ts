@@ -252,9 +252,17 @@ try {
   const f5 = readBreakerState(file);
   ok(f5?.agents.pm?.state === "open" && f5.agents.pm.consecutiveFailures === 5 && f5.scheduler.stoppedAt !== null,
     `run 5: the interrupted probe (exit 0 — OUR signal) did NOT close the breaker; the final snapshot says OPEN ×5 with stoppedAt (${JSON.stringify(f5?.agents.pm)})`);
-  const rows = readFileSync(join(ws, ".dev-loop", "team", "fires.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { interrupted?: boolean; exitCode?: number });
+  const rows = readFileSync(join(ws, ".dev-loop", "team", "fires.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { interrupted?: boolean; exitCode?: number; watchdog?: string | null });
   const last = rows[rows.length - 1];
-  ok(last?.interrupted === true && last.exitCode === 0, `run 5: the TEAM scheduler ledgers the killed fire as interrupted — LOOP-155 was legacy-only before (${JSON.stringify(last)})`);
+  // The child's exit CODE is deliberately not asserted. It records who won the race between our forwarded
+  // signal and the child installing its trap — under load the child dies ON the signal and exits non-zero,
+  // which is still an operator stop. Pinning exitCode === 0 here asserted the child's cooperation, the very
+  // thing LOOP-155's own comment says must not be the discriminator, and it is why this suite failed only
+  // when the machine was busy. What the contract protects is the classification and its consequence: the
+  // fire is flagged interrupted, no watchdog claimed it, and the breaker (asserted just above) learned
+  // nothing from it.
+  ok(last?.interrupted === true && last.watchdog === null,
+    `run 5: the TEAM scheduler ledgers the killed fire as interrupted, whatever exit the child managed (${JSON.stringify(last)})`);
   const after = status(ws);
   ok(after?.scheduler?.breakers?.source === "replay" && typeof after.scheduler.breakers.note === "string", "run 5: with the scheduler gone the file is stale ⇒ status falls back to the replay and says so");
 } finally {
