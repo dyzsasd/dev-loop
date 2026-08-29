@@ -52,7 +52,7 @@ const opApiDormant = (): McpResult => err(
   `dev-loop daemon is running but its agent op-API is dormant for project '${PROJECT_KEY}'. Opt in by setting ` +
   `settings_json.hub.transport="daemon" (DL-43), or use the default direct-db entry \`node hub/src/server.ts\`.`);
 const noProject = (): McpResult => err(
-  "no project resolved. Set DEVLOOP_PROJECT=<key>, or launch from inside a repo configured in ~/.dev-loop/projects.json.");
+  "no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a workspace repo. 1.0 no longer reads ~/.dev-loop/projects.json — create a workspace with `dev-loop team init`, or migrate a v1 setup once with `dev-loop team import`.");
 
 // ─── proxy one core op → POST http://127.0.0.1:<port>/api/op/<op> (X-Devloop-Actor: ACTOR), as the MCP shape ──
 // The HTTP transport (per-call port resolution / request / timeout / dormant-vs-down classification) is

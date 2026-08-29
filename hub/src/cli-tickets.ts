@@ -222,7 +222,9 @@ async function main(): Promise<number> {
   // a read needs no DEVLOOP_ACTOR to run; the resolved actor only parameterizes assignee:"me" + attribution-free reads
   const { actor, projectKey, projectFromCwd, projectResolved } = resolveIdentity();
   if (!projectResolved) {
-    console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
+    // The remediation must not name a file the runtime no longer reads (paths.ts legacyHomeRoot): an
+    // operator who followed the old text created ~/.dev-loop/projects.json and got the same error again.
+    console.error("dev-loop: no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a workspace repo. 1.0 no longer reads ~/.dev-loop/projects.json — create a workspace with `dev-loop team init`, or migrate a v1 setup once with `dev-loop team import`.");
     return 1;
   }
   const db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — same resolver as op/seed/doctor

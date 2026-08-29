@@ -93,7 +93,7 @@ if (!actorExists(db, ACTOR)) {
 // board the agent then works in by mistake. The project must already exist; create it deliberately
 // once (`node src/seed.ts <key> <name> <UNIQUE_PREFIX>`) or opt in with DEVLOOP_CREATE_PROJECT=1.
 if (!projectResolved) {
-  console.error("[hub] no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
+  console.error("[hub] no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a workspace repo. 1.0 no longer reads ~/.dev-loop/projects.json — create a workspace with `dev-loop team init`, or migrate a v1 setup once with `dev-loop team import`.");
   process.exit(1);
 }
 const projectId =
