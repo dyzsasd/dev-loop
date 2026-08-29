@@ -1815,7 +1815,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       // The discriminator is not in the output at all — it is that WE sent the signal. Classify on
       // that, so the heuristic keeps catching real cases and stops charging the operator's own
       // restarts to the agents (10 of 10 suspectErrors on the board that found this were kills).
-      const interrupted = schedulerInterrupted && exitCode === 0 && !timedOut;
+      // …but requiring exitCode === 0 handed the classification straight back to the child. A child that
+      // dies ON the forwarded signal never reaches its own exit: the CLI has no handler, or — the case
+      // that surfaces under load — the shell had not installed its trap yet when the signal arrived. Those
+      // kills were ledgered as genuine agent failures with an empty tail, which feeds the breaker a false
+      // streak and ranks a healthy lane as dead. The signal death is OUR signal by construction here
+      // (schedulerInterrupted is latched only by the SIGINT/SIGTERM forwarding path), and `watchdog === null`
+      // keeps a timeout/stall/budget kill — which also terminates by signal — out of the new arm.
+      const diedOnForwardedSignal = signal === "SIGINT" || signal === "SIGTERM";
+      const interrupted = schedulerInterrupted && !timedOut && (exitCode === 0 || (diedOnForwardedSignal && watchdog === null));
       // LOOP-543 — the same observable the empty-output arm below already reads, named once and shared
       // so the flag and the errorClass can never disagree about whether the fire produced anything.
       const noWork = producedNoWork({ exitCode, timedOut, interrupted, outputTail: outTail });
