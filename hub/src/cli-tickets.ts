@@ -8,7 +8,7 @@
 // `PRAGMA query_only` after open makes any write/event throw; needs NO daemon and NO DEVLOOP_ACTOR (identity is
 // irrelevant to a read). Routed from cli.ts (`tickets`/`ticket` → this file with the subcommand as argv[0]).
 import type { DatabaseSync } from "node:sqlite";
-import { openDb } from "./db.ts";
+import { openDb, STATES } from "./db.ts";
 import { resolveIdentity } from "./resolve-project.ts";
 import { findProject } from "./seed.ts";
 import { resolveHubDbPath } from "./workspace.ts";
@@ -69,6 +69,15 @@ function listTickets(db: DatabaseSync, projectId: string, projectKey: string, ac
     else if (VALUE_FLAGS.has(a)) {
       const v = args[++i];
       if (v === undefined) { console.error(`dev-loop: ${a} needs a value`); return 2; } // a dangling flag is a usage error, not a silent no-filter (DL-91)
+      // A typo'd state used to filter to nothing and exit 0, indistinguishable from a genuinely clean
+      // board — the same silent-no-filter failure this parser already rejects for a dangling flag (above)
+      // and an unknown flag (below), and the mirror of the CHECK constraint that stops a fuzzy state
+      // from being STORED (db.ts STATES). An operator checking "is anything Human-Blocked?" could not
+      // tell an empty answer from a mistyped question.
+      if (a === "--state" && !(STATES as readonly string[]).includes(v)) {
+        console.error(`dev-loop: --state must be one of: ${STATES.join(", ")} (got ${JSON.stringify(v)})`);
+        return 2;
+      }
       if (a === "--state") state = v; else if (a === "--q") q = v; else if (a === "--type") type = v; else if (a === "--owner") owner = v; else if (a === "--label") label = v;
       else if (a === "--assignee") assignee = v; else if (a === "--related-to") relatedTo = v; else if (a === "--updated-since") updatedSince = v;
       else if (a === "--fields") {
