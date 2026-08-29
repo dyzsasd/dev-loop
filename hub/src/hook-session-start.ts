@@ -15,7 +15,7 @@
 // it, find a compatible runtime, and then start the real daemon. Config is read LENIENTLY here:
 // parse the JSON, read the one key if present — validation of the key lives in team-config.ts.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findCompatibleNode } from "./node-runtime.ts";
@@ -63,7 +63,13 @@ if (sessionHookEnabled(process.env, root)) {
   try {
     if (runDir) {
       mkdirSync(runDir, { recursive: true });
-      appendFileSync(join(runDir, "hook.log"), `${new Date().toISOString()} session-start cwd=${process.cwd()} ${line}\n`);
+      const logPath = join(runDir, "hook.log");
+      // Bounded like every other log the loop keeps: the runner logs and run.log rotate at 50 MB with a
+      // single .1 generation, and the fire ledger is pruned. This one appended forever. It grows a line
+      // per session rather than per fire, so it is the slowest of them — which is exactly why nothing
+      // noticed, and why an unattended machine is where it would eventually matter.
+      try { if (statSync(logPath).size > 50 * 1024 * 1024) renameSync(logPath, `${logPath}.1`); } catch { /* no log yet */ }
+      appendFileSync(logPath, `${new Date().toISOString()} session-start cwd=${process.cwd()} ${line}\n`);
     }
   } catch { /* the log is best-effort; the hook must never fail a session */ }
 }
