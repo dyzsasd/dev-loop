@@ -46,6 +46,7 @@ const ROUTES: Record<string, [string, ...string[]]> = {
   stop:             ["stop"],                      // stop the workspace's running scheduler via the run lock (pairs with `run --background`)
   pause:            ["scheduler-pause-cli", "pause"],   // pause the scheduler — no new fires, existing ones continue; --drain blocks until none is in flight (WS-C C3)
   resume:           ["scheduler-pause-cli", "resume"],  // resume the paused scheduler
+  inspect:          ["inspect"],                   // one read-only, model-free snapshot of the loop for a delegated inspection (scheduler/fires/board/repos/lanes/doctor codes + threshold warnings)
   status:           ["status"],                    // WS-C C2: ONE read model for any harness — scheduler/pause/drain/breakers, decision queue, fire health, daemons, board, 24h cost + a NEXT line
   system:           ["system-propose"],            // WS-C C6: propose|list|show|resolve — the §17 firewall's sanctioned route for agents to suggest governing-file changes (file inbox; resolve is operator-only)
   "install-claude-plugin": ["install-claude-plugin"], // register a local npm-source marketplace so Claude Code loads the published plugin
@@ -181,6 +182,11 @@ Usage: dev-loop <command> [args]
                               finish). --drain then BLOCKS until no fire is in flight, printing progress; exit 0
                               drained · 1 timeout (the pause stays set). \`resume\` clears it
   resume                      clear the scheduler pause (idempotent)
+  inspect [--window <dur>] [--json]  one read-only snapshot for a DELEGATED inspection: scheduler +
+                              in-flight, daemons, board counts + stalled claims, fires by agent/errorClass/
+                              cost with the ledger's real span, breaker, doctor CODES, repo + worktree git
+                              state, per-lane last fire, and threshold \`warnings\` with evidence. Calls no
+                              model; always exits 0 (doctor is the gate).
   status [--json] [--project <key>]   ONE read model for whoever operates the loop, from any harness:
                               scheduler (running/paused/DRAINING, in-flight fires, breakers), the decision
                               queue (Human-Blocked + waiting_on, In Review@operator, approval requests, open
@@ -245,7 +251,7 @@ if (process.env.DEVLOOP_HUB_URL?.trim()) {
 
 const NEEDS_NODE_SQLITE = new Set(["serve", "shim", "daemon", "doctor", "seed", "run", "init", "init-service", "identity-check", "tickets", "ticket", "team", "next-project", "hub", "metrics", "push-guard", "up", "bundle",
   "op", "queue", "comment", "comments", "labels", "label", "project", "events", "doc", "mirror",
-  "worktree", "merge-guard", "pr", "doc-land", "push", "settings", "pause", "resume", "status",
+  "worktree", "merge-guard", "pr", "doc-land", "push", "settings", "pause", "resume", "status", "inspect",
   "approve", "revoke", "approvals", "request", "rule"]); // status reads the pause row + queue + board; system is file-only; worktree reap queries hub.db; merge-guard §3.3 board-state axis reads tickets table (so `pr merge`, which runs it, needs it too); doc-land calls pushGuard; settings reads/writes the projects row; the approvals verbs read/write the approvals table
 // NB: `notify`, `with-repo-lock`, `next-project`, `team` don't strictly need node:sqlite for linear teams,
 // but `team`/`next-project` may touch the hub on a service team — kept in the set above only where needed.

@@ -810,17 +810,22 @@ export function checkTierStarvationRow(ctx: BoardCtx): void {
  * individual check. The board db is opened LAZILY on the first board row and closed once here, which
  * is why exactly one openHubDbConn call remains on this path.
  */
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string; out?: DoctorOut } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
   let ok = true;
   const fails: string[] = [];
+  // A caller may supply its own sink (`dev-loop inspect` collects CODES rather than prose). The
+  // verdict bookkeeping stays here either way — `ok`/`fails` are this function's return value, not the
+  // sink's business — so a collector cannot accidentally change what doctor concluded. With no sink
+  // the console path is byte-identical to before, header line included.
+  const sink = opts.out;
   const out: DoctorOut = {
-    pass: (m: string) => console.log("✅ " + m),
-    fail: (m: string) => { console.log("❌ " + m); ok = false; fails.push(m); },
-    warn: (m: string) => console.log("⚠️  " + m),
-    info: (m: string) => console.log("•  " + m),
+    pass: (m: string) => { if (sink) sink.pass(m); else console.log("✅ " + m); },
+    fail: (m: string) => { if (sink) sink.fail(m); else console.log("❌ " + m); ok = false; fails.push(m); },
+    warn: (m: string) => { if (sink) sink.warn(m); else console.log("⚠️  " + m); },
+    info: (m: string) => { if (sink) sink.info(m); else console.log("•  " + m); },
   };
 
-  console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
+  if (!sink) console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
 
   const report: DoctorReport = {};
   // Opened LAZILY on the first row that needs the board, closed once below. Held in an object
