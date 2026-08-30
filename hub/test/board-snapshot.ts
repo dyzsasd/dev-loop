@@ -334,6 +334,37 @@ try {
     ok(failed === null && logged.some((l) => /board snapshot FAILED/.test(l)),
       "LOOP-339: a failing cadence tick returns null and LOGS — best-effort, but never silent");
 
+    // Two daemons can share one hub.db — a workspace with a `_team` daemon and a project daemon has two,
+    // both holding <workspace>/.dev-loop/hub.db and both running this timer. Measured on the live
+    // workspace: they ticked a second apart and wrote BYTE-IDENTICAL generations (two pairs, same
+    // SHA-256). The wasted disk is bounded by `keep`; the retention WINDOW is not — every generation
+    // duplicated means `keep: 10` holds five distinct points in time, and the older generations are the
+    // whole reason the cadence exists. A second writer inside the same interval is refused.
+    {
+      // The guard compares against the timestamp EMBEDDED in the newest generation's filename, which is
+      // stamped from the real clock — so the test drives the real clock too, with a short interval,
+      // rather than threading a fake one through the writer just to observe it.
+      const dupDir = join(tmp, "dup-gens");
+      const INTERVAL = 2_000; // interval/2 = 1s, long enough that two back-to-back ticks fall inside it
+      const first = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10, intervalMs: INTERVAL });
+      ok(first !== null, `two-daemon: the first daemon's tick writes a generation (${first})`);
+      const dupLog: string[] = [];
+      const second = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10, intervalMs: INTERVAL, log: (m) => dupLog.push(m) });
+      ok(second === null, `two-daemon: a second daemon ticking inside the same interval is refused (${second})`);
+      ok(dupLog.some((l) => /already covers this interval/.test(l)),
+        `two-daemon: …and says why, naming the generation that covers it (${dupLog.join(" | ") || "<silent>"})`);
+      ok(listSnapshots(dupDir).filter((g) => g.reason === "cadence").length === 1,
+        `two-daemon: exactly ONE generation exists for that interval (${listSnapshots(dupDir).filter((g) => g.reason === "cadence").length})`);
+      // The NEXT interval must still be taken — the guard bounds duplicates, it does not stop the cadence.
+      spawnSync("sleep", ["2"]);
+      const next = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10, intervalMs: INTERVAL });
+      const gens = listSnapshots(dupDir).filter((g) => g.reason === "cadence").length;
+      ok(next !== null && gens === 2, `two-daemon: the next interval is still taken — the cadence is not stopped (${next}, ${gens} generations)`);
+      // A tick with no interval declared keeps the old unconditional behaviour (the manual verb path).
+      const unguarded = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10 });
+      ok(unguarded !== null, "two-daemon: a tick with no interval declared is unguarded, as before");
+    }
+
     // everyHours: 0 ⇒ not started at all, the same posture every other daemon notifier has.
     ok(startBoardSnapshot({ dbPath: src, dir, keep: 5, intervalMs: 0 }) === null,
       "LOOP-339: intervalMs 0 (everyHours 0) does not start a timer at all");

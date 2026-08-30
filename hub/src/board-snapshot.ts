@@ -211,8 +211,37 @@ export function restoreBoard(opts: { from: string; dbPath: string; dir: string; 
 // `everyHours: 0 ⇒ not started at all`, the same cadence<=0 ⇒ no-op posture every other notifier has.
 export interface BoardSnapshotTimerOpts { dbPath: string; dir: string; keep: number; intervalMs: number; log?: (m: string) => void }
 
-export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: number; log?: (m: string) => void }): string | null {
+/**
+ * A cadence tick is skipped when this directory already holds a generation from the CURRENT interval.
+ *
+ * More than one daemon can share one hub.db — a workspace with a `_team` daemon and a project daemon has
+ * two, both holding `<workspace>/.dev-loop/hub.db` and both running this timer. They ticked a second
+ * apart and wrote BYTE-IDENTICAL copies (measured: two pairs, same SHA-256, 1 s apart). The wasted disk
+ * is bounded by `keep`, but the retention WINDOW is not: with every generation duplicated, `keep: 10`
+ * retains five distinct points in time instead of ten — and the older generations are the whole reason
+ * the cadence exists, since they are what makes `dev-loop board restore` undoable.
+ *
+ * Half the interval is the threshold rather than the whole of it: a tick that runs slightly early must
+ * still be able to take its own generation, while a second writer inside the same window is refused.
+ * Content is not compared — a duplicate is defined by TIME, so this also refuses two daemons whose
+ * boards happen to differ by one row in the second between their ticks.
+ */
+export function cadenceDuplicateOf(dir: string, intervalMs: number, nowMs: number): string | null {
+  if (!(intervalMs > 0)) return null;
+  const newest = listSnapshots(dir).find((s) => s.reason === "cadence");
+  if (!newest) return null;
+  const takenMs = Date.parse(newest.takenAt.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, "$1-$2-$3T$4:$5:$6Z"));
+  if (!Number.isFinite(takenMs)) return null;
+  return nowMs - takenMs < intervalMs / 2 ? newest.path : null;
+}
+
+export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: number; intervalMs?: number; log?: (m: string) => void }): string | null {
   try {
+    const dup = cadenceDuplicateOf(opts.dir, opts.intervalMs ?? 0, Date.now());
+    if (dup) {
+      opts.log?.(`[daemon] board snapshot skipped: ${dup} already covers this interval (another daemon on the same hub.db took it)`);
+      return null;
+    }
     return takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "cadence" });
   } catch (e) {
     // Best-effort like every other daemon timer: a failed snapshot must never take the daemon down.
@@ -225,7 +254,7 @@ export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: num
 
 export function startBoardSnapshot(opts: BoardSnapshotTimerOpts): ReturnType<typeof setInterval> | null {
   if (!(opts.intervalMs > 0)) return null; // everyHours: 0 ⇒ disabled, not started at all
-  const timer = setInterval(() => boardSnapshotTick(opts), opts.intervalMs);
+  const timer = setInterval(() => boardSnapshotTick({ ...opts, intervalMs: opts.intervalMs }), opts.intervalMs);
   timer.unref?.();
   return timer;
 }
