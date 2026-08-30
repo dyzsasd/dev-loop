@@ -242,7 +242,16 @@ export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: num
       opts.log?.(`[daemon] board snapshot skipped: ${dup} already covers this interval (another daemon on the same hub.db took it)`);
       return null;
     }
-    return takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "cadence" });
+    // A SUCCESSFUL tick logs too. Failure and skip already did; success did not, which made the whole
+    // cadence unauditable after the fact — the operator could see that a snapshot exists, but not that
+    // the timer ran, and could not tell a timer that stopped firing from one whose writes were failing.
+    // That is not hypothetical: the `_team` daemon produced a generation on four consecutive cycles and
+    // none on the fifth, and the reason could not be recovered from the scene, because neither outcome
+    // left a line. The startup line ("board snapshot active …") announces the intent; this one records
+    // that it happened.
+    const written = takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "cadence" });
+    opts.log?.(`[daemon] board snapshot written: ${written}`);
+    return written;
   } catch (e) {
     // Best-effort like every other daemon timer: a failed snapshot must never take the daemon down.
     // It is NOT silent — W-code coverage for a cadence that has stopped is Child D's job, and this

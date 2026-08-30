@@ -327,8 +327,16 @@ try {
 
     // Trigger 1 — the cadence tick, best-effort by design: a failed periodic backup must never take
     // the daemon down. It writes a `cadence`-reasoned generation.
-    const made = boardSnapshotTick({ dbPath: src, dir, keep: 5 });
+    const madeLog: string[] = [];
+    const made = boardSnapshotTick({ dbPath: src, dir, keep: 5, log: (m) => madeLog.push(m) });
     ok(made !== null && /-cadence\.db$/.test(made), `LOOP-339: the cadence tick writes a cadence-reasoned generation (${made})`);
+    // A SUCCESSFUL tick must leave a line. Failure and skip already did; success did not, and that made
+    // the cadence unauditable: an operator could see that generations exist but not that the timer ran,
+    // and could not tell a timer that stopped firing from one whose writes were failing. Observed live —
+    // one daemon produced a generation on four consecutive cycles and none on the fifth, and the reason
+    // was unrecoverable because neither outcome left a trace.
+    ok(madeLog.some((l) => /board snapshot written:/.test(l) && l.includes(made ?? "\u0000")),
+      `LOOP-339: a successful tick logs the generation it wrote (${madeLog.join(" | ") || "<silent>"})`);
     const logged: string[] = [];
     const failed = boardSnapshotTick({ dbPath: join(tmp, "gone.db"), dir, keep: 5, log: (m) => logged.push(m) });
     ok(failed === null && logged.some((l) => /board snapshot FAILED/.test(l)),
