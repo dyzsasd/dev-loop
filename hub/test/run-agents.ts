@@ -11,7 +11,7 @@ import { openDb, logEvent } from "../src/db.ts";
 import { breaker, formatBreakerMsg, PROVIDER_SCOPED_CLASSES, type Agent } from "../src/breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
-import { insertTicket } from "../src/ticketwrite.ts";
+import { insertTicket, insertComment } from "../src/ticketwrite.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 // Job-scoped prompts: the zero-dep leaf predicates the pm/qa lane gates + the senior-dev Mode pick consume.
 import { qaMaintenanceSlice, seniorDevModePick } from "../src/servable.ts";
@@ -295,7 +295,12 @@ try {
     ensureSeed(db, "qaru", "QA Routing Unblock", "QARU");
     const pu = findProject(db, "qaru")!;
     insertTicket(db, pu, "dev", { title: "needs-qa info", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "needs-qa"], duplicateOf: null, relatedTo: [] }, { title: "needs-qa info", type: "Feature" });
-    insertTicket(db, pu, "dev", { title: "blocked info-needed", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "blocked", "info-needed"], duplicateOf: null, relatedTo: [] }, { title: "blocked info-needed", type: "Feature" });
+    const bi = insertTicket(db, pu, "dev", { title: "blocked info-needed", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "blocked"], duplicateOf: null, relatedTo: [] }, { title: "blocked info-needed", type: "Feature" });
+    // `info-needed` is DERIVED, so it arrives with the Bail-shape comment, not in the create's label
+    // set — the canonical block-then-comment order from blocked-protocol.md. Passing it to insertTicket
+    // used to write it straight through and it then vanished on the row's first update; the row this
+    // gate reads is the same either way, so the assertion below is unchanged.
+    insertComment(db, pu, "dev", bi, "Bail-shape: info-needed\nWhich currency does the fixture assume?");
     const su = qaMaintenanceSlice(db, pu);
     ok(su.verify === 0 && su.unblock === 2,
       `qaLaneGate input: needs-qa AND blocked+info-needed rows route to unblock (got verify ${su.verify}, unblock ${su.unblock})`);

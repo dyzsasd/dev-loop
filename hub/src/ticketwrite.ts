@@ -546,7 +546,13 @@ export function recordRuling(db: DatabaseSync, projectId: string, actor: string,
 //   • insertComment — when a `Bail-shape: <x>` comment lands on a blocked ticket, sets label <x>
 //     (stripping stale bail-shape labels). This covers the canonical order (block, then comment):
 //     at block time no comment existed, so the label is derived the instant the comment lands.
-// Between the two hooks the label cannot drift from the newest comment for any write ordering.
+//   • insertTicket — reconciles the create's own label set. No comment can exist for a row being
+//     inserted, so this always strips a hand-passed bail-shape label. Added later: the two hooks above
+//     were documented as covering "any write ordering" and did not — a create carrying a bail-shape
+//     label wrote it straight through, and it then vanished on the ticket's first update, even one
+//     re-passing the identical set. That is a drift window with a stale label in it, and §9c's W5
+//     tracker pass reads that label while it stands.
+// Across the three hooks the label cannot drift from the newest comment for any write ordering.
 
 // The newest parseable bail-shape across a ticket's comments (chronological, rowid-tiebroken like
 // metrics.ts's marker reader so same-ms comments order deterministically). Rows only — no fs/forge.
@@ -602,10 +608,18 @@ export function insertTicket(
   const assignee = retier.assignee;
   const labels = retier.labels;
   const id = nextTicketId(db, projectId);
+  // The bail-shape label is DERIVED, and create has to derive it too. Only updateTicketRow reconciled,
+  // so a label passed at CREATE survived the insert and was then silently removed by the ticket's first
+  // update — even one that re-passed the identical label set. Between those two writes the row carried a
+  // bail-shape label no `Bail-shape:` comment backed, which is the one state the single-source invariant
+  // exists to prevent, and §9c's W5 tracker pass reads that label. No comment can exist for a row being
+  // inserted, so this strips a hand-passed bail-shape label rather than deriving one; that is the same
+  // answer update gives for the same input, which is the point — the two entry points now agree.
+  const insertLabels = reconcileBailShapeLabels(db, id, labels);
   const t = nowIso();
   db.prepare(`INSERT INTO tickets(id,project_id,title,description,type,state,assignee,priority,labels,duplicate_of,related_to,waiting_on,created_by,created_at,updated_at)
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(labels), f.duplicateOf, JSON.stringify(f.relatedTo), waitingOnFor(f.state, f.waiting_on ?? null, null), actor, t, t);
+    .run(id, projectId, f.title, f.description, f.type, f.state, assignee, f.priority, JSON.stringify(insertLabels), f.duplicateOf, JSON.stringify(f.relatedTo), waitingOnFor(f.state, f.waiting_on ?? null, null), actor, t, t);
   logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.create", data: createEventData });
   if (retier.retiered) {
     logEvent(db, { project_id: projectId, ticket_id: id, actor, kind: "issue.retier", data: { from: retier.retiered.from, to: retier.retiered.to, reason: "sensitive" } });
