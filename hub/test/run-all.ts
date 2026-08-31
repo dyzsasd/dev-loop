@@ -34,6 +34,7 @@ const NON_SUITES: Record<string, string> = {
   "env-scrub.ts": "shared helper — exports FIRE_MARKER_VARS/scrubFireEnv, the ONE fire-marker union (LOOP-156); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by env-scrub-guard.ts, which is a real suite and stays discovered.",
   "daemon-pids.ts": "shared helper — exports runningDaemonPids/DAEMON_ENTRY_PATTERN, the ONE daemon-process listing this runner's leaked-daemon gate reads; no assertions, not a standalone suite.",
   "code-only.ts": "shared helper — exports codeOnly, the ONE source-to-executable-text reduction (LOOP-396, extracted from destructive-guard.ts); no assertions, not a standalone suite. Its BEHAVIOUR is asserted by destructive-guard.ts's probe arms, which are a real suite and stay discovered.",
+  "tmp-root.ts": "shared helper - exports tmpRoot, the ONE temp-root factory; each tree it hands out is registered for removal at process exit. No assertions, not a standalone suite. Its BEHAVIOUR is asserted by tmp-root-sweep.ts, which is a real suite and stays discovered.",
 };
 
 const suites = readdirSync(here)
