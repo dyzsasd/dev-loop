@@ -1626,6 +1626,25 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
   const killGroup = (sig: NodeJS.Signals) => {
     if (child.pid) try { process.kill(-child.pid, sig); } catch { /* group already gone */ }
   };
+  // The group is also the fire's CONTAINMENT boundary, not just the watchdogs' kill target. When the
+  // leader exits, anything still in the group is a background process the agent started and never waited
+  // for: its parent is gone, so it is reparented to init and runs until the machine reboots. Only the
+  // watchdogs reaped it before — a fire that ended NORMALLY reaped nothing, and the leak was invisible to
+  // `status`, to `doctor`, and to the ledger, which recorded the fire as a clean success. Observed live in
+  // jinko-browser-use: a fire's `npm exec tsx src/api/server.ts` held 127.0.0.1:8899 for two days with the
+  // scheduler stopped, found only by reading `lsof`.
+  // Being in the group at exit is the definition of a leak, not of a daemon: a process that must outlive
+  // its fire has to LEAVE the group (spawn detached/setsid, or hand it to a supervisor), which also puts
+  // it out of reach of the watchdogs — the same boundary, read from the other side. The reap is announced
+  // because a lane that leaks every fire is a defect in that lane's prompt, and nothing else would show it.
+  const reapGroup = () => {
+    if (!child.pid) return;
+    try { process.kill(-child.pid, 0); } catch { return; } // group empty — the fire cleaned up after itself
+    console.log(`[${new Date().toISOString()}] ${agent}: reaping processes left in the fire's group (pgid ${child.pid})`);
+    killGroup("SIGTERM");
+    const hard = setTimeout(() => killGroup("SIGKILL"), 2000);
+    hard.unref?.(); // never hold the event loop open for a corpse
+  };
   activeChildren.add(child);
   if (stdinPayload && child.stdin) {
     child.stdin.on("error", () => { /* EPIPE on an instantly-dead child must not crash the scheduler */ });
@@ -1925,6 +1944,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       clearTimeout(killTimer);
       clearTimeout(budgetTimer);
       activeChildren.delete(child);
+      reapGroup(); // before finalize: the fire is over, and whatever is still in its group is a leak
       if (closed) { finalize(code, signal); return; }        // pipes already drained → finalize now
       const grace = setTimeout(() => finalize(code, signal), 150);
       grace.unref?.();
