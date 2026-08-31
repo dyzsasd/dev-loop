@@ -7,18 +7,19 @@
 //    from a genuinely clean board — the parser already refuses a dangling flag and an unknown flag for
 //    that reason, and db.ts CHECKs the same state set on the write path.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pidInfo, pidMatchesRecord } from "../src/pid-identity.ts";
+import { pidInfo, pidMatchesRecord, parsePsLine } from "../src/pid-identity.ts";
 import { STATES } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-signal-id-")));
+const tmp = realpathSync(tmpRoot("dl-signal-id-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const team = (args: string[], cwd: string) =>
@@ -44,6 +45,23 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
   ok(Number.isInteger(vpid) && vpid > 0 && alive(vpid), `fixture: an orphaned stand-in process is running (pid ${vpid})`);
   ok(pidMatchesRecord(vpid, new Date().toISOString(), "sleep").ok, "a pid running the recorded program matches");
   ok(!pidMatchesRecord(vpid, new Date().toISOString(), "run-agents").ok, "a pid running some OTHER program does not match — this is the recycled-pid case");
+  // ctime pads a single-digit day with a space, so `ps` emits TWO spaces after the month on the 1st-9th
+  // and one on the 10th-31st. The first regex here allowed only one: for nine days of every month the
+  // parse failed, startedAtMs came back null, and the birth-order check below was skipped in silence —
+  // leaving the command hint as the only guard, which by construction cannot separate a recycled pid
+  // running the SAME program. Asserted on fixed strings, not on today's date: the defect shipped and
+  // survived a whole batch precisely because the suite only ever ran on days that hid it.
+  const padded = parsePsLine("Tue Sep  1 00:09:07 2026     sleep 45");
+  ok(padded.startedAtMs !== null, `a single-digit day (two spaces after the month) parses — the 1st-9th of every month${padded.startedAtMs === null ? " [regressed: startedAtMs null]" : ""}`);
+  ok(padded.command === "sleep 45", `…and the command is split off cleanly, not left glued to the date (got ${JSON.stringify(padded.command)})`);
+  const unpadded = parsePsLine("Sat Aug 29 19:18:15 2026     sleep 45");
+  ok(unpadded.startedAtMs !== null && unpadded.command === "sleep 45", "a two-digit day parses the same way — the fix did not trade one padding for the other");
+  ok(parsePsLine("Tue Sep  1 00:09:07 2026 x").startedAtMs === Date.parse("Tue Sep  1 00:09:07 2026"),
+    "…and the parsed instant is the one ps reported, not a shifted or defaulted value");
+  const garbage = parsePsLine("not a ps line at all");
+  ok(garbage.startedAtMs === null && garbage.command === "not a ps line at all",
+    "an unparseable line still yields the line as the command — an unreadable date must not erase the OTHER signal");
+
   const longAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
   ok(!pidMatchesRecord(vpid, longAgo, "sleep").ok, "a pid that started AFTER the record was written does not match — the record cannot name it");
   ok(!pidMatchesRecord(2_147_483_600, new Date().toISOString(), "sleep").ok, "a pid that does not exist does not match");

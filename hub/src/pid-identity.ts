@@ -21,8 +21,23 @@ export function pidInfo(pid: number): { startedAtMs: number | null; command: str
   if (r.error || r.status !== 0) return null;
   const line = (r.stdout ?? "").trim();
   if (!line) return null;
-  // `lstart` is a fixed 24-char ctime string ("Sat Aug 29 19:18:15 2026"); the command is the remainder.
-  const m = /^(\w{3} \w{3} ?\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s+(.*)$/s.exec(line);
+  return parsePsLine(line);
+}
+
+/**
+ * Split one `ps -o lstart=,command=` line into a start time and the command.
+ *
+ * Exported so the date handling can be asserted directly. It has to be: ctime pads a single-digit day
+ * with a space ("Tue Sep  1 00:09:07 2026" — TWO spaces after the month, "Sat Aug 29 19:18:15 2026" —
+ * one), and the first version of this regex allowed only one. On the 1st-9th of any month the parse
+ * therefore failed, `startedAtMs` came back null, and pidMatchesRecord skipped the birth-order check
+ * entirely — leaving `stop.ts` with the command hint alone, which does NOT separate a recycled pid that
+ * is running the SAME program. That is the mis-kill this module was written to prevent. The hole was
+ * invisible for a whole release batch because the suite only ever ran between the 10th and the 31st.
+ * Whitespace is matched as runs (`\s+`) so neither padding form depends on the day of the month.
+ */
+export function parsePsLine(line: string): { startedAtMs: number | null; command: string } {
+  const m = /^(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/s.exec(line);
   if (!m) return { startedAtMs: null, command: line };
   const parsed = Date.parse(m[1]!);
   return { startedAtMs: Number.isFinite(parsed) ? parsed : null, command: m[2] ?? "" };
