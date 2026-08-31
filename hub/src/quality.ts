@@ -349,6 +349,19 @@ function parseGoFunctions(root: string, file: string, source: string): FnSpan[] 
 }
 
 // Run \`go test -coverprofile\` and paint per-file covered/claimed byte maps from the block ranges.
+// A temp dir this process removes when it ends, on EVERY path.
+//
+// The Go coverage profile went into a bare mkdtemp that nothing ever removed: two early returns (no
+// go.mod, no coverprofile) and the normal one all walked past it, so each quality run left a directory
+// behind for good. try/finally would still miss the exits that matter most — the threshold gate calls
+// process.exit(1) from inside the coverage path — so the removal is hung off process exit instead, which
+// covers the early returns, the exits, and an uncaught throw with one mechanism.
+function ephemeralDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* tmp — never fail a gate on cleanup */ } });
+  return dir;
+}
+
 function collectGoCoverage(root: string, wanted: Map<string, string>, goTestCmd: string | null):
   { painted: Map<string, Uint8Array>; claimed: Map<string, Uint8Array> } {
   const painted = new Map<string, Uint8Array>();
@@ -356,7 +369,7 @@ function collectGoCoverage(root: string, wanted: Map<string, string>, goTestCmd:
   let moduleName = "";
   try { moduleName = (readFileSync(join(root, "go.mod"), "utf8").match(/^module\s+(\S+)/m)?.[1]) ?? ""; }
   catch { console.error("quality: no go.mod at the root — Go coverage skipped (rows go N/A)"); return { painted, claimed }; }
-  const profile = join(mkdtempSync(join(tmpdir(), "devloop-quality-go-")), "cover.out");
+  const profile = join(ephemeralDir("devloop-quality-go-"), "cover.out");
   const cmd = goTestCmd ? goTestCmd.replaceAll("{profile}", profile)
     : `go test -count=1 -coverpkg=./... -coverprofile=${JSON.stringify(profile)} ./...`;
   console.error(`quality: running Go tests for coverage — ${cmd}`);
