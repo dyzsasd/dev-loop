@@ -27,10 +27,19 @@ let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const KEY = "browser-use";
-const TODAY = new Date().toISOString().slice(0, 10);
 const HOUR = 3_600_000;
+// ONE instant for the whole fixture, and the report key is derived from the FIRE, not from "now".
+// reportTrailGaps buckets a fire on the UTC day of its own `ts`, so a report filename taken from a
+// different instant than the ledger row is only accidentally equal. The rows are stamped an hour
+// back, so between 00:00 and 01:00 UTC `now - 1h` is still YESTERDAY while `now` is today: the
+// planted report landed on a day the agent had not fired, and all three "a report clears W35" arms
+// failed. Measured at a shifted 00:30Z clock — 3 of 12 checks — and invisible for the other 23 hours,
+// the same only-on-some-clocks blindness as the `ps` lstart parse (pid-identity.ts).
+// Pinning the instant also stops the fixture from straddling the boundary mid-run.
+const FIRE_MS = Date.now() - HOUR;
+const TODAY = new Date(FIRE_MS).toISOString().slice(0, 10);
 const fireRow = (agent: string, project: string) =>
-  JSON.stringify({ ts: new Date(Date.now() - HOUR).toISOString(), agent, project, fireId: `${agent}-1`, exitCode: 0 });
+  JSON.stringify({ ts: new Date(FIRE_MS).toISOString(), agent, project, fireId: `${agent}-1`, exitCode: 0 });
 
 // A machine-global home that MUST NOT be consulted: every arm plants the decoy there.
 const HOME = join(tmp, "home");
