@@ -51,7 +51,10 @@ create is the mirror-poller intake, a human's words). Terminal tickets are never
 one create — via SH-file-ticket; the §9c tracker pass follows SH-block-park.
 
 **Exit.** Every crack is re-routed to an owner, reset, or flagged in the digest; nothing stranded
-outside every owner query; the digest emitted. A clean board is a terse no-op; `dry-run` writes nothing.
+outside every owner query; the digest emitted **and written as this fire's §22 daily report whenever the
+fire mutated the board** — a digest that exists only in the fire's stdout is not a durable trail, and the
+board writes it justifies are then invisible in the only record the operator reads. A clean board is a
+terse no-op (no material work, so no report); `dry-run` writes nothing.
 
 **When blocked.** An ambiguous type/owner/repo is reported in the digest as a fact, never guessed (a
 wrong re-label mis-routes work). A §16 broader-access finding stops and surfaces.
