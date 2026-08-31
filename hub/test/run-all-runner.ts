@@ -6,13 +6,14 @@
 // and exit code; then (AC4) it asserts run-all.ts's REAL discovery is complete against
 // `git ls-files 'hub/test/*.ts'`, the check that replaces the deleted scanner.
 import { spawnSync, execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, copyFileSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const here = dirname(fileURLToPath(import.meta.url));
+import { tmpRoot } from "./tmp-root.ts";
 const RUNNER = join(here, "run-all.ts");        // the real runner under test
 const repoRoot = join(here, "..", "..");         // hub/test → hub → repo root (worktree root)
 const NODE = process.env.DEVLOOP_NODE || process.execPath;
@@ -32,7 +33,7 @@ const ok = (cond: boolean, m: string): void => { console.log((cond ? "✅ " : "�
 // leaf is the honest way to keep both properties. Inlining the var list here instead would recreate
 // the duplicated union that LOOP-156 wrote env-scrub.ts to remove.
 function runSynthetic(files: Record<string, string>): { status: number | null; stdout: string; stderr: string } {
-  const dir = mkdtempSync(join(tmpdir(), "run-all-runner-"));
+  const dir = tmpRoot("run-all-runner-");
   try {
     copyFileSync(RUNNER, join(dir, "run-all.ts"));
     // run-all.ts's imports, carried with the copy. env-scrub.ts (LOOP-193) is the ONE fire-marker

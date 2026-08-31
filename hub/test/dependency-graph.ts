@@ -3,14 +3,15 @@
 import { dependencyGraph } from "../src/dependency-graph.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-depgraph-")));
+const tmp = realpathSync(tmpRoot("dl-depgraph-"));
 
 try {
   // ── Setup: a project with tickets and comments ──

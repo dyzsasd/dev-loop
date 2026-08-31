@@ -14,16 +14,17 @@
 // Driven as a subprocess like team-scheduler.ts — run-agents' main() is unconditional, so it cannot be
 // imported. Run from /tmp, never inside the live workspace.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-stop-settle-")));
+const tmp = realpathSync(tmpRoot("dl-stop-settle-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const team = (args: string[], cwd: string) =>

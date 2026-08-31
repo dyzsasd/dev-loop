@@ -5,13 +5,14 @@
 // `daemon up` even exited 0. The guard must refuse the value LOUDLY, naming the env var at fault,
 // BEFORE any directory is created.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, rmSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { devloopHome, devloopDataDir, tryDevloopDataDir, devloopProjectsPath, projectConfigCandidates, hubDbPath, tryHubDbPath, workspacesIndexPath, guardCliPath } from "../src/paths.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 let fails = 0;
+import { tmpRoot } from "./tmp-root.ts";
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const ENV_KEYS = ["DEVLOOP_HOME", "DEVLOOP_DATA_DIR", "DEVLOOP_PROJECTS_JSON", "DEVLOOP_HUB_DB"] as const;
@@ -65,8 +66,8 @@ reset();
   const WS_KEYS = ["DEVLOOP_WORKSPACE", "DEVLOOP_TEAM", "DEVLOOP_HOME", "DEVLOOP_HUB_DB", "DEVLOOP_DATA_DIR", "DEVLOOP_PROJECTS_JSON"] as const;
   const savedWs = Object.fromEntries(WS_KEYS.map((k) => [k, process.env[k]]));
   const cwd0 = process.cwd();
-  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-paths-ws-")));
-  const outside = realpathSync(mkdtempSync(join(tmpdir(), "dl-paths-none-")));
+  const wsRoot = realpathSync(tmpRoot("dl-paths-ws-"));
+  const outside = realpathSync(tmpRoot("dl-paths-none-"));
   const legacyHome = join(homedir(), ".dev-loop");
   writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2, team: { key: "pathsws", backend: "service" }, repos: {}, projects: {},

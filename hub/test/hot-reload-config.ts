@@ -18,14 +18,15 @@
 // reload that refreshed the profiles from one that did not. A dry run cannot be used here: it previews
 // and exits before the scheduler loop that owns the reload (LOOP-459 AC3).
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-hotreload-")));
+import { tmpRoot } from "./tmp-root.ts";
+const tmp = realpathSync(tmpRoot("dl-hotreload-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

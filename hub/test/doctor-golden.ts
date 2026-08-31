@@ -8,14 +8,15 @@
 //
 // On mismatch prints a unified diff. --update-golden (env or argv) rewrites the goldens.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-golden-")));
+const tmp = realpathSync(tmpRoot("dl-doc-golden-"));
 const HERE = new URL(".", import.meta.url).pathname;
 const GOLDEN_DIR = join(HERE, "golden");
 const UPDATE = process.env.DEVLOOP_UPDATE_GOLDEN !== undefined || process.argv.includes("--update-golden");

@@ -1,8 +1,8 @@
 // metrics.ts — fire metrics from fires.jsonl (window, success, suspect, medians), the 90d prune,
 // board KPIs from issue.transition events (accept rate = Done ÷ (Done + In Review→Canceled)), and the CLI.
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, chmodSync, existsSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fireMetrics, pruneFireLedger, boardMetrics, readFireRows, decisionQueue, ownerLiveness, renderHuman, usageReport, fireRowsFromEvents, renderUsage, renderCost, renderFlow, sensitiveMistier, kaizenReport, renderKaizen, rollingSpendUsd, parkedSplit, escapeSignalSourceRan, profileDeadlines, perFireDeadline, spendCurvePoints, spendCurveDeadline, ratePerMsFor, SPEND_CURVE_MIN_SAMPLES, laneUsage, estimateLaneCost, DEFAULT_CHANNEL_MULTIPLIERS } from "../src/metrics.ts";
@@ -10,9 +10,10 @@ import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-metrics-")));
+const tmp = realpathSync(tmpRoot("dl-metrics-"));
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-07-04T12:00:00Z");
 const iso = (ms: number) => new Date(ms).toISOString();

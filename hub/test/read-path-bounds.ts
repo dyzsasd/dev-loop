@@ -4,14 +4,15 @@
 // All three are the same failure mode on the same surface: a read that silently returns something
 // other than what the caller requested, with exit 0, in a shape byte-indistinguishable from a
 // correct answer. That is worse than an error, because the caller acts on it.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { agentOp, type OpResult } from "../src/agentops.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-readpath-")));
+const tmp = realpathSync(tmpRoot("dl-readpath-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

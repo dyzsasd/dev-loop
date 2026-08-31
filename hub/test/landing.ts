@@ -1,10 +1,11 @@
 // landing.ts — regression test for the forge landing reader (LOOP-40, design landing-observability §6-ChildA).
 // Uses injected exec stubs so no real gh/network calls are made. Tests every degradation path from §4.
-import { realpathSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, mkdirSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { deltaIsCiIrrelevant, readCiFreshness, shellArg, readLandingState, ticketToPr, probeTicketPr, prToTicket, annotateTicketLanding, GH_PR_LIST_FIELDS, type ExecFn, type LandingState } from "../src/landing.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -15,7 +16,7 @@ const NOW = Date.parse("2026-07-31T12:00:00Z");
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 function makeWorkspace(repos: Record<string, object>): ReturnType<typeof loadWorkspace> {
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-landing-")));
+  const tmp = realpathSync(tmpRoot("dl-landing-"));
   mkdirSync(join(tmp, ".dev-loop", "locks"), { recursive: true });
   mkdirSync(join(tmp, "clone"), { recursive: true });
   writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
@@ -813,7 +814,6 @@ const PR_LIST_OPEN = JSON.stringify([{ number: 7, url: "https://github.com/test-
   ok(shellArg("a;rm -rf /") === "'a;rm -rf /'", "LOOP-365: a metacharacter forces quoting");
   ok(shellArg("it's") === "'it'\\''s'", "LOOP-365: an embedded single quote is escaped POSIX-style");
 }
-
 
 // ── LOOP-424: W22 landing-health line blind to missing PR checks ──────────────────
 

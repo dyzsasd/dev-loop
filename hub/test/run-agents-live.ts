@@ -3,9 +3,9 @@
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
 import { spawnSync, execFileSync, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, openSync, closeSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { EXIT_NO_WORK } from "../src/breaker.ts";      // LOOP-543: the outcome code a fire that produced nothing is ledgered under
@@ -15,11 +15,12 @@ import { insertTicket } from "../src/ticketwrite.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 const repoRoot = resolve(hubRoot, "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-run-live-"));
+const tmp = tmpRoot("dl-run-live-");
 try {
   const data = join(tmp, "data");
   const repo = join(tmp, "repo");

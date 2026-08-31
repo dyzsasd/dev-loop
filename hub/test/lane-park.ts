@@ -14,8 +14,8 @@
 // warning: `enabled:false` parks the lane and LEAVES W16 warning (a parked lane still strands
 // tickets); `manual:true` says a human runs the role, so the scheduler skips it AND W16 downgrades.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { laneScheduleBlock, loadWorkspace, validateTeamFile } from "../src/team-config.ts";
@@ -24,7 +24,8 @@ import { findProject } from "../src/seed.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-lanepark-")));
+import { tmpRoot } from "./tmp-root.ts";
+const tmp = realpathSync(tmpRoot("dl-lanepark-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

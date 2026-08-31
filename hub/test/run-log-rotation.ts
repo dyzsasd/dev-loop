@@ -8,16 +8,17 @@
 // freshly rotated log is a NEW file, and if it is treated as pre-existing it is created at the default
 // umask while holding the full unredacted fire stream.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-runlog-")));
+const tmp = realpathSync(tmpRoot("dl-runlog-"));
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: join(tmp, "home"), ...extra });
 const team = (args: string[], cwd: string) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env: env(), encoding: "utf8" });
 
@@ -49,8 +50,34 @@ ok(existsSync(logPath) && statSync(logPath).size < big, `the live run.log starts
 const mode = existsSync(logPath) ? (statSync(logPath).mode & 0o077) : 0o077;
 ok(mode === 0, `the freshly rotated run.log is owner-only, not created at the default umask (group/other bits ${mode.toString(8)})`);
 
-// Stop whatever the background start left running, so the suite leaks nothing.
+// Stop what the background start left running — and ASSERT it stopped.
+//
+// `stop` reads the run lock, and `--background` returns as soon as it has forked: the detached scheduler
+// had usually not written its lock yet, so `stop` found no holder, did nothing, and said nothing. The
+// scheduler then outlived the suite (`--max-fires 1` does not save it — its fire never fires, because the
+// lane cadence gate declines first), kept its workspace alive, and recreated the temp tree AFTER the
+// suite's own cleanup had removed it. Observed as a running `run-agents.ts --agents pm` with ppid 1 and a
+// 452 KB workspace under $TMPDIR, once per full-suite run. Waiting for the lock is what makes `stop`
+// meaningful here; asserting afterwards is what stops the leak from going quiet again.
+const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
+const holderPid = (): number => {
+  try { return (JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: number }).pid ?? 0; } catch { return 0; }
+};
+const settle = (want: boolean, budgetMs: number): number => {
+  const until = Date.now() + budgetMs;
+  for (;;) {
+    const pid = holderPid();
+    const live = pid > 0 && (() => { try { process.kill(pid, 0); return true; } catch { return false; } })();
+    if (live === want || Date.now() > until) return live ? pid : 0;
+    spawnSync("sleep", ["0.1"]);
+  }
+};
+const started = settle(true, 15_000);
+ok(started > 0, `the detached scheduler took the run lock, so \`stop\` has something to address (pid ${started || "none — lock never appeared"})`);
 spawnSync("node", [join(hubRoot, "src", "cli.ts"), "stop"], { cwd: ws, env: env(), encoding: "utf8" });
+const stillUp = settle(false, 15_000);
+ok(stillUp === 0, `…and it is gone once \`stop\` returns — the suite leaks no scheduler (pid ${stillUp} still running)`);
+if (stillUp > 0) spawnSync("kill", ["-9", String(stillUp)]); // never leave one behind, even when asserting that we did
 
 console.log(fails === 0 ? "\nRUN_LOG_ROTATION_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

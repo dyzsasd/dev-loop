@@ -19,9 +19,9 @@
 // and nowhere else. (The AC2 arms fail under it too — they inject a guard result, which the mutation
 // discards; the AC4 arms are the ones that prove the REAL gate is wired in.)
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { openDb } from "../src/db.ts";
@@ -34,13 +34,14 @@ import {
   push, pushExit, pushArgvFor, setUpstreamArgvFor, documentedExitCodes, PUSH_EXIT, PUSH_HELP,
   forcePublishEligible, pushFailureReason, type PushResult, type GitExec,
 } from "../src/push.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-push-verb-"));
+const ROOT = tmpRoot("dl-push-verb-");
 const savedEnv = { ws: process.env.DEVLOOP_WORKSPACE, db: process.env.DEVLOOP_HUB_DB };
 try {
   const git = (dir: string, args: string[]): string =>

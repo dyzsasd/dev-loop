@@ -7,15 +7,16 @@
 // Each was written down as a hard invariant, in STRATEGY.md or conventions, and each was enforced by
 // nothing but whether a human happened to look.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { checkInRepoWorktrees } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { reportTrailGaps } from "../src/metrics.ts";
 import { pushGuard, touchesOutsideCheatsheet, cheatsheetRanges } from "../src/push-guard.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-trail-")));
+const tmp = realpathSync(tmpRoot("dl-trail-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const git = (dir: string, ...a: string[]): string =>

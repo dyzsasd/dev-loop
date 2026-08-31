@@ -4,8 +4,8 @@
 // step as a DISTINCT actor process sharing one WAL db. Proves P2 SKILL-portability end-to-end.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -16,7 +16,8 @@ import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must ne
 // connections so some writes/reads hit a different db state → intermittent events/dedupe failures. A
 // fresh unique dir can't be held by any prior-run process, so the SoR is isolated regardless of run/suite
 // order. Cleaned up at the end.
-const DIR = mkdtempSync(join(tmpdir(), "hub-loop-"));
+const DIR = tmpRoot("hub-loop-");
+import { tmpRoot } from "./tmp-root.ts";
 const DB = join(DIR, "hub.db");
 
 async function as(actor: string): Promise<Client> {

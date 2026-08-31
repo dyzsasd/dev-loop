@@ -9,19 +9,20 @@
 //   LOOP-154 — `--help` was a daemon-spawn vector on two verbs.
 //   LOOP-248 — a restart hint that omits DEVLOOP_PROJECT can restart the WRONG project's daemon.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-cli-pres-")));
+const tmp = realpathSync(tmpRoot("dl-cli-pres-"));
 // A directory with NO workspace above it, and a HOME of its own so the global-db fallback can never
 // touch the operator's real board. DEVLOOP_WORKSPACE in particular must be scrubbed: workspace
 // resolution prefers it over the cwd walk-up, which would make "workspace-less" a lie (LOOP-156).

@@ -7,13 +7,14 @@
 // (2) an unknown job / unknown agent is refused cleanly (exit 1); (3) missing args → usage (exit 2);
 // (4) process.exitCode (not process.exit) so a piped slice never truncates (LOOP-346); (5) --json shape.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assembleJobCorpus } from "../src/boot-prefix.ts";
 import { pluginRoot } from "../src/context-bill.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = pluginRoot(); // the plugin payload root: skills/ + references/ live here
@@ -78,7 +79,7 @@ for (const job of ["verify", "unblock", "groom", "review"]) {
     "the verb prints the agent's CLI cheat-sheet block even with no workspace resolved");
 
   // Build a fixture workspace with §14 lessons, point the verb at it via DEVLOOP_WORKSPACE + DEVLOOP_PROJECT.
-  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-pv-lessons-")));
+  const wsRoot = realpathSync(tmpRoot("dl-pv-lessons-"));
   try {
     mkdirSync(join(wsRoot, "repo"), { recursive: true });
     mkdirSync(join(wsRoot, ".dev-loop", "lessons"), { recursive: true });

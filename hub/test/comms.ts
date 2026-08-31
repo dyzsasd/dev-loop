@@ -1,8 +1,8 @@
 // comms.ts — `dev-loop notify`: payload shapes, DRYRUN (never leaks the URL), env-missing + non-2xx paths.
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPayload, notify } from "../src/comms.ts";
@@ -10,9 +10,10 @@ import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-comms-")));
+const tmp = realpathSync(tmpRoot("dl-comms-"));
 
 // ── pure payload shapes ──
 {

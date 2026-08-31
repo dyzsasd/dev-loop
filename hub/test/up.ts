@@ -4,14 +4,15 @@
 // brief scaffolding (an operator's own file is never clobbered), the claude trust pre-seed merge, and
 // the attach leg's DEVLOOP_HUB_URL injection + URL validation.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { deriveTeamKey, preseedClaudeTrust, interactiveCommandFor, resolvedBoardUrl } from "../src/up.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
@@ -27,7 +28,7 @@ ok(deriveTeamKey("/tmp/@@") === "team", "deriveTeamKey: degenerate name falls ba
     "interactiveCommandFor(opencode): --model only — TUI has no effort flag (rides config), no unverified flags");
 }
 {
-  const tmp = mkdtempSync(join(tmpdir(), "dl-up-trust-"));
+  const tmp = tmpRoot("dl-up-trust-");
   const cj = join(tmp, "claude.json");
   ok(preseedClaudeTrust("/ws/x", cj) === "absent", "preseedClaudeTrust: no ~/.claude.json → 'absent' (never invents claude's config)");
   writeFileSync(cj, JSON.stringify({ userID: "u", projects: { "/other": { hasTrustDialogAccepted: true, allowedTools: ["x"] } } }));
@@ -43,7 +44,7 @@ ok(deriveTeamKey("/tmp/@@") === "team", "deriveTeamKey: degenerate name falls ba
 
 // ── resolvedBoardUrl ─────────────────────────────────────────────────────────
 {
-  const tmp = mkdtempSync(join(tmpdir(), "dl-up-board-"));
+  const tmp = tmpRoot("dl-up-board-");
   const stateDir = join(tmp, ".dev-loop");
   mkdirSync(stateDir, { recursive: true });
   const fakeWs = { root: tmp } as any;
@@ -57,7 +58,7 @@ ok(deriveTeamKey("/tmp/@@") === "team", "deriveTeamKey: degenerate name falls ba
 }
 
 // ── e2e: the dry-launch contract ────────────────────────────────────────────
-const ROOT = mkdtempSync(join(tmpdir(), "dl-up-"));
+const ROOT = tmpRoot("dl-up-");
 try {
   const ws = join(ROOT, "acme-shop");
   mkdirSync(ws, { recursive: true });

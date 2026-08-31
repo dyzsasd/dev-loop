@@ -15,14 +15,15 @@
 // The convention was never that strict: two-tier-dev.md says "a `Mode: design` / `Mode: direct-code`
 // description LINE". The code was stricter than the spec, and the strict reading was unsatisfiable by
 // the project's own templates.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { modeMarkerOf } from "../src/design-parent.ts";
 import { seniorDevModePick } from "../src/servable.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-smp-")));
+const tmp = realpathSync(tmpRoot("dl-smp-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

@@ -4,19 +4,19 @@
 // their own In Progress; (2) pm gets verify/unblock/backlog + the §5a todoDepth cap input;
 // (3) qa gets verify + the project's blocked set; (4) other actors are refused 400;
 // (5) summaries only — no description bodies ride the lists.
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { insertTicket } from "../src/ticketwrite.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts";
 import { servableSlice, isDevTierActor } from "../src/servable.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const dir = mkdtempSync(join(tmpdir(), "devloop-queue-"));
+const dir = tmpRoot("devloop-queue-");
 const db = openDb(join(dir, "hub.db"));
 const projectId = ensureSeed(db, "qproj", "Queue Project", "QQ");
 

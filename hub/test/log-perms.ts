@@ -5,20 +5,21 @@
 // warn-once-PER-PROCESS semantics (AC3) are proven by firing twice in ONE scheduler process (--max-fires 2).
 // The core create-perms regression (runner-logs 0600/0700 after a fresh fire) also lives in test/team-scheduler.ts.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpathSync, statSync, chmodSync, openSync, closeSync, ftruncateSync } from "node:fs";
-import { tmpdir, platform } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, statSync, chmodSync, openSync, closeSync, ftruncateSync } from "node:fs";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 // win32 has no POSIX mode bits — the hardening is a documented no-op there (as the src is), so this suite is moot.
 if (platform() === "win32") { console.log("✅ LOOP-93: win32 has no POSIX mode bits — log-perms hardening is a no-op, skipping\n\nLOG_PERMS_OK"); process.exit(0); }
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-logperms-")));
+const tmp = realpathSync(tmpRoot("dl-logperms-"));
 const HOME = join(tmp, "home");
 const ws = join(tmp, "ws");
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });

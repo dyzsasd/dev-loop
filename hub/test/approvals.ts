@@ -4,8 +4,8 @@
 // The load-bearing assertions are AC3 (the grant-time key lint — design §4 calls it "a hard refusal,
 // never a warning") and AC5 (expiry derived at consult time, so a stale row cannot authorise even
 // though no sweeper has ever run). Everything else exists so those two cannot regress unnoticed.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
@@ -15,8 +15,9 @@ import {
   parseActionKey, parseDuration, requestApproval, resolveExpiry, revokeApproval,
   type ApprovalRow,
 } from "../src/approvals.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-approvals-")));
+const tmp = realpathSync(tmpRoot("dl-approvals-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const refuses = (fn: () => unknown, code: string): { hit: boolean; got: string } => {

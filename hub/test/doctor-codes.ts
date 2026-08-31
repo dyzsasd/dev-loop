@@ -9,13 +9,14 @@
 //   1. the registry has no duplicate code;
 //   2. every W-code literal anywhere in hub/src is registered — so a check cannot ship under an
 //      unregistered (and therefore possibly colliding) code.
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DOCTOR_CODES, DOCTOR_CODE_SET, nextFreeDoctorCode } from "../src/doctor-codes.ts";
 import { openDb } from "../src/db.ts";
 import { checkBlockedNoBailShape } from "../src/doctor.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 let fails = 0;
@@ -67,7 +68,7 @@ ok(DOCTOR_CODES.every((r) => r.name.trim().length > 0 && r.source.trim().length 
 // ── Decision 1 — W46 registered + the check fires only on an unroutable block ─────────────────────
 ok(DOCTOR_CODE_SET.has("W46"), "Decision 1: W46 (unroutable block) is registered in the doctor-codes namespace");
 {
-  const ROOT = mkdtempSync(join(tmpdir(), "dl-w46-"));
+  const ROOT = tmpRoot("dl-w46-");
   try {
     const db = openDb(join(ROOT, "hub.db"));
     db.prepare("INSERT INTO projects(id,key,name,created_at) VALUES('p1','loop','Loop','2026-01-01T00:00:00.000Z')").run();

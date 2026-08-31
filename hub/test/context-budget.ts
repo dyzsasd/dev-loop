@@ -9,8 +9,8 @@
 // The budget authority is the BUDGETS table in hub/src/context-bill.ts (not the template doc — see
 // the note there); lessons budgets stay hub/src/lessons.ts's INDEX_MAX_*/SHARD_MAX_* (cited via
 // import by context-bill.ts, deliberately not re-stated here).
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONVENTIONS_BUDGETS, CONVENTIONS_TARGET_BYTES } from "../src/context-bill.ts"; // LOOP-238 ratchet → WS-A 64 KB target
@@ -33,6 +33,7 @@ import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const root = pluginRoot();
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
@@ -360,7 +361,7 @@ for (const r of bill.rows) {
 // FAILS against code that returns 0 for hubDoc (the old behaviour),
 // or that reads the wrong project's doc in a multi-project workspace (AC3).
 {
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-hubdoc-test-")));
+  const tmp = realpathSync(tmpRoot("dl-hubdoc-test-"));
   try {
     const repoDir = join(tmp, "repo");
     mkdirSync(join(tmp, ".dev-loop"), { recursive: true });
@@ -400,7 +401,7 @@ for (const r of bill.rows) {
 // ── 5f. LOOP-355 AC5 regression: multi-project workspace (AC3) ────────────────────────────────
 // FAILS against the old code that returns Object.keys()[0] regardless of the requested project.
 {
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-multi-proj-test-")));
+  const tmp = realpathSync(tmpRoot("dl-multi-proj-test-"));
   try {
     const repoDir = join(tmp, "repo");
     mkdirSync(repoDir, { recursive: true });
@@ -467,7 +468,7 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
   // A synthetic workspace, for the reason LOOP-237's suite learned the hard way: the prune is
   // config-decided, so measuring against whatever workspace happens to resolve makes the number mean
   // something different on every host — and on CI, where nothing resolves, everything prunes.
-  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-ratchet-")));
+  const wsRoot = realpathSync(tmpRoot("dl-ratchet-"));
   mkdirSync(join(wsRoot, "repo"), { recursive: true });
   writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2,
@@ -525,7 +526,7 @@ ok(human.status === 0 && /per-agent per-fire context bill/.test(human.stdout ?? 
 // bytes the fire's corpus really carries (INDEX + shard, sliced to the agent), and says so.
 {
   const { tryResolveLessonsActual } = await import("../src/context-bill.ts");
-  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-lessons-actual-")));
+  const wsRoot = realpathSync(tmpRoot("dl-lessons-actual-"));
   try {
     mkdirSync(join(wsRoot, ".dev-loop", "lessons"), { recursive: true });
     mkdirSync(join(wsRoot, "repo"), { recursive: true });

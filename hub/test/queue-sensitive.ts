@@ -1,17 +1,18 @@
 // LOOP-80 regression: junior-dev queue slice must never serve a sensitive ticket, even when
 // the row exists (residual / pre-gate / raw-insert). Design: sensitive-routing §2 / LOOP-80 Child B.
-import { mkdtempSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { DatabaseSync } from "node:sqlite";
 import { openDb } from "../src/db.ts";
 import { agentOp } from "../src/agentops.ts";
 import { servableSlice, servableTodoDepth } from "../src/servable.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-queue-sensitive-"));
+const ROOT = tmpRoot("dl-queue-sensitive-");
 
 type QueueResult = { agent: string; todo: Array<{ id: string }>; inProgress: Array<{ id: string }> };
 

@@ -6,17 +6,18 @@
 // fault-injection deterministic. The CLI-level arms (a mid-cascade abort inside `remove-project`, and an
 // unwritable workspace directory) live in team-edit.ts, where the real ten-statement cascade runs.
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, chmodSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, rmSync, realpathSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commitBothHalves } from "../src/destructive-guard.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-destructive-commit-")));
+const tmp = realpathSync(tmpRoot("dl-destructive-commit-"));
 
 // One fixture per arm: its own directory, its own config file, its own db — so a chmod or a rollback in
 // one arm cannot reach another.

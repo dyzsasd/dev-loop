@@ -17,14 +17,15 @@
 // This drives a REAL scheduler with a fake coding agent, because the defect is only visible in the
 // interaction between the pause writer and the tick loop.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-pausegate-")));
+import { tmpRoot } from "./tmp-root.ts";
+const tmp = realpathSync(tmpRoot("dl-pausegate-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

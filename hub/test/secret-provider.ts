@@ -2,11 +2,12 @@
 // sync + the secret-set pointer) and `dev-loop secret set|list|unset` (stdin path; hidden-prompt is the
 // same write path behind a TTY read). Also the upsert/remove line-editors' comment/order preservation.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { upsertSecretLine, removeSecretLine } from "../src/secret-cli.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -27,7 +28,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 }
 
 // ── e2e in a scratch workspace ──────────────────────────────────────────────
-const ROOT = mkdtempSync(join(tmpdir(), "dl-secret-provider-"));
+const ROOT = tmpRoot("dl-secret-provider-");
 try {
   const ws = join(ROOT, "ws");
   mkdirSync(ws, { recursive: true });

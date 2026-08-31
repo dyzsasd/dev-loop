@@ -1,14 +1,15 @@
 // doctor-null-assignee.ts — W27 regression: null-assignee tickets are unreachable in split-dev.
 // Also covers the servable.ts inReview label-based fix (LOOP-244).
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { servableSlice } from "../src/servable.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w27-")));
+const tmp = realpathSync(tmpRoot("dl-w27-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const NOW = "2026-08-01T00:00:00.000Z";

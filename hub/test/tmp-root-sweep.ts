@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpRoot } from "./tmp-root.ts";
+import { codeOnly } from "./code-only.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let fails = 0;
@@ -67,7 +68,12 @@ ok(failing.path !== "" && !existsSync(failing.path), `AC3: …and its tree is sw
 const tracked = spawnSync("git", ["ls-files", "test"], { cwd: join(here, ".."), encoding: "utf8" }).stdout
   .split("\n").map((l) => l.trim()).filter((l) => l.endsWith(".ts")).map((l) => l.replace(/^test\//, ""));
 ok(tracked.length > 50, `fixture: git ls-files resolved the tracked suites (${tracked.length} found)`);
-const direct = tracked.filter((f) => f !== "tmp-root.ts" && /mkdtempSync\(\s*join\(\s*tmpdir\(\)/.test(readFileSync(join(here, f), "utf8")));
+// Scanned through codeOnly (the repo's one source-to-executable-text reduction), so a comment or a
+// fixture string that QUOTES the old pattern — this file's own header does — is not read as a call.
+// Matching raw source would make the guard unmaintainable: every suite that documents the leak would
+// have to be exempted, and an exemption list is what stops a guard from guarding.
+const direct = tracked.filter((f) => f !== "tmp-root.ts"
+  && /mkdtempSync\(\s*join\(\s*tmpdir\(\)/.test(codeOnly(readFileSync(join(here, f), "utf8"))));
 ok(direct.length === 0, `AC4: no tracked suite creates a temp root outside the helper (offenders: ${direct.join(", ") || "none"})`);
 
 // AC5 — the helper is registered as a non-suite, or the runner counts it as a phantom passing test.

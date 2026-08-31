@@ -11,9 +11,10 @@
 // exercises a detector that decides whether a fire is recorded as a success.
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter } from "../src/fire-usage.ts";
 import { fireMetrics, cacheReadDrift } from "../src/metrics.ts"; // LOOP-318 / LOOP-267
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+
 import { join } from "node:path";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
@@ -108,7 +109,7 @@ ok(!codexUsageAdapter.isError!('{"type":"item","text":"the build printed: error:
       { ts: at(1), agent: "qa", project: "p", durationMs: 1000, exitCode: 0, turns: null },
     ];
     // fireMetrics reads a LEDGER PATH, not rows — the whole point is that it parses what a fire wrote.
-    const ledger = join(mkdtempSync(join(tmpdir(), "dl-turns-")), "fires.jsonl");
+    const ledger = join(tmpRoot("dl-turns-"), "fires.jsonl");
     writeFileSync(ledger, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
     const m2 = fireMetrics(ledger, 3_600_000, now);
     ok(m2.byAgent.pm.turnsPerFire === 5, `LOOP-318 AC4/AC5: the mean is over the NON-NULL subset only ((4+6)/2 = 5, got ${m2.byAgent.pm.turnsPerFire})`);
@@ -140,7 +141,7 @@ ok(!codexUsageAdapter.isError!('{"type":"item","text":"the build printed: error:
     // A zero-cost row: it has usage but no billable spend, so it must not enter the denominator.
     { ts: at(1), agent: "senior-dev", project: "p", durationMs: 1000, exitCode: 1, usage: u(1_000_000, 0) },
   ];
-  const ledger = join(mkdtempSync(join(tmpdir(), "dl-cr-")), "fires.jsonl");
+  const ledger = join(tmpRoot("dl-cr-"), "fires.jsonl");
   writeFileSync(ledger, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
   const MODEL = { "senior-dev": 400_000, "junior-dev": 400_000 }; // identical modeled context, in BYTES
   const fm = fireMetrics(ledger, 3_600_000, now, MODEL);

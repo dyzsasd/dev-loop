@@ -4,16 +4,17 @@
 // at 90 days; hook.log appended forever. It grows one line per SESSION rather than per fire, which is
 // why nothing noticed — and why an unattended machine is where it would eventually matter.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-hooklog-")));
+const tmp = realpathSync(tmpRoot("dl-hooklog-"));
 const runDir = join(tmp, "run");
 mkdirSync(runDir, { recursive: true });
 const logPath = join(runDir, "hook.log");

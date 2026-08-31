@@ -1,7 +1,7 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { openDb, logEvent } from "../src/db.ts";
@@ -15,6 +15,7 @@ import { insertTicket } from "../src/ticketwrite.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 // Job-scoped prompts: the zero-dep leaf predicates the pm/qa lane gates + the senior-dev Mode pick consume.
 import { qaMaintenanceSlice, seniorDevModePick } from "../src/servable.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -58,7 +59,7 @@ const run = (args: string[]) => {
 // assert the entry still prints its usage — this FAILS against the guarded form (0-byte stdout) and PASSES
 // with the unconditional main(). realpathSync isolates the defect to the space (not a /tmp symlink).
 {
-  const spaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl run agents ")));       // last segment holds spaces
+  const spaceRoot = realpathSync(tmpRoot("dl run agents "));       // last segment holds spaces
   cpSync(join(hubRoot, "src"), join(spaceRoot, "src"), { recursive: true });
   writeFileSync(join(spaceRoot, "package.json"), JSON.stringify({ type: "module" }));  // ESM for the copied .ts
   const spaced = spawnSync("node", [join(spaceRoot, "src", "run-agents.ts"), "--help"], { encoding: "utf8" });
@@ -68,7 +69,7 @@ const run = (args: string[]) => {
   rmSync(spaceRoot, { recursive: true, force: true });
 }
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-run-agents-"));
+const tmp = tmpRoot("dl-run-agents-");
 try {
   const data = join(tmp, "data");
   const repo = join(tmp, "repo");
@@ -213,7 +214,7 @@ try {
     ok(/launch=pm-maintenance:claude:sonnet\//.test(m1.out) && /launch=pm-groom:claude:opus\//.test(gr.out),
       "per-lane model tier: pm-maintenance=sonnet (mechanical/cheaper), pm-groom=opus (judgment/stronger)");
     // the why-launched tail names the job (dump the prompt and read the scheduler context)
-    const dumpDir = mkdtempSync(join(tmpdir(), "dl-lane-"));
+    const dumpDir = tmpRoot("dl-lane-");
     run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm-maintenance", "--dump-prompt", dumpDir, ...common]);
     const tail = readFileSync(join(dumpDir, "pm-maintenance.prompt.txt"), "utf8");
     ok(/\n- agent: pm\b/.test(tail) && /\n- job-lane job: verify\b/.test(tail),
@@ -240,7 +241,7 @@ try {
       "a qa lane fires as DEVLOOP_ACTOR=qa (same identity, not a new actor)");
     ok(/launch=qa-maintenance:claude:sonnet\//.test(qm.out) && /launch=qa-hunt:claude:opus\//.test(qh.out),
       "per-lane model tier: qa-maintenance=sonnet (mechanical/cheaper), qa-hunt=opus (judgment/stronger)");
-    const dumpDir = mkdtempSync(join(tmpdir(), "dl-qa-lane-"));
+    const dumpDir = tmpRoot("dl-qa-lane-");
     run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa-maintenance", "--dump-prompt", dumpDir, ...common]);
     const mTail = readFileSync(join(dumpDir, "qa-maintenance.prompt.txt"), "utf8");
     ok(/\n- agent: qa\b/.test(mTail) && /\n- job-lane job: verify\b/.test(mTail),
@@ -257,7 +258,7 @@ try {
   // stewards resolve a fixed job (sweep→sweep, reflect→retro, ops→poll, architect→audit,
   // communication→article); dev→ship, junior-dev→implement; senior-dev→design (fail-open with no board).
   {
-    const dumpDir = mkdtempSync(join(tmpdir(), "dl-steward-"));
+    const dumpDir = tmpRoot("dl-steward-");
     const cases: Array<[string, string]> = [
       ["sweep", "sweep"], ["reflect", "retro"], ["ops", "poll"], ["architect", "audit"],
       ["communication", "article"], ["dev", "ship"], ["junior-dev", "implement"], ["senior-dev", "design"],
@@ -768,7 +769,7 @@ try {
   // use only team-scope config (AC6 pin: a per-project steward timeout would silently favour whichever
   // project happens to be profileProject on that fire).
   {
-    const wsDir = mkdtempSync(join(tmpdir(), "dl-ws-loop103-"));
+    const wsDir = tmpRoot("dl-ws-loop103-");
     const repoA = join(wsDir, "repo-a"); mkdirSync(repoA, { recursive: true });
     const repoB = join(wsDir, "repo-b"); mkdirSync(repoB, { recursive: true });
     spawnSync("git", ["init", "-b", "main"], { cwd: repoA, encoding: "utf8" });
@@ -827,7 +828,7 @@ try {
   // the JSON-config path; this pins the matching guard on the CLI-flag path). Over-ceiling values call
   // die() before workspace resolution — run() suffices; valid durations are covered by LOOP-9/LOOP-103.
   {
-    const wsDir260 = mkdtempSync(join(tmpdir(), "dl-ws-loop260-"));
+    const wsDir260 = tmpRoot("dl-ws-loop260-");
     const repo260 = join(wsDir260, "repo"); mkdirSync(repo260, { recursive: true });
     spawnSync("git", ["init", "-b", "main"], { cwd: repo260, encoding: "utf8" });
     writeFileSync(join(wsDir260, "dev-loop.json"), JSON.stringify({

@@ -4,8 +4,8 @@
 // FAIL-SOFT: a section that cannot be computed reports {error} and never blocks its siblings, and
 // (d) the CLI surface (--json, --project, text mode's NEXT line, the workspace-less one-liner).
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -18,12 +18,13 @@ import { writeProposal } from "../src/system-propose.ts";
 import { BREAKER_STATE_SCHEMA, type BreakerStateFile } from "../src/breaker.ts";
 import { breakerStatePath, teamDirOf } from "../src/scheduler-build.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-status-")));
+const tmp = realpathSync(tmpRoot("dl-status-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string | undefined> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra } as NodeJS.ProcessEnv);
 const cli = (args: string[], cwd: string, extra: Record<string, string | undefined> = {}) => {

@@ -7,9 +7,9 @@
 // catch was unreachable dead code) and `readFileSync` of a live SQLite main file is not an atomic
 // read. On 2026-08-04 the whole board was cascade-deleted and there was no copy to restore from.
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir, platform } from "node:os";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,11 +21,12 @@ import { commitBothHalves } from "../src/destructive-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-boardsnap-")));
+const tmp = realpathSync(tmpRoot("dl-boardsnap-"));
 
 // A WAL db with rows that were NEVER checkpointed — the shape the old path lost.
 function makeWalDb(path: string, rows: number): void {

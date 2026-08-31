@@ -2,12 +2,13 @@
 // never on local HEAD. A branch cut off a local main that is ahead of origin carries the operator's
 // unpushed doc commits as passengers in every dev PR (LOOP-48 / PR #28 field incident).
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -24,7 +25,7 @@ const git = (dir: string, args: string[]) =>
   execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-worktree-"));
+const ROOT = tmpRoot("dl-worktree-");
 try {
   // ── Setup: bare origin + clone where local main is AHEAD of origin ───────────────
   const origin = join(ROOT, "origin.git");

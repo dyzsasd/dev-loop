@@ -1,8 +1,8 @@
 // run-agents team mode + locks: WRR plan, --project filter, enabled/weight exclusion, fires.jsonl ledger,
 // the team run lock, and with-repo-lock serialization.
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
-import { tmpdir, platform } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock } from "../src/locks.ts";
@@ -10,9 +10,10 @@ import { EXIT_NO_WORK } from "../src/breaker.ts"; // LOOP-543: the outcome code 
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sched-")));
+const tmp = realpathSync(tmpRoot("dl-sched-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const team = (args: string[], cwd: string) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env: env(), encoding: "utf8" });

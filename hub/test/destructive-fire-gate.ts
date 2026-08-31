@@ -15,8 +15,8 @@
 // Never run against a real workspace: every fixture is a mkdtemp throwaway with its own hub.db, and
 // the markers are set explicitly per arm on top of a scrubbed env.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolationVerdict, workspaceIsolationVerdict, confirmationToken, FIRE_MARKERS } from "../src/destructive-guard.ts";
@@ -24,11 +24,12 @@ import type { Workspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers reach a fixture only when an arm sets them
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 const SRC = join(hubRoot, "src");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "dl-fire-gate-")));
+const ROOT = realpathSync(tmpRoot("dl-fire-gate-"));
 const HOME = join(ROOT, "home");
 const MARKERS = ["DEVLOOP_DEV_SPLIT", "DEVLOOP_TEAM_SCOPE"] as const;
 const noFire = () => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME }) as NodeJS.ProcessEnv;

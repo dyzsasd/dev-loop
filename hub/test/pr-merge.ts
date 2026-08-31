@@ -13,18 +13,19 @@
 //
 // This file does NOT re-assert merge-guard's own verdicts (LOOP-407 and LOOP-242 own those); it pins
 // the verb's contract: what it issues, what it refuses to issue, and how a refusal reads.
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { openDb } from "../src/db.ts";
 import { acquireLock } from "../src/locks.ts";
 import { EXIT_UNEVALUATED, skipClass } from "../src/merge-guard.ts";
 import { prMerge, prMergeExit, mergeArgvFor, resolvePrMergeTarget, prMergeLockPath, PR_MERGE_EXIT, type PrMergeResult } from "../src/pr-merge.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-pr-merge-"));
+const ROOT = tmpRoot("dl-pr-merge-");
 try {
   const GHREPO = "owner/repo444";
   const PR = 101;

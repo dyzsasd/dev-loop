@@ -2,8 +2,8 @@
 // Fixture: two worktrees (Canceled + In Progress) under two different roots; reaper removes exactly
 // the first. Must fail against origin/main prior to this fix (pre-LOOP-37 code has no reaper).
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -14,10 +14,11 @@ import type { Workspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "dl-team-repair-")));
+const ROOT = realpathSync(tmpRoot("dl-team-repair-"));
 
 try {
   // ── 1. Build a minimal git repo (bare origin + clone inside the workspace) ──

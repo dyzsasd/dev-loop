@@ -14,14 +14,15 @@
 //          wrote the runtime name, so the runtime name is the contract and the prose was corrected.
 //
 // Each arm below fails on ONE of those two defects, so neither fix can regress under the other.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { checkReportTrail } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { wsStateRoot } from "../src/workspace.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w35-")));
+const tmp = realpathSync(tmpRoot("dl-w35-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

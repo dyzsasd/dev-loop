@@ -32,7 +32,7 @@
 // mutation-testable file on purpose: inverting a guard's condition must fail a suite whose name says
 // what it guards.
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +48,7 @@ import {
 import { FIRE_MARKER_VARS } from "./env-scrub.ts";
 import { codeOnly } from "./code-only.ts"; // LOOP-396: the ONE source-to-executable-text reduction
 import type { Workspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -74,7 +75,7 @@ ok(FIRE_MARKER_VARS.every((v) => process.env[v] === undefined),
 ok(activeFireMarker() === null,
   "AC1: with the ambient env scrubbed, activeFireMarker() reports no fire — the arms below measure the code, not the launcher");
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-destructive-guard-")));
+const tmp = realpathSync(tmpRoot("dl-destructive-guard-"));
 const canaryPath = join(tmp, "canary-hub.db");
 const canaryRows = () => {
   const db = new DatabaseSync(canaryPath);

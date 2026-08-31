@@ -13,16 +13,17 @@
 // is on the default; a disabled project routes nothing; team.agents.<h>.codingAgent routes NOTHING (the
 // scheduler's launch-profile resolver does not read it — verified by dry-run, see codexRoutedHandles);
 // (6) the registry carries the row and doctor-codes registers the code.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { checkCodexSandboxDefault } from "../src/doctor.ts";
 import { loadWorkspace, codexRoutedHandles, codexSandboxUnpinned } from "../src/team-config.ts";
 import { DOCTOR_CHECKS } from "../src/doctor-registry.ts";
 import { DOCTOR_CODE_SET } from "../src/doctor-codes.ts";
 import { AGENT_HANDLES } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w45-")));
+const tmp = realpathSync(tmpRoot("dl-w45-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

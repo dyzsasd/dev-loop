@@ -3,19 +3,20 @@
 // `dev-loop op`/`tickets` used to jump straight to the global default and `seed` to ./hub.db in cwd —
 // reading or CREATING a different board than the workspace the operator was standing in.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveHubDbPath, wsHubDb, tryResolveWorkspace } from "../src/workspace.ts";
 import { hubDbPath } from "../src/paths.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-hubdb-"));
+const ROOT = tmpRoot("dl-hubdb-");
 const savedEnv = process.env.DEVLOOP_HUB_DB;
 try {
   const cli = (args: string[], cwd: string, env: Record<string, string | undefined> = {}) =>

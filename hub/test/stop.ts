@@ -4,18 +4,19 @@
 // One persistent scheduler serves both: Part B corrupts dev-loop.json mid-run (expect PAUSE),
 // restores it (expect resume), then Part C stops that live scheduler through the real verb.
 import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-stop-"));
+const tmp = tmpRoot("dl-stop-");
 const ws = join(tmp, "workspace");
 const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
 // Box, not a bare let: every assignment happens inside a closure, and TS's narrowing would

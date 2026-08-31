@@ -4,19 +4,20 @@
 // agent accepting its own proposal is editing the firewall from inside it). Each refusal is checked
 // against the FILE, not the exit code alone. Plus the round trip: file → parse → list order → resolve.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspace } from "../src/workspace.ts";
 import { inboxDir, listProposals, parseProposal, readProposal, renderProposal, resolveProposal, writeProposal, type Proposal } from "../src/system-propose.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sysprop-")));
+const tmp = realpathSync(tmpRoot("dl-sysprop-"));
 const HOME = join(tmp, "home");
 const cli = (args: string[], cwd: string, extra: Record<string, string | undefined> = {}, input?: string) => {
   const r = spawnSync(process.execPath, [CLI, ...args], { cwd, env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra } as NodeJS.ProcessEnv, encoding: "utf8", input });

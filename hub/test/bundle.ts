@@ -6,12 +6,13 @@
 // live hub.db NEVER overwritten), and the --no-hub-db clean-board path.
 import { execFileSync, spawnSync } from "node:child_process";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { findProject } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -24,7 +25,7 @@ if (!hasAge) {
   console.log("⚠️  age binary not found — running the plaintext lane only (encryption legs skipped)");
 }
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-bundle-"));
+const ROOT = tmpRoot("dl-bundle-");
 try {
   const cli = (args: string[], cwd: string, env: Record<string, string | undefined> = {}) =>
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), ...args], { cwd, encoding: "utf8", env: { ...scrubFireEnv(), ...env } as NodeJS.ProcessEnv });

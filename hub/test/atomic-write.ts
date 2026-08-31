@@ -3,14 +3,15 @@
 // Moved out of destructive-guard.ts when three writers outside it needed the same guarantee. Its
 // contract used to be reachable only through commitBothHalves, which is why destructive-guard's coverage
 // map recorded that a direct unit test would become due the day it was exported. This is that test.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeConfigAtomic } from "../src/atomic-write.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-atomicw-")));
+const tmp = realpathSync(tmpRoot("dl-atomicw-"));
 
 // 1. It replaces the content and leaves no tmp behind.
 const target = join(tmp, "dev-loop.json");

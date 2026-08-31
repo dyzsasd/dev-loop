@@ -3,9 +3,9 @@
 // (mock Linear, no live calls), and the doctor NEXT line across staged workspace states.
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync, realpathSync, cpSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, realpathSync, cpSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectRepoFacts, workflowJobNames, SETTABLE } from "../src/team-edit.ts";
@@ -14,12 +14,13 @@ import { confirmationToken, isScratchProject, isolationVerdict, TOKEN_PREFIX, co
 import { NOT_SCRATCH_SQL } from "../src/sql-predicates.ts";
 import type { Workspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-team-edit-")));
+const tmp = realpathSync(tmpRoot("dl-team-edit-"));
 const HOME = join(tmp, "home");
 // scrubFireEnv, NOT a raw ambient spread: inside an agent fire the environment carries
 // DEVLOOP_WORKSPACE=<production workspace>, and workspace resolution prefers that env var over
@@ -776,7 +777,6 @@ try {
     ok(Number(total) === 2 && Number(nonScratch) === 1 && kept === "_team",
       `LOOP-420 AC4: NOT_SCRATCH_SQL excludes scratch project (total=${total}, nonScratch=${nonScratch}, kept=${kept})`);
   }
-
 
   // ═══ LOOP-306 (LOOP-302 ②): the two halves commit together, and no line claims a write that did not happen ═══
   // End-to-end over the REAL ten-statement cascade. Each arm destroys its own fixture, so each gets a

@@ -8,16 +8,17 @@
 // The discriminating case is AC4: idle slots WITH candidates available must be SILENT. Without it an
 // always-firing warning and a correct one are indistinguishable — the axis LOOP-250 and LOOP-242 both
 // shipped without.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 import { servableBacklogDepth, servableTodoDepth } from "../src/servable.ts";
 import { resolveTodoDepthCap, loadWorkspace, DEFAULT_TODO_DEPTH_CAP } from "../src/team-config.ts";
 import { checkTierStarvation } from "../src/doctor.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-backlog-")));
+const tmp = realpathSync(tmpRoot("dl-backlog-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

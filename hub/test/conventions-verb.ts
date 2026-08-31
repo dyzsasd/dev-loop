@@ -12,10 +12,11 @@ import { fileURLToPath } from "node:url";
 import { conventionsSlice } from "../src/conventions-verb.ts";
 import { conventionsUnionText } from "../src/boot-prefix.ts";
 import { tryResolveWorkspace } from "../src/workspace.ts";
-import { readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = join(hubRoot, "..");           // the plugin root: skills/ + references/ live here
@@ -28,7 +29,7 @@ try {
   // assertion written against whatever workspace happens to be resolvable passes for a different
   // reason on every host — and on CI, where nothing resolves, EVERY conditional span prunes and the
   // "is it pruned?" checks go green while measuring nothing. This fixture pins both directions.
-  wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-conv-")));
+  wsRoot = realpathSync(tmpRoot("dl-conv-"));
   mkdirSync(join(wsRoot, "repo"), { recursive: true });
   writeFileSync(join(wsRoot, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2,
@@ -137,7 +138,7 @@ try {
   // The fix must resolve the workspace from env even when the cwd is outside it.
   {
     const hubDbPath = join(wsRoot, ".dev-loop", "hub.db");
-    const outsideDir = mkdtempSync(join(tmpdir(), "dl-outside-"));
+    const outsideDir = tmpRoot("dl-outside-");
     try {
       const env = { ...scrubFireEnv(), DEVLOOP_HUB_DB: hubDbPath, DEVLOOP_WORKSPACE: wsRoot } as NodeJS.ProcessEnv;
       const r = execFileSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--root", root, "--project", "p", "--json"],
@@ -158,7 +159,7 @@ try {
   {
     const { spawnSync } = await import("node:child_process");
     const noEnv = scrubFireEnv() as NodeJS.ProcessEnv;
-    const outsideDir2 = mkdtempSync(join(tmpdir(), "dl-ac2-"));
+    const outsideDir2 = tmpRoot("dl-ac2-");
     let stdout = "", stderr = "", code = 0;
     try {
       const r = spawnSync(process.execPath, [join(hubRoot, "src", "conventions-verb.ts"), "--agent", "senior-dev", "--root", root, "--json"],
@@ -192,7 +193,7 @@ try {
     const noEnv = scrubFireEnv() as NodeJS.ProcessEnv;
     const noPruneEnv = { ...noEnv, DEVLOOP_WORKSPACE: '' } as NodeJS.ProcessEnv;
     // AC5.1: malformed Sections line
-    const malRoot = mkdtempSync(join(tmpdir(), "dl-ac5-mal-"));
+    const malRoot = tmpRoot("dl-ac5-mal-");
     const agentDir = join(malRoot, "skills", "junior-dev-agent");
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "SKILL.md"), `---

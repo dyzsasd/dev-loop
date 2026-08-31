@@ -34,11 +34,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { registerDaemonPid, launchDaemonCli, runDaemonCli } from "./daemon-harness.ts";
 import { foreignListener } from "../src/daemon-lifecycle.ts"; // LOOP-317: the decision the fix turns on
-import { rmSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+
 import { createServer } from "node:http";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { join } from "node:path";
+import { tmpRoot } from "./tmp-root.ts";
 
 const ROOT = "/tmp/hub-lifecycle-race";
 const DB = join(ROOT, "hub.db");
@@ -166,7 +167,7 @@ try {
   srv6.on("error", () => { /* no IPv6 on this host — the v4 listener is enough */ });
   await new Promise<void>((r) => { srv6.listen(port, "::1", () => r()); setTimeout(r, 500); });
   try {
-    const runDir = mkdtempSync(join(tmpdir(), "lc317-"));
+    const runDir = tmpRoot("lc317-");
     // A seeded service-backend project of its own: `up` refuses to start an unseeded project, and the
     // trial loop above may have torn its DB down by now.
     const db317 = join(runDir, "hub.db");

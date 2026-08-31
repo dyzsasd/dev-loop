@@ -1,17 +1,18 @@
 // `dev-loop hub start|stop|status` — workspace hub daemon lifecycle (service backend): start is
 // idempotent, status reports RUNNING, stop truncates the WAL + removes the runfile, linear teams refuse.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
+import { realpathSync, rmSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
 import { registerDaemonPid } from "./daemon-harness.ts";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-hublc-")));
+const tmp = realpathSync(tmpRoot("dl-hublc-"));
 const HOME = join(tmp, "home");
 // Scrub workspace-specific vars that an ambient dev-loop fire exports: inheriting them causes hub
 // start/stop/status to resolve the wrong project or hub.db (LOOP-6 regression guard).

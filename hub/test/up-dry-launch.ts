@@ -11,15 +11,16 @@
 // <ws>/.dev-loop/daemon-<key>.json when it starts one, so its absence is the same evidence a
 // developer would collect by hand, and it does not depend on how the ensure reports itself.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runningDaemonPids } from "./daemon-pids.ts"; // the ONE daemon-pid listing
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-updry-")));
+import { tmpRoot } from "./tmp-root.ts";
+const tmp = realpathSync(tmpRoot("dl-updry-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

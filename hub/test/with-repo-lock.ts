@@ -10,20 +10,21 @@
 //
 // It is asserted end-to-end through the real CLI, not by comparing constants: a same-value check
 // on two imports would pass with the argument still per-caller, which is the shape of the bug.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync, rmSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { REPO_LOCK_STALE_MS } from "../src/locks.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "src", "with-repo-lock.ts");
-const ROOT = mkdtempSync(join(tmpdir(), "dl-with-repo-lock-"));
+const ROOT = tmpRoot("dl-with-repo-lock-");
 
 // A fixture workspace with ONE registered repo, and its `repo-mine` lock already held.
 const ws = join(ROOT, "ws");

@@ -10,15 +10,16 @@
 // caller explicitly relocated (DEVLOOP_HOME) records everything — including the temp roots the
 // suites need, because that file dies with the fixture that owns it.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readWorkspaceIndex, upsertWorkspaceIndex, workspacesIndexPath } from "../src/workspace.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-wsidx-")));
+import { tmpRoot } from "./tmp-root.ts";
+const tmp = realpathSync(tmpRoot("dl-wsidx-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

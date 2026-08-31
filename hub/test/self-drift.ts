@@ -8,12 +8,13 @@
 // CONTENT-BASED, not version-string-based. A repo whose HEAD is newer than the installed version but
 // whose output is identical must NOT warn — a version comparison would cry drift on every commit
 // that changes nothing the running code executes.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { selfDrift, selfDriftLine } from "../src/self-drift.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-drift-")));
+const tmp = realpathSync(tmpRoot("dl-drift-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

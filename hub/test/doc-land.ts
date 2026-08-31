@@ -4,9 +4,9 @@
 // while hard-stopping on actual non-doc content. Bare-origin + clone harness (§15).
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { parseDirtyPaths, parseNameStatusZ, parseProtectedPathsZ, planCheckoutSync } from "../src/doc-land.ts";
@@ -15,6 +15,7 @@ import { requestApproval } from "../src/approvals.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
@@ -37,7 +38,7 @@ const run = (args: string[], wsRoot: string, extra?: Record<string, string>): { 
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-doc-land-"));
+const ROOT = tmpRoot("dl-doc-land-");
 try {
   // ── Fixture: bare origin + clone with a proper workspace ─────────────────────────
   const origin = join(ROOT, "origin.git");
@@ -734,7 +735,6 @@ try {
       writeFileSync(join(r3, "docs", "strategy-archive", "2026-11.md"), "# november\n");
       git(r3, ["add", "docs/strategy-archive/2026-11.md"]);
       git(r3, ["commit", "-qm", "docs(strategy): november archive"]);
-
 
       // the identical patch lands upstream on its own ⇒ git cherry marks it '-'
       git(c3, ["fetch", "-q", "origin", "main"]);

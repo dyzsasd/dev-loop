@@ -5,8 +5,8 @@
 // reinstall mid-run leaves the orchestrator executing boot-time code while `doctor` — a fresh
 // process each invocation — reports the new build. Measured: LOOP-144/220/175/223 were live for
 // doctor and inert in the loop, with DOCTOR_OK printing.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import {
   writeSchedulerBuild, readSchedulerBuild, schedulerBuildPath, schedulerAlive,
@@ -14,8 +14,9 @@ import {
 } from "../src/scheduler-build.ts";
 import { checkSchedulerBuild } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-schedbuild-")));
+const tmp = realpathSync(tmpRoot("dl-schedbuild-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

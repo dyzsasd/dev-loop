@@ -4,14 +4,15 @@
 // board; the operator's D1 override reaches real projects through a `_team`-booted daemon; home-only
 // verbs refuse with the home pointer; and a missing/wrong token maps to the clear exit-5 message.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { startTestDaemon } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -101,7 +102,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
   }
 }
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-attach-"));
+const ROOT = tmpRoot("dl-attach-");
 try {
   // ── the "remote home": a seeded hub + a token-gated daemon booted on _team, in its OWN process —
   // the CLI legs below use spawnSync, which blocks THIS event loop; an in-process daemon would starve.

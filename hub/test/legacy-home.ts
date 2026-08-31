@@ -8,13 +8,14 @@
 // by config path, so there is no name list to compare against — the assertion DERIVES the claimed
 // set by scanning hub/src, which is why it stays true as that validator grows.
 
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { legacyHomeState, describeLegacyHome, checkLegacyHome } from "../src/legacy-home.ts";
 import { DOCTOR_CODES } from "../src/doctor-codes.ts";
 import { openDb } from "../src/db.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 let fails = 0;
@@ -22,7 +23,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 
 const roots: string[] = [];
 function fixture(build: (root: string) => void): string {
-  const root = mkdtempSync(join(tmpdir(), "legacy-home-"));
+  const root = tmpRoot("legacy-home-");
   roots.push(root);
   build(root);
   return root;

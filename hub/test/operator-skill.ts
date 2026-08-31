@@ -9,11 +9,12 @@
 //     → PATH hint → the labelled integrity skip → doctor → the ready line, then re-runs as a no-op;
 //   • the shipped systemd/launchd templates are the shape the product's own binding readers parse.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIFECYCLE_SUBS, readAutostartBinding, readSystemdBinding } from "../src/daemon-lifecycle.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(hubRoot, "..");
@@ -84,7 +85,7 @@ const execLines = readFileSync(SCRIPT, "utf8").split("\n").filter((l) => !l.trim
 const bareNpm = execLines.filter((l) => /\bnpm (install|i|ci)\b/.test(l) && [...l.matchAll(/\bnpm (install|i|ci)\b[^&|;)]*/g)].some((m) => !m[0].includes("--ignore-scripts")));
 ok(bareNpm.length === 0, `every executed npm install/ci in ensure-install.sh passes --ignore-scripts${bareNpm.length ? ` (bare: ${bareNpm.map((l) => l.trim()).join(" || ")})` : ""}`);
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-operator-")));
+const tmp = realpathSync(tmpRoot("dl-operator-"));
 try {
   const fakebin = join(tmp, "fakebin"), prefix = join(tmp, "npm-global"), home = join(tmp, "home"), log = join(tmp, "npm-argv.log");
   mkdirSync(fakebin, { recursive: true }); mkdirSync(home, { recursive: true });

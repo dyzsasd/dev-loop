@@ -11,16 +11,17 @@
 // config is padded first so the write window is wide enough for the pre-fix truncation to be caught
 // reliably rather than occasionally.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-atomic-")));
+const tmp = realpathSync(tmpRoot("dl-atomic-"));
 const env = () => ({ ...scrubFireEnv(), DEVLOOP_HOME: join(tmp, "home") });
 const team = (args: string[], cwd: string) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env: env(), encoding: "utf8" });
 

@@ -13,8 +13,8 @@
 // that these functions never considered, each of them comparing against an origin that does not
 // exist. The base ref is now derived once and read everywhere, exactly as reapBaseRef is.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -22,7 +22,8 @@ import { pushGuard } from "../src/push-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "dl-pg-noremote-")));
+import { tmpRoot } from "./tmp-root.ts";
+const ROOT = realpathSync(tmpRoot("dl-pg-noremote-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

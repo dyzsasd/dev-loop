@@ -11,8 +11,8 @@
 // Both failure modes were SILENT: an empty result reads as "no such ticket", never as "this surface
 // does not index that". A human searching a phrase that appears only in a comment got nothing; an
 // agent searching a ticket id got nothing.
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -20,9 +20,10 @@ import { ensureSeed, findProject } from "../src/seed.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts";
 import { boardPage } from "../src/views/board.ts";
 import { ticketSearchClause, SEARCH_DESC_CAP, SEARCH_CORPUS_LABEL } from "../src/ticket-search.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-onesearch-")));
+const tmp = realpathSync(tmpRoot("dl-onesearch-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

@@ -8,9 +8,9 @@
 //         property, and it is the ONE assertion that distinguishes this from a capability grant. A
 //         happy-path-only test passes just as well against `push:<branch>` matching by prefix.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { pushGuard, pushApprovalKey, approvalRefusalLine, approvalsRecordUnusable, APPROVALS_UNVERIFIABLE } from "../src/push-guard.ts";
@@ -20,13 +20,14 @@ import { SETTABLE } from "../src/team-edit.ts";
 import { DOCTOR_CODE_SET } from "../src/doctor-codes.ts";
 import { DOCTOR_CHECKS } from "../src/doctor-registry.ts";
 import { checkApprovalsHealth } from "../src/doctor.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-approvals-enforce-"));
+const ROOT = tmpRoot("dl-approvals-enforce-");
 try {
   // ── fixture: a real bare origin + clone, real hub rows, real approvals ──────────────────────────
   const origin = join(ROOT, "origin.git");

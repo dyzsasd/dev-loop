@@ -14,20 +14,21 @@
 // `push-guard --strict` before the merge-back's push). A refusal that lived only in the `push` verb
 // would pass arms 1–3 and still catch neither real instance.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { pushGuard } from "../src/push-guard.ts";
 import { defaultBranchPushVerdict, docLandAllowlist, strategyDocRelPath } from "../src/default-branch-push.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const STRATEGY_PATH = "docs/STRATEGY.md";
-const ROOT = mkdtempSync(join(tmpdir(), "dl-dbpush-"));
+const ROOT = tmpRoot("dl-dbpush-");
 try {
   const git = (dir: string, args: string[]): string =>
     execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

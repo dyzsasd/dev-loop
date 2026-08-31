@@ -8,8 +8,8 @@
 //   LOOP-320  a ship commit SWEEPS another fire's edits into itself      → refuse the staged overlap
 //   LOOP-309  a dev hands off In Review having COMMITTED NOTHING at all  → require a local commit
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import {
   dirtyTrackedFiles, snapshotDirtyTree, listTreeSnapshots,
@@ -21,7 +21,8 @@ import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sharedco-")));
+const tmp = realpathSync(tmpRoot("dl-sharedco-"));
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const git = (root: string, ...args: string[]): string =>

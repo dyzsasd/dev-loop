@@ -4,13 +4,14 @@
 // config stub (W08) — no repos, no tickets, no fires, blocking nothing — made the decision-stall,
 // landing-stall and release-skew hints unreachable. Measured live: the single directed action was
 // "seed real-one" while the same run reported 46 shipped-code commits unpublished.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { nextStep, checkFailureTaxonomyBlind, checkLessonsLiveness, checkBoardSnapshotW32 } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-prec-")));
+const tmp = realpathSync(tmpRoot("dl-doc-prec-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

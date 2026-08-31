@@ -10,15 +10,16 @@
 // `landing:"pr"` is unaffected: a PR is landed by the forge, which squashes or merges by its own
 // setting, and the branch's own shape is not the base's business.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pushGuard } from "../src/push-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "dl-pg-knot-")));
+import { tmpRoot } from "./tmp-root.ts";
+const ROOT = realpathSync(tmpRoot("dl-pg-knot-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

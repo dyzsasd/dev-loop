@@ -13,9 +13,9 @@
 //     assertion whose two sides share a re-implemented predicate is green with the gate deleted
 //     (LOOP-429).
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb, actorExists } from "../src/db.ts"; // actorExists: the SHIPPED handle predicate resolveAssignTo uses — the roster arms assert against it, never a local list
 import { ensureSeed, findProject } from "../src/seed.ts";
@@ -24,13 +24,14 @@ import { resolveBlockedReminderHours, noProgressNotifyTick } from "../src/daemon
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 import { restartHint } from "../src/settings-cli.ts"; // the SHIPPED hint builder, never a local copy (LOOP-429)
 import { TEAM_INTAKE_PROJECT } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "dl-settings-")));
+const ROOT = realpathSync(tmpRoot("dl-settings-"));
 const SELF = fileURLToPath(import.meta.url);
 
 // NOT `try { … } finally { process.exit(…) }`. That shape swallows every unexpected exception: control

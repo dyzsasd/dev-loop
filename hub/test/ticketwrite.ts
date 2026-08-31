@@ -2,9 +2,9 @@
 // to senior-dev (assignee + label swap) in BOTH insertTicket and updateTicketRow, and log
 // issue.retier. Must be a strict no-op when sensitive label absent, junior-dev absent, or
 // senior-dev actor not registered. Design: sensitive-routing §2 / LOOP-79 Child A.
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { rmSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { openDb } from "../src/db.ts";
 import { insertTicket, updateTicketRow, moveTicket, insertComment, verifyCreateGateRejection, waitingOnFor, parseRuling, rulingBody, rulingCommentPolicy, recordRuling } from "../src/ticketwrite.ts";
 import type { NewTicketFields, TicketUpdateFields } from "../src/ticketwrite.ts";
@@ -12,9 +12,10 @@ import { agentOp, type OpResult } from "../src/agentops.ts"; // LOOP-183 Vector 
 import { AGENT_HANDLES } from "../src/seed.ts"; // LOOP-208: drive the actor-coverage assertion from the REAL roster, so a future handle fails the test
 
 let fails = 0;
+import { tmpRoot } from "./tmp-root.ts";
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-ticketwrite-"));
+const ROOT = tmpRoot("dl-ticketwrite-");
 try {
   // ── Fixture: hub.db with actors and a project ─────────────────────────────────
   const dbPath = join(ROOT, "hub.db");

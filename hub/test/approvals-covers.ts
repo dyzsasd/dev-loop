@@ -13,9 +13,9 @@
 // (design §14 decision 4). It is asserted by counting `events` across the queries, not by reading the
 // code — `record:false` is one argument away from silently flipping, and the symptom would be an
 // attempt ledger the operator console reads as four dispatches when it was four questions.
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
@@ -28,11 +28,12 @@ import {
 import { VERB_FLAGS } from "../src/approvals-cli.ts";
 import { operatorBrief } from "../src/operator-brief.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(hubRoot, "..");
 const CLI = join(hubRoot, "src", "cli.ts");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-approvals-covers-")));
+const tmp = realpathSync(tmpRoot("dl-approvals-covers-"));
 const DB = join(tmp, "hub.db");
 
 let fails = 0;

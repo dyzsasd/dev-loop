@@ -6,18 +6,19 @@
 // the scheduler cannot be imported (main() is unconditional, LOOP-58), so it is driven as a subprocess
 // the way team-scheduler.ts does.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { platform, tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { breaker, BREAKER_STATE_SCHEMA, breakerStateAlive, createBreakerPersistence, persistedKey, readBreakerState, writeBreakerState, type BreakerStateFile } from "../src/breaker.ts";
 import { breakerStatePath, teamDirOf } from "../src/scheduler-build.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-breaker-state-")));
+const tmp = realpathSync(tmpRoot("dl-breaker-state-"));
 const iso = (ms: number) => new Date(ms).toISOString();
 const T0 = Date.parse("2026-08-27T10:00:00.000Z");
 const reset = (threshold = 3, probeMs = 60_000) => { breaker.byAgent.clear(); breaker.byProvider.clear(); breaker._agentProvider.clear(); breaker.onEvent = undefined; breaker.onChange = undefined; breaker.threshold = threshold; breaker.probeMs = probeMs; };

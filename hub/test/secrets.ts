@@ -4,8 +4,8 @@
 // perms warning, and the end-to-end acceptance: webhook ONLY in secrets.env + clean shell ⇒ notify delivers.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSecretsEnv, loadWorkspaceSecrets, secretsInjectedKeys, wsSecretsPath } from "../src/secrets.ts";
@@ -18,9 +18,10 @@ import { FIRE_MARKERS } from "../src/destructive-guard.ts"; // LOOP-417: assert 
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-secrets-")));
+const tmp = realpathSync(tmpRoot("dl-secrets-"));
 process.env.DEVLOOP_HOME = join(tmp, "home");
 delete process.env.DEVLOOP_WORKSPACE;
 delete process.env.DEVLOOP_TEAM;

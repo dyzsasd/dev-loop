@@ -3,17 +3,18 @@
 // SIGKILL before V8 flushes, so the listen path never registered as covered. Contracts: (1) with no
 // send target every notifier is a no-op and only the WAL checkpoint arms; (2) with a §9 notify config
 // the timer-backed notifiers arm and return stoppable timers; (3) the active list names what armed.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { startProjectNotifiers } from "../src/daemon.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-notifier-wiring-"));
+const tmp = tmpRoot("dl-notifier-wiring-");
 try {
   const db = openDb(join(tmp, "hub.db"));
   const projectId = ensureSeed(db, "nw", "Notifier Wiring", "NW");

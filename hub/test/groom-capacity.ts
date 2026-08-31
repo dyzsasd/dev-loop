@@ -14,18 +14,19 @@
 // this lane last looked" — which is exactly the measured state, and which releases the moment a
 // Backlog row is added or edited.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findProject } from "../src/seed.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
-import { tmpdir } from "node:os";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { backlogFingerprint, servableBacklogDepth, servableTodoDepth } from "../src/servable.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-groom-")));
+const tmp = realpathSync(tmpRoot("dl-groom-"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };

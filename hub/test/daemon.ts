@@ -3,12 +3,12 @@
 // the same WAL db and asserts every read endpoint, the 404s, the read-only 405, and the 127.0.0.1 bind.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { rmSync, mkdirSync, writeFileSync, unlinkSync, mkdtempSync, existsSync, readFileSync, renameSync } from "node:fs";
+import { rmSync, mkdirSync, writeFileSync, unlinkSync, existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
-import { tmpdir } from "node:os";
+
 import { createServer as netCreateServer } from "node:net";
 import { openDb } from "../src/db.ts";
 import { findProject, ensureSeed } from "../src/seed.ts";
@@ -19,6 +19,7 @@ import { daemonReap } from "../src/daemon-lifecycle.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const DB = "/tmp/hub-daemon/hub.db";
+import { tmpRoot } from "./tmp-root.ts";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
 
 let fails = 0;
@@ -264,7 +265,7 @@ ok(missing.status === 404, "GET /api/tickets/<unknown> → 404");
 // board frozen at the moment of the swap for 69 minutes, reporting healthy, while every
 // direct-read verb answered correctly.
 {
-  const swapDir = mkdtempSync(join(tmpdir(), "dmn-swap-"));
+  const swapDir = tmpRoot("dmn-swap-");
   const swapDb = join(swapDir, "hub.db");
   const seedDb = openDb(swapDb);
   ensureSeed(seedDb, "swp", "Swap", "SWP");
@@ -805,9 +806,9 @@ async function freeInBand(lo: number, hi: number): Promise<number | null> {
 
 // ── AC-B4/B2/B3: DB-vanish reap + safety test ──────────────────────────────────────────────────
 {
-  const dir1 = mkdtempSync(join(tmpdir(), "dlrp1-"));
+  const dir1 = tmpRoot("dlrp1-");
   const db1 = join(dir1, "hub.db");
-  const dir2 = mkdtempSync(join(tmpdir(), "dlrp2-"));
+  const dir2 = tmpRoot("dlrp2-");
   const db2 = join(dir2, "hub.db");
   execFileSync("node", ["src/seed.ts", "rp1", "Reap Test 1", "RP1", db1], { encoding: "utf8" });
   execFileSync("node", ["src/seed.ts", "rp2", "Reap Test 2", "RP2", db2], { encoding: "utf8" });
@@ -884,7 +885,7 @@ async function freeInBand(lo: number, hi: number): Promise<number | null> {
 
 // ── AC-B5/B6/B7: port-probe warning when band is occupied ───────────────────────────────────────
 {
-  const dir7 = mkdtempSync(join(tmpdir(), "dlb7-"));
+  const dir7 = tmpRoot("dlb7-");
   const db7 = join(dir7, "hub.db");
   const run7 = join(dir7, "run");
   mkdirSync(run7, { recursive: true });

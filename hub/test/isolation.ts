@@ -5,12 +5,13 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execFileSync, spawn } from "node:child_process";
-import { rmSync, statSync, readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { pkgVersion, pkgBuildCommit } from "../src/paths.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const DB = "/tmp/hub-iso/hub.db";
 for (const ext of ["", "-wal", "-shm"]) { try { rmSync(DB + ext); } catch {} }
@@ -99,7 +100,7 @@ function doctorEnv(extra: Record<string, string>): Promise<{ out: string; code: 
     p.on("close", (code) => resolve({ out, code: code ?? 1 }));
   });
 }
-const recRoot = mkdtempSync(join(tmpdir(), "dl81-doctor-"));
+const recRoot = tmpRoot("dl81-doctor-");
 
 // (AC4a) NO service context — the resolved key is not a project in THIS db → the reconcile prints NOTHING;
 // the DB-only verdict is byte-for-byte today's (DOCTOR_OK, no "service runtime wiring" section).
@@ -112,9 +113,9 @@ ok(noCtx.code === 0 && noCtx.out.includes("DOCTOR_OK") && !noCtx.out.includes("s
 // The .mcp.json reconcile is an MCP-interface concern (D8), so these fixtures PIN interface="mcp" —
 // under the D9 default (claude→cli) the registration is correctly "not required" (asserted further below).
 const MCP_IFACE = { agentInterface: { claude: "mcp" } };
-const bareRepo = mkdtempSync(join(tmpdir(), "dl81-repo-"));    // no .mcp.json
-const emptyRun = mkdtempSync(join(tmpdir(), "dl81-run-"));     // no daemon-alpha.json runfile
-const emptyRoot = mkdtempSync(join(tmpdir(), "dl81-root-"));   // no hooks/hooks.json
+const bareRepo = tmpRoot("dl81-repo-");    // no .mcp.json
+const emptyRun = tmpRoot("dl81-run-");     // no daemon-alpha.json runfile
+const emptyRoot = tmpRoot("dl81-root-");   // no hooks/hooks.json
 const cfgWarn = join(recRoot, "warn.projects.json");
 writeFileSync(cfgWarn, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo, hub: MCP_IFACE } } }));
 const warnRun = await doctorEnv({ DEVLOOP_PROJECT: "alpha", DEVLOOP_PROJECTS_JSON: cfgWarn, DEVLOOP_RUN_DIR: emptyRun, DEVLOOP_PLUGIN_ROOT: emptyRoot });
@@ -127,12 +128,12 @@ ok(warnRun.out.includes("is not registered") && warnRun.out.includes("daemon —
 
 // (AC4b) service context FULLY wired — every reconcile check PASSes (✅), DOCTOR_OK. A stub /api/health
 // server stands in for the live daemon so the health probe has a real 2xx {ok,project} to confirm.
-const okRepo = mkdtempSync(join(tmpdir(), "dl81-okrepo-"));
+const okRepo = tmpRoot("dl81-okrepo-");
 const fakeServer = join(okRepo, "server.ts"); writeFileSync(fakeServer, "// stub entry (doctor only checks the path exists)\n");
 writeFileSync(join(okRepo, ".mcp.json"), JSON.stringify({ mcpServers: { "dev-loop-hub": { command: "node", args: [fakeServer], env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}" } } } }));
-const okRoot = mkdtempSync(join(tmpdir(), "dl81-okroot-")); mkdirSync(join(okRoot, "hooks"), { recursive: true });
+const okRoot = tmpRoot("dl81-okroot-"); mkdirSync(join(okRoot, "hooks"), { recursive: true });
 writeFileSync(join(okRoot, "hooks", "hooks.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "node x daemon up || true" }] }] } }));
-const okRun = mkdtempSync(join(tmpdir(), "dl81-okrun-"));
+const okRun = tmpRoot("dl81-okrun-");
 const stub = createServer((req, res) => {
   if (req.url === "/api/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true, project: "alpha" })); }
   else { res.writeHead(404); res.end(); }
@@ -153,7 +154,7 @@ ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
 // DOCTOR_OK for a daemon running pre-upgrade code. Each stub returns different fields; the fixed code
 // must surface the same staleness warning `daemon status` already prints.
 {
-  const l195run = mkdtempSync(join(tmpdir(), "l195-run-"));
+  const l195run = tmpRoot("l195-run-");
   const l195cfg = join(recRoot, "l195.projects.json");
   writeFileSync(l195cfg, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo } } }));
 
@@ -193,7 +194,7 @@ ok(okR.code === 0 && okR.out.includes("DOCTOR_OK")
 // DX regression: the canonical INSTALLED shape mcp-merge/init-service write — {command:"dev-loop",
 // args:["serve"]} (a PATH bin, no on-disk server path) — used to permanently WARN "no server.ts/.js arg …
 // re-run init to repair", and re-running init reproduces the identical entry: an unfixable false alarm.
-const binRepo = mkdtempSync(join(tmpdir(), "dl81-binrepo-"));
+const binRepo = tmpRoot("dl81-binrepo-");
 writeFileSync(join(binRepo, ".mcp.json"), JSON.stringify({ mcpServers: { "dev-loop-hub": { command: "dev-loop", args: ["serve"], env: { DEVLOOP_ACTOR: "${DEVLOOP_ACTOR:-operator}", DEVLOOP_PROJECT: "${DEVLOOP_PROJECT:-alpha}" } } } }));
 const cfgBin = join(recRoot, "bin.projects.json");
 writeFileSync(cfgBin, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: binRepo, hub: MCP_IFACE } } }));
@@ -221,7 +222,7 @@ ok(cliR.code === 0 && cliR.out.includes('.mcp.json — not required') && !cliR.o
   // Force re-read: pkgBuildCommit() caches; a fresh import is not possible, but the doctor
   // subprocess reads the file fresh. In THIS process we use the hardcoded TEST_COMMIT.
   try {
-    const l364run = mkdtempSync(join(tmpdir(), "l364-run-"));
+    const l364run = tmpRoot("l364-run-");
     const l364cfg = join(recRoot, "l364.projects.json");
     writeFileSync(l364cfg, JSON.stringify({ projects: { alpha: { backend: "service", repoPath: bareRepo } } }));
 

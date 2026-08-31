@@ -1,11 +1,12 @@
 // P2-12: `dev-loop export-desktop-skill <agent> --project <key>` renders a SELF-CONTAINED SKILL.md
 // (no ${CLAUDE_PLUGIN_ROOT} ref, config + conventions inlined) so an agent can run in Claude Desktop.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const here = dirname(fileURLToPath(import.meta.url)); // hub/test
 const src = join(here, "..", "src", "export-desktop-skill.ts");
@@ -13,7 +14,7 @@ const repoRoot = join(here, "..", ".."); // the source checkout: has skills/ + r
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-export-"));
+const tmp = tmpRoot("dl-export-");
 const data = join(tmp, "data"); mkdirSync(data, { recursive: true });
 writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
   backend: "linear", mode: "live", autonomy: "full", linearTeam: "T", linearProject: "P",
@@ -61,7 +62,7 @@ ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.
 // Use a temp git repo as cwd so the test is hermetic: it IS inside a git tree but NOT inside the
 // dev-loop workspace (no dev-loop.json upward), preventing tryResolveWorkspace from finding the live config.
 {
-  const gitCwd = mkdtempSync(join(tmpdir(), "dl-export-gitcwd-"));
+  const gitCwd = tmpRoot("dl-export-gitcwd-");
   spawnSync("git", ["init", "-q", "-b", "main", gitCwd], { stdio: "ignore" });
   spawnSync("git", ["-C", gitCwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-qm", "init"], { stdio: "ignore" });
   writeFileSync(join(data, "projects.json"), JSON.stringify({ projects: { demo: {
@@ -91,7 +92,7 @@ ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.
 // The buggy code read (p as {git?}).git.landing — always {} → always "direct". The fix reads
 // p.repos (already resolved by toLegacyView through effectiveRepo). Must fail on origin/main; pass here.
 {
-  const wsDir = mkdtempSync(join(tmpdir(), "dl-export-loop201-"));
+  const wsDir = tmpRoot("dl-export-loop201-");
   const repoDir = join(wsDir, "the-repo"); mkdirSync(repoDir, { recursive: true });
   spawnSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
   writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({

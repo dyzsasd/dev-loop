@@ -9,19 +9,20 @@
 // read. A test that called the helpers in sequence would pass against the unfixed tree — the lost
 // update only exists when the two overlap — which is why AC3 names the interleaving explicitly.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { seedOpApiGate } from "../src/bundle.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sjw-")));
+const tmp = realpathSync(tmpRoot("dl-sjw-"));
 // scrubFireEnv, not an ambient spread: inside a fire DEVLOOP_WORKSPACE/DEVLOOP_HUB_DB point at the
 // PRODUCTION workspace and every mutator spawned here would write to it (team-edit.ts:22 records the
 // 2026-08-04 incident). DEVLOOP_HUB_DB is emptied on top so nothing re-resolves to the live board.

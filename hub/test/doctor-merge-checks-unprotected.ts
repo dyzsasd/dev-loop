@@ -7,18 +7,19 @@
 // state and it has now produced two incidents (LOOP-149 2026-07-31, LOOP-407 2026-08-06).
 //
 // Tested at the exported function seam with an injected exec — no real `gh` call, no network.
-import { mkdtempSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { checkMergeChecksUnprotectedW38 } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import type { ExecFn } from "../src/landing.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 function makeWs(repo: Record<string, unknown>): ReturnType<typeof loadWorkspace> {
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w38-")));
+  const tmp = realpathSync(tmpRoot("dl-w38-"));
   mkdirSync(join(tmp, "clone"), { recursive: true });
   writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2,
