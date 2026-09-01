@@ -443,7 +443,11 @@ try {
       try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")).intervalMs; }
       finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
     })();
-    ok(envOver === 0, `DEVLOOP_BOARD_SNAPSHOT_MS past the 32-bit limit resolves to DISABLED, not to 1ms (got ${envOver})`);
+    // The arm's INTENT — an out-of-range override must not become setInterval's 1ms — is unchanged. Its
+    // answer is: a value the timer cannot honour now falls back to the CONFIGURED cadence rather than
+    // resolving to 0. Disabling was the wrong answer to a typo: it turned the only thing standing between
+    // this board and a cascade delete off, silently, because someone mistyped an env var.
+    ok(envOver === 6 * 3_600_000, `DEVLOOP_BOARD_SNAPSHOT_MS past the 32-bit limit falls back to the configured cadence, never to 1ms (got ${envOver})`);
     const envOk = (() => {
       const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
       process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "250";
@@ -451,6 +455,18 @@ try {
       finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
     })();
     ok(envOk === 250, `…and an in-range override still passes through unchanged (got ${envOk})`);
+    // `0` is this block's documented OFF switch, and the env override honours it. It used to fall THROUGH
+    // to the config cadence, because `Number(env) || …` cannot tell 0 from absent — the same truthiness
+    // slip as c255fc2's, in the line 24e219c touched. Presence decides whether the override applies.
+    const envZero = (() => {
+      const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+      process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "0";
+      try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")); }
+      finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
+    })();
+    ok(envZero.intervalMs === 0, `DEVLOOP_BOARD_SNAPSHOT_MS=0 DISABLES, rather than falling through to everyHours (got ${envZero.intervalMs})`);
+    ok(envZero.source === "env", "…and the config reports which field produced the 0, so the daemon's DISABLED line names the right one");
+
     ok(resolveBackupConfig({ backup: { everyHours: 600 } }, join(tmp, "sr")).intervalMs === 0,
       "…and the same ceiling applies to the config path, which E18 has already refused by then");
 

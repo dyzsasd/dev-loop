@@ -498,7 +498,7 @@ export function startProjectNotifiers(deps: {
         timers.push(snapTimer);
         active.push("board-snapshot");
         log(`[daemon] board snapshot active (every ${Math.round(cfg.intervalMs / 60_000)} min, keep ${cfg.keep} → ${cfg.dir})`);
-      } else log(`[daemon] board snapshot DISABLED (team.backup.everyHours = 0)`);
+      } else log(`[daemon] board snapshot DISABLED (${cfg.source === "env" ? "DEVLOOP_BOARD_SNAPSHOT_MS" : "team.backup.everyHours"} = 0)`);   // name the field that actually produced the 0 — blaming everyHours for an env override sends the operator to the wrong file
     }
   } catch (e) { log(`[daemon] board snapshot not started: ${(e as Error)?.message ?? String(e)}`); }
   return { active, timers };

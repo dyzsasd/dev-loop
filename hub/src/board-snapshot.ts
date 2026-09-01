@@ -295,7 +295,7 @@ export function snapshotBeforeDestructive(opts: { dbPath: string; dir: string; k
 }
 
 /** Resolve `team.backup.*` with the shipped defaults. everyHours 0 ⇒ the cadence is off. */
-export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep?: number; dir?: string } } | undefined, stateRoot: string): { intervalMs: number; keep: number; dir: string } {
+export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep?: number; dir?: string } } | undefined, stateRoot: string): { intervalMs: number; keep: number; dir: string; source: "env" | "config" } {
   const b = team?.backup ?? {};
   const everyHours = typeof b.everyHours === "number" ? b.everyHours : 6;
   const keep = typeof b.keep === "number" ? b.keep : 10;
@@ -307,8 +307,16 @@ export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep
   // alone left exactly one input still able to produce it.
   // Out of range resolves to 0, which is this block's already-documented "disabled": a cadence that
   // cannot be honoured must not silently become the fastest one possible.
-  const raw = Number(process.env.DEVLOOP_BOARD_SNAPSHOT_MS) || Math.max(0, everyHours) * 3_600_000;
+  // `||` made 0 fall THROUGH to the config cadence, so `DEVLOOP_BOARD_SNAPSHOT_MS=0` did not disable —
+  // it silently ran at team.backup.everyHours instead, and 0 is the one value this block documents as OFF.
+  // The same truthiness slip as c255fc2's, in the line 24e219c touched. Presence decides whether the
+  // override applies; only then does the value.
+  const envRaw = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+  const envMs = envRaw === undefined || envRaw.trim() === "" ? null : Number(envRaw);
+  const overridden = envMs !== null && Number.isFinite(envMs) && envMs >= 0 && envMs <= 2_147_483_647;
+  const raw = overridden ? (envMs as number) : Math.max(0, everyHours) * 3_600_000;
   return {
+    source: overridden ? "env" : "config" as const,
     intervalMs: Number.isFinite(raw) && raw >= 0 && raw <= 2_147_483_647 ? raw : 0,
     keep,
     dir: b.dir ?? join(stateRoot, "snapshots"),
