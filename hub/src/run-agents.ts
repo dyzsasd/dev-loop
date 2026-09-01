@@ -1644,8 +1644,11 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
     try { process.kill(-child.pid, 0); } catch { return; } // group empty — the fire cleaned up after itself
     console.log(`[${new Date().toISOString()}] ${agent}: reaping processes left in the fire's group (pgid ${child.pid})`);
     killGroup("SIGTERM");
-    const hard = setTimeout(() => killGroup("SIGKILL"), 2000);
-    hard.unref?.(); // never hold the event loop open for a corpse
+    const pgid = child.pid;
+    pendingGroupReaps.add(pgid);
+    reapPendingGroupsAtExit();
+    const hard = setTimeout(() => { pendingGroupReaps.delete(pgid); killGroup("SIGKILL"); }, 2000);
+    hard.unref?.(); // never hold the event loop open for a corpse — the exit hook covers the short runs
   };
   activeChildren.add(child);
   if (stdinPayload && child.stdin) {
@@ -1976,6 +1979,34 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       child.once("close", () => { clearTimeout(grace); finalize(code, signal); });
     });
     child.on("close", () => { closed = true; }); // stream end belongs to finalize (single owner)
+  });
+}
+
+// Process groups still awaiting reapGroup's hard escalation, and the ONE exit hook that delivers it.
+//
+// reapGroup's 2 s SIGKILL timer is unref'd so it never holds the loop open for a corpse — which means on
+// every path that exits as soon as the fire resolves (`--once`, the last fire of `--max-fires`, an
+// operator stop) it is never reached at all, and a group member that IGNORES SIGTERM outlives the run.
+// The operator console's own SKILL tells operators to use `--once`.
+//
+// This was reverted once, on the strength of a test that passed against the unfixed code. It passed for a
+// reason that had nothing to do with the escalation: the stand-in was a `node -e` installing a SIGTERM
+// handler, which takes ~40 ms, while reapGroup's SIGTERM arrives the instant the fire exits — so the
+// stand-in died by DEFAULT action and the arm was measuring SIGTERM. With the stand-in made to signal
+// readiness first, the arm fails on the unfixed tree. "Measured, did not reproduce" was a measurement of
+// the wrong thing.
+//
+// Registering per fire would leak listeners on a long-running scheduler (one per fire, thousands over a
+// night), so the set is module-level and the hook is armed once.
+const pendingGroupReaps = new Set<number>();
+let groupReapExitArmed = false;
+function reapPendingGroupsAtExit(): void {
+  if (groupReapExitArmed) return;
+  groupReapExitArmed = true;
+  process.on("exit", () => {
+    for (const pgid of pendingGroupReaps) {
+      try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ }
+    }
   });
 }
 

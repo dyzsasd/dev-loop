@@ -49,6 +49,7 @@ const settle = (pid: string, wantAlive: boolean, budgetMs = 5000) => {
 const leakFile = join(tmp, "leaked.pid");
 const daemonFile = join(tmp, "daemon.pid");
 const stubbornFile = join(tmp, "stubborn.pid");
+const readyFile = join(tmp, "stubborn.ready");   // the fire waits for this: without it the stand-in is still installing its handler when reapGroup's SIGTERM lands, and dies by DEFAULT action — so the arm measured SIGTERM, not the escalation
 
 // The fire exits 0 — no watchdog, no signal, nothing that used to reap the group. It leaves two
 // background processes behind:
@@ -60,8 +61,9 @@ const bin = join(tmp, "leaky-fire.sh");
 writeFileSync(bin, `#!/bin/sh
 sh -c 'sleep 120 >/dev/null 2>&1 & echo $! > "${leakFile}"'
 node -e 'const c=require("child_process").spawn("sleep",["120"],{detached:true,stdio:"ignore"});require("fs").writeFileSync("${daemonFile}",String(c.pid));c.unref()'
-node -e 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000)' >/dev/null 2>&1 &
+node -e 'process.on("SIGTERM",()=>{}); require("fs").writeFileSync("${readyFile}","1"); setInterval(()=>{},1000)' >/dev/null 2>&1 &
 echo $! > "${stubbornFile}"
+while [ ! -f "${readyFile}" ]; do sleep 0.05; done
 echo "fire body done"
 exit 0
 `);
