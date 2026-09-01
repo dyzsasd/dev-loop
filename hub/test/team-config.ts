@@ -483,6 +483,17 @@ ok(has(bk({ everyHours: -1 }), "E18"), "E18: a negative everyHours is rejected")
 ok(has(bk({ everyHours: "6" }), "E18"), "E18: a stringly-typed everyHours is rejected");
 ok(has(bk({ everyHours: Number.NaN }), "E18"), "E18: NaN everyHours is rejected — it would resolve to a disabled cadence that reads as enabled");
 ok(has(bk({ keep: 0 }), "E18"), "E18: keep 0 is rejected — a retention that keeps zero generations deletes its own output");
+// The lower bound was checked here and the upper one was not, so the single shape that turns this block
+// into a disk-filling loop was the shape that passed. everyHours becomes a setTimeout delay, and Node
+// coerces anything past its 32-bit limit to 1ms: `everyHours: 600` does not mean "every 25 days", it
+// means a board snapshot EVERY MILLISECOND. The cadence inverts at the top of its range instead of
+// saturating, and parseDuration already refuses exactly this for the same reason.
+ok(has(bk({ everyHours: 600 }), "E18"),
+  "E18: everyHours 600 is rejected — 2,160,000,000ms overflows Node's 32-bit timer and snapshots every millisecond");
+ok(has(bk({ everyHours: 1e9 }), "E18"), "E18: …and so is an absurd one");
+ok(!has(bk({ everyHours: 596 }), "E18"),
+  "E18: everyHours 596 is still VALID — the bound is Node's limit (~596.5h), not a round number invented here");
+
 ok(has(bk({ keep: 2.5 }), "E18"), "E18: a fractional keep is rejected");
 ok(has(bk({ keep: -3 }), "E18"), "E18: a negative keep is rejected");
 ok(has(bk({ dir: "" }), "E18"), "E18: an empty dir is rejected");

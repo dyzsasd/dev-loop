@@ -270,7 +270,7 @@ type Options = {
   changeGate: boolean;  // R1: skip spawning a gated inward agent when neither repo HEAD nor the board moved since its last fire (service backend only) — saves the full-turn cost of a fire that would just no-op
   assembleBoot: boolean | null; // boot-prefix: the §0a boot corpus (conventions slice + resolved config + backend contract + lessons) inlined into the prompt's CONSTANT segment. true/false = an explicit run flag (--assemble-boot / --no-assemble-boot, env DEVLOOP_ASSEMBLE_BOOT=1|0); null = config decides (team.bootCorpus, default ON). Every lane; the prompt then rides stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB)
   changeGateTtlMs: number; // R1a: quiet-board TTL for the pm/qa REVIEW tiers — after this long without a fire, a gated pm/qa fire runs even on an unchanged key (0 = never; the pure gate for them too)
-  fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
+  fireTimeoutMs: number; // 0 = none; else SIGINT (then a group SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
   stallTimeoutMs?: number; // liveness watchdog: kill a fire whose combined output has been SILENT this long (errorClass "stalled" — feeds the breaker). undefined = per-lane default: 10m on opencode (it streams tool lines; silence = a hung provider call / silent retry loop — the 2026-07 quota-429 incident wedged every fire for the full hour), 0 (off) on claude/codex (claude -p buffers output until the end, so silence is normal there)
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
   background: boolean;  // re-spawn detached (log → <workspace>/.dev-loop/run.log) and return the shell — the operator-console flow's "start the loop from my coding-CLI session" verb
@@ -383,7 +383,7 @@ Options:
                               fire they run once anyway (dev-tier + architect keep the pure gate)
   --change-gate-ttl <dur>     how long a quiet board may defer a gated pm/qa fire before it runs anyway
                               (default 4h; 0 = defer forever — the pure gate for pm/qa too)
-  --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
+  --fire-timeout <dur>        kill a fire that outlives this (SIGINT to the child, then a group SIGKILL after 10s; default 1h; 0 = none)
   --stall-timeout <dur>       liveness watchdog: kill a fire whose output has been SILENT this long (errorClass
                               "stalled") OR whose output keeps arriving but introduces no NEW content for this long
                               (errorClass "retry-loop"), and record it — both feed the breaker. Default: 10m on
@@ -1690,13 +1690,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
 
   return await new Promise((resolveExit) => {
     // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
-    // the agent silently stops firing until the operator notices. SIGTERM first, SIGKILL after 10s
+    // the agent silently stops firing until the operator notices. SIGINT first, SIGKILL after 10s
     // (same escalation shape as the daemon lifecycle's lcStop).
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
     // Declared here (not at the budget watchdog below) so the two OTHER watchdogs can stand down once a budget
     // kill is in flight: AC4's "never confused with a wall-timeout" must hold by construction, not by timing —
-    // the stall interval ticks every 15s and would otherwise re-classify a SIGTERM'd-but-silent child mid-grace.
+    // the stall interval ticks every 15s and would otherwise re-classify a SIGINT'd-but-silent child mid-grace.
     let budgetKilled = false;
     // effectiveFireTimeoutMs / effectiveStallMs resolved above (before the dry-run branch) — same values here.
     const fireTimer = effectiveFireTimeoutMs > 0 ? setTimeout(() => {
@@ -1734,7 +1734,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
     let retryLoop = false;
     const stallMs = effectiveStallMs; // claude -p buffers until the end — silence is normal there
     const stallTimer = stallMs > 0 ? setInterval(() => {
-      if (stalled || timedOut || budgetKilled) return; // a budget kill in its SIGTERM→SIGKILL grace is not a stall
+      if (stalled || timedOut || budgetKilled) return; // a budget kill in its SIGINT→SIGKILL grace is not a stall
       const silent = Date.now() - lastOutputAt >= stallMs;
       const looping = !silent && Date.now() - lastNewContentAt >= stallMs;
       if (!silent && !looping) return;

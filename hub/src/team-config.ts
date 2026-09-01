@@ -466,6 +466,13 @@ function validateBackup(backup: unknown, E: Emit): void {
     if (!BACKUP_KEYS.has(k)) E("E18", `team.backup.${k}`, `unknown backup key '${k}' (expected ${[...BACKUP_KEYS].join(", ")})`);
   if (b.everyHours !== undefined && (typeof b.everyHours !== "number" || !Number.isFinite(b.everyHours) || b.everyHours < 0))
     E("E18", "team.backup.everyHours", `backup.everyHours must be a non-negative number (0 disables the cadence) (got ${JSON.stringify(b.everyHours)})`);
+  // …and an UPPER bound, for the reason parseDuration already refuses one (run-agents.ts): the value
+  // becomes a setTimeout delay, and Node coerces anything past its 32-bit limit to 1ms. `everyHours: 600`
+  // does not mean "every 25 days", it means a board snapshot EVERY MILLISECOND — the cadence inverts at
+  // the top of the range instead of saturating. The lower bound was validated here and the upper one was
+  // not, so the only shape that turns this block into a disk-filling loop was the shape that passed.
+  else if (typeof b.everyHours === "number" && b.everyHours * 3_600_000 > 2_147_483_647)
+    E("E18", "team.backup.everyHours", `backup.everyHours ${b.everyHours} (${b.everyHours * 3_600_000}ms) exceeds Node's 32-bit timer limit (~596.5h / 24.8d); setTimeout would coerce it to 1ms, snapshotting the board every millisecond`);
   if (b.keep !== undefined && (typeof b.keep !== "number" || !Number.isInteger(b.keep) || b.keep < 1))
     E("E18", "team.backup.keep", `backup.keep must be an integer >= 1 — keeping zero generations is a backup system that deletes its own output (got ${JSON.stringify(b.keep)})`);
   if (b.dir !== undefined && (typeof b.dir !== "string" || !b.dir.trim()))
