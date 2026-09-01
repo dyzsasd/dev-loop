@@ -126,8 +126,8 @@ dev-loop op <op-name> [--args-json '<JSON>']
     Dispatch any hub op; args ride --args-json, or stdin when --args-json is absent and stdin is piped.
 # save_issue (update)
 dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
-    HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--blocked-by ids] [--unblocked-by ids]
+    HAZARD: labels REPLACE the full set (re-pass all). --blocked-by writes the §9c marker ('Blocked-by: <id>') AND adds 'blocked' to the ticket's CURRENT label set (no re-pass needed); --unblocked-by writes the retirement marker ('Unblocked-by: <id>'), bare-line form.
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 # list_issue_labels
 dev-loop labels

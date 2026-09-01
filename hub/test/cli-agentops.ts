@@ -128,6 +128,39 @@ const pwl = j(parkedWithLabels.stdout).labels as string[];
 ok(parkedWithLabels.status === 0 && pwl.includes("blocked") && pwl.includes("dev-loop") && pwl.includes("qa"),
   `LOOP-190: it ADDS to an explicit --labels set rather than replacing it (got ${JSON.stringify(pwl)})`);
 
+// ── edge CREATION on an EXISTING ticket ────────────────────────────────────────────────────────
+// A block discovered AFTER filing is the ordinary case, and it had no verb: `create --blocked-by`
+// only exists at create, so recording it meant a hand-typed `comment add` (whose marker the parser
+// drops unless it is line-anchored) plus a `--labels` call that REPLACES the whole set. Both failure
+// modes were on the live jinko-browser-use board — JBU-70/72/73 named their blocker in prose only,
+// carried neither marker nor label, and sat servable at a pick position right behind it.
+const later = cli(["ticket", "create", "--title", "Blocked later", "--type", "Feature", "--labels", "dev-loop,pm,junior-dev"]);
+const laterId = later.status === 0 ? j(later.stdout).id : "";
+const blockedLater = cli(["ticket", "update", laterId, "--blocked-by", "CW-42"]);
+ok(blockedLater.status === 0, `ticket update --blocked-by → exit 0, i.e. it is a legitimate call on its own (got ${blockedLater.status})`);
+const laterComments = cli(["comments", laterId]);
+ok(laterComments.status === 0 && j(laterComments.stdout).some((c: any) => c.body === "Blocked-by: CW-42"),
+  "ticket update --blocked-by → writes the line-anchored marker, the one form blocked-by.ts parses");
+const laterLabels = blockedLater.status === 0 ? (j(blockedLater.stdout).labels as string[]) : [];
+ok(laterLabels.includes("blocked"),
+  `ticket update --blocked-by → sets the 'blocked' ENFORCEMENT label too (got ${JSON.stringify(laterLabels)})`);
+// The discriminating half: no --labels was passed, so the ticket's EXISTING labels must survive.
+// Writing args.labels = ["blocked"] would have replaced them, which is the silent-loss hazard the
+// verb exists to remove.
+ok(["dev-loop", "pm", "junior-dev"].every((l) => laterLabels.includes(l)),
+  `…unioned onto the CURRENT set, not replacing it (got ${JSON.stringify(laterLabels)})`);
+
+const withLabels = cli(["ticket", "create", "--title", "Blocked later, labels re-passed", "--type", "Feature", "--labels", "dev-loop,qa"]);
+const wlId = withLabels.status === 0 ? j(withLabels.stdout).id : "";
+const wlUpd = cli(["ticket", "update", wlId, "--labels", "dev-loop,qa,edge-case", "--blocked-by", "CW-43"]);
+const wlLabels = wlUpd.status === 0 ? (j(wlUpd.stdout).labels as string[]) : [];
+ok(wlUpd.status === 0 && wlLabels.includes("blocked") && wlLabels.includes("edge-case") && wlLabels.includes("qa"),
+  `ticket update --blocked-by ADDS to an explicit --labels set rather than replacing it (got ${JSON.stringify(wlLabels)})`);
+
+const contradictory = cli(["ticket", "update", laterId, "--blocked-by", "CW-1", "--unblocked-by", "CW-1"]);
+ok(contradictory.status !== 0,
+  `ticket update refuses --blocked-by and --unblocked-by in one call — it cannot both open and retire an edge (got ${contradictory.status})`);
+
 // ── LOOP-287: edge RETIREMENT finally has an emitter ───────────────────────────────────────────
 // Creation has been correct by construction since §9c shipped; retirement was 100% hand-typed prose
 // through `comment add`, which validates nothing. blocked-by.ts anchors the keyword to the START of
