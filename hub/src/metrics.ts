@@ -380,7 +380,11 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
   const ratesByProfile: Record<string, number[]> = {};
   for (const r of inWindow) {
     if (wasWatchdogKilled(r)) continue;
-    if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
+    // Same `typeof` guard as the total below, and for the same reason one line further along: a row with
+    // no costUsd key pushed `undefined / durationMs` — NaN — into the rate samples, so the MEDIAN went
+    // NaN and poisoned every estimate that profile fed. Fixing only the total left the sum NaN anyway,
+    // through the estimate. Two expressions, one slip.
+    if (typeof r.usage?.costUsd === "number" && typeof r.durationMs === "number" && r.durationMs > 0)
       (ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
   }
 
@@ -392,7 +396,14 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
       const ratePerMs = rates?.length ? (median(rates) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
       return (r.durationMs ?? 0) * ratePerMs;
     };
-    const measured = r.usage != null && r.usage.costUsd !== null ? r.usage.costUsd : null;
+    // `typeof … === "number"`, not `!== null`. A row whose usage object simply HAS NO costUsd key gave
+    // `undefined !== null` ⇒ true, so `measured` became undefined and `total += undefined` poisoned the
+    // whole sum to NaN — and NaN loses every comparison, so `rolling > dailyUsd` in budgetGateReason
+    // turned false and the spend gate stopped refusing launches while still looking armed. A fail-open on
+    // a money gate, from a truthiness slip. readFireRows JSON.parses without shape-checking (deliberately
+    // — it tolerates a half-written line from a crash), so any older row, hand edit, or future adapter
+    // that omits the key reaches here. status.ts:351 already used the safe form; this was the exception.
+    const measured = typeof r.usage?.costUsd === "number" ? r.usage.costUsd : null;
     if (measured === null) {
       total += modelled();
     } else if (wasWatchdogKilled(r)) {
@@ -533,7 +544,9 @@ export function checkBudget(ws: Workspace): WsWarning[] {
       // handful of fires would extrapolate to an absurd figure, and above 7d the window itself is the bound.
       const windowMs = 7 * 86_400_000;
       const spend = rollingSpendUsd(rows, windowMs, now);
-      if (spend <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
+      // `!Number.isFinite` as well as `<= 0`: a poisoned sum used to reach the message and print
+      // "~$NaN/day", which is worse than silence — it reads as a measurement.
+      if (!Number.isFinite(spend) || spend <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
       const spanMs = ledgerSpanMs(rows, windowMs, now);
       const burnPerDay = spend / (spanMs / 86_400_000);
       const spanLabel = spanMs >= 86_400_000 ? `${(spanMs / 86_400_000).toFixed(1)}d` : `${Math.round(spanMs / 3_600_000)}h`;

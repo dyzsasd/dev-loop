@@ -325,6 +325,19 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
     const withRealZero = rollingSpendUsd(
       [priced, { ...base, ts: t(30), durationMs: 4_000, exitCode: 1, errorClass: "session-limit", usage: usage(0) } as FireRow],
       86_400_000, Date.now());
+    // A usage object with NO costUsd key at all. `!== null` let `undefined` through, so `measured` became
+    // undefined and the sum went NaN — and NaN loses every comparison, so budgetGateReason's
+    // `rolling > dailyUsd` turned false and the spend gate stopped refusing launches while still looking
+    // armed. The same slip sat in the rate collection, where `undefined / durationMs` poisoned the median,
+    // so fixing only the total left the sum NaN through the estimate. readFireRows does not shape-check
+    // (deliberately — it tolerates a half-written line from a crash), so such a row is reachable.
+    const noKey = rollingSpendUsd(
+      [priced, { ...base, ts: t(30), durationMs: 600_000, usage: { source: "provider", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, currency: "USD" } } as unknown as FireRow],
+      86_400_000, Date.now());
+    ok(Number.isFinite(noKey), `a usage object missing costUsd does not poison the total to NaN (got ${noKey})`);
+    ok(Math.abs(noKey - 12) < 0.01, `…it is estimated like any other unpriced row (got $${noKey.toFixed(2)}, expected $6 measured + $6 modelled)`);
+    ok(noKey > 1, "…so a gate comparing rolling spend against a ceiling still fires — NaN would have lost it silently");
+
     ok(Math.abs(withRealZero - 6) < 0.01,
       `a measured $0 no watchdog killed still counts as $0 — not every zero is missing data (got $${withRealZero.toFixed(2)})`);
 

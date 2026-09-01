@@ -1369,6 +1369,14 @@ function budgetGateReason(dailyUsd: number | null | undefined, ledgerPath: strin
   if (!ledgerPath) return null;                               // no ledger to read (legacy fixed-project path) ⇒ fail open
   try {
     const rolling = rollingSpendUsd(readFireRows(ledgerPath), DAY_MS, nowMs);
+    // A non-finite total is NOT the same as the read error below. The ledger was read; the arithmetic
+    // produced a non-number, and every comparison against NaN is false — so the gate would have gone on
+    // launching while reporting nothing, which is the one failure a spend gate must not have quietly.
+    // The fail-open posture is kept (this file's stated rule: never deadlock the loop), but it says so.
+    if (!Number.isFinite(rolling)) {
+      console.error(`[budget] rolling 24h spend did not compute from ${ledgerPath} — the ceiling cannot be enforced this tick; check the ledger for rows with a malformed usage object`);
+      return null;
+    }
     return rolling > dailyUsd
       ? `budget dailyUsd $${dailyUsd.toFixed(2)} reached (rolling $${rolling.toFixed(2)}/$${dailyUsd.toFixed(2)})`
       : null;
