@@ -432,6 +432,28 @@ try {
     const dflt = resolveBackupConfig(undefined, join(tmp, "sr"));
     ok(dflt.intervalMs === 6 * 3_600_000 && dflt.keep === 10 && dflt.dir.endsWith("snapshots"),
       `LOOP-339: the shipped defaults are 6h / keep 10 / <state>/snapshots (got ${dflt.intervalMs}, ${dflt.keep})`);
+    // The 32-bit ceiling is enforced at the CHOKE POINT, not only on the config field. E18 refuses an
+    // out-of-range `everyHours` at load, but this function composes the value setInterval receives out of
+    // two inputs and the env override answers to no validator — so guarding the validator alone left one
+    // input still able to turn the cadence into a snapshot every millisecond. Out of range resolves to 0,
+    // the block's documented "disabled": a cadence that cannot be honoured must not become the fastest one.
+    const envOver = (() => {
+      const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+      process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "99999999999";
+      try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")).intervalMs; }
+      finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
+    })();
+    ok(envOver === 0, `DEVLOOP_BOARD_SNAPSHOT_MS past the 32-bit limit resolves to DISABLED, not to 1ms (got ${envOver})`);
+    const envOk = (() => {
+      const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+      process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "250";
+      try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")).intervalMs; }
+      finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
+    })();
+    ok(envOk === 250, `…and an in-range override still passes through unchanged (got ${envOk})`);
+    ok(resolveBackupConfig({ backup: { everyHours: 600 } }, join(tmp, "sr")).intervalMs === 0,
+      "…and the same ceiling applies to the config path, which E18 has already refused by then");
+
     const tuned = resolveBackupConfig({ backup: { everyHours: 2, keep: 3, dir: "/custom" } }, join(tmp, "sr"));
     ok(tuned.intervalMs === 2 * 3_600_000 && tuned.keep === 3 && tuned.dir === "/custom",
       "LOOP-339: config overrides every field");

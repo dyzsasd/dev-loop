@@ -299,8 +299,17 @@ export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep
   const b = team?.backup ?? {};
   const everyHours = typeof b.everyHours === "number" ? b.everyHours : 6;
   const keep = typeof b.keep === "number" ? b.keep : 10;
+  // The bound lives HERE, at the choke point, not only on the config field. E18 refuses an out-of-range
+  // `everyHours` at load — which is the better error, because it names the field — but this line composes
+  // the value that actually reaches setInterval out of TWO inputs, and the env override answers to no
+  // validator. Past Node's 32-bit limit setInterval coerces the delay to 1ms, so the failure is not a
+  // slow cadence but a board snapshot every millisecond against a shared hub.db. Guarding the validator
+  // alone left exactly one input still able to produce it.
+  // Out of range resolves to 0, which is this block's already-documented "disabled": a cadence that
+  // cannot be honoured must not silently become the fastest one possible.
+  const raw = Number(process.env.DEVLOOP_BOARD_SNAPSHOT_MS) || Math.max(0, everyHours) * 3_600_000;
   return {
-    intervalMs: Number(process.env.DEVLOOP_BOARD_SNAPSHOT_MS) || Math.max(0, everyHours) * 3_600_000,
+    intervalMs: Number.isFinite(raw) && raw >= 0 && raw <= 2_147_483_647 ? raw : 0,
     keep,
     dir: b.dir ?? join(stateRoot, "snapshots"),
   };

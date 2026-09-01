@@ -227,7 +227,15 @@ export function resolveExpiry(spec: string | undefined | null, from: string): st
   }
   const base = Date.parse(from);
   if (!Number.isFinite(base)) throw new ApprovalError("bad-expiry", `cannot resolve an expiry from ${JSON.stringify(from)}`);
-  return new Date(base + ms).toISOString();
+  // A duration this side of Number.isSafeInteger can still land outside the range a Date can represent
+  // (±8.64e15 ms), and `toISOString()` answers that with a bare RangeError. The CLI catches ApprovalError
+  // and nothing else, so `--expires 99999999d` — a plausible way to write "effectively never" — left the
+  // usage-error path entirely and surfaced as a stack trace instead of the documented exit 2. The typed
+  // error names the alternative the vocabulary already has.
+  const at = base + ms;
+  if (!Number.isFinite(at) || Math.abs(at) > 8.64e15)
+    throw new ApprovalError("bad-expiry", `--expires ${JSON.stringify(spec)} lands outside the representable date range; use a shorter duration, or '${NEVER}' if you mean it`);
+  return new Date(at).toISOString();
 }
 
 // ─── The row + the derived state ──────────────────────────────────────────────────────────────────
