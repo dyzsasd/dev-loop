@@ -257,11 +257,26 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   // SIGINT itself. The production ledger settles which model is right: the operator stop path has always
   // signalled the direct child only, and all 17 fires it ended came back with their receipts.
   const marker = join(tmp, "sigint-received");
+  const gcMarker = join(tmp, "sigint-reached-grandchild");
   const trapBin = join(tmp, "trap-claude.js");
-  writeFileSync(trapBin, `#!/usr/bin/env node\nconst fs = require("node:fs");\nprocess.on("SIGINT", () => { fs.writeFileSync(${JSON.stringify(marker)}, "caught"); process.exit(0); });\nconsole.log("fire started");\nsetTimeout(() => {}, 60_000);\n`);
+  // The stub traps INT and ALSO starts a grandchild that traps INT — the shape an agent CLI has when it
+  // shells out to git/tsx/npm to check-point. Not detached: it stays in the fire's process group, so a
+  // group-wide signal would reach it and a child-only signal would not.
+  const gcBody = `process.on("SIGINT", () => { require("node:fs").writeFileSync(${JSON.stringify(gcMarker)}, "caught"); process.exit(0); }); setInterval(() => {}, 1000);`;
+  writeFileSync(trapBin, `#!/usr/bin/env node\nconst fs = require("node:fs");\n`
+    + `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(gcBody)}], { stdio: "ignore" });\n`
+    + `process.on("SIGINT", () => { fs.writeFileSync(${JSON.stringify(marker)}, "caught"); process.exit(0); });\n`
+    + `console.log("fire started");\nsetTimeout(() => {}, 60_000);\n`);
   chmodSync(trapBin, 0o755);
   runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: trapBin });
   ok(existsSync(marker), "AC4: …and the child actually receives INT — the fire's own trap ran");
+  // The other half of 6816695, which had no arm at all: the signal goes to the DIRECT CHILD, not the
+  // group. LOOP-23's reasoning is that a graceful signal delivered group-wide also reaches the helpers an
+  // agent check-points through, turning a graceful wind-down into a forced reap. Reverting to
+  // killGroup("SIGINT") leaves the child's marker exactly where it is — only the grandchild's appears —
+  // so without this arm the narrowing was untested in both directions.
+  ok(!existsSync(gcMarker),
+    "AC4: …and the GRANDCHILD does not — the graceful signal is child-only, so an agent's check-point helpers are not swept up with it");
   // LOOP-445 — this stub emits plain text, so no usage is parseable and the fire's spend is UNKNOWN. A kill
   // on an unknown spend is a MODELED kill: "budget-deadline". It used to read "budget-per-fire", which
   // asserted a breach the run never measured. The measured-breach path is asserted below and is what keeps
