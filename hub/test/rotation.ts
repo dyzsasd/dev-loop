@@ -1,8 +1,8 @@
 // rotation.ts — smooth weighted round-robin: exact sequences, weight/enabled handling, cursor persistence,
 // and the shared next-project picker (run + Agent View share one cursor).
-import { mkdirSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { smoothWRRStep, rotationCandidates, stewardProjects, pickAndAdvance, loadSchedulerState, type SchedulerState } from "../src/rotation.ts";
@@ -10,6 +10,7 @@ import type { Workspace, TeamFile } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
@@ -72,7 +73,7 @@ function mkWs(projects: TeamFile["projects"]): Workspace {
 }
 
 // ── cursor persistence + shared picker via the real CLI ──
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-rot-")));
+const tmp = realpathSync(tmpRoot("dl-rot-"));
 try {
   const HOME = join(tmp, "home");
   const root = join(tmp, "ws");

@@ -1,16 +1,17 @@
 // workspace.ts — discovery precedence, the .dev-loop path API, index self-heal, cwd→repo matching.
 // devloopHome() reads DEVLOOP_HOME at CALL time (not cached), so setting it before we invoke any ws.* is
 // enough to isolate the convenience index from the real ~/.dev-loop.
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, realpathSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from "node:fs";
+
 import { join } from "node:path";
 import * as ws from "../src/workspace.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const threw = (fn: () => unknown): boolean => { try { fn(); return false; } catch { return true; } };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-ws-")));
+const tmp = realpathSync(tmpRoot("dl-ws-"));
 process.env.DEVLOOP_HOME = join(tmp, "home");
 delete process.env.DEVLOOP_WORKSPACE;
 delete process.env.DEVLOOP_TEAM;

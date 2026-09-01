@@ -3,9 +3,9 @@
 // opencode lane (--variant, certified OPENCODE_PERMISSION injection, pre-spawn provider-env-missing,
 // fire-ledger provider dimension), doctor W13/W14, and claude-lane parity (no provider artifacts).
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { validateTeamFile, type ProviderEntry } from "../src/team-config.ts";
 import { renderProviderEntry, syncOpencodeConfig, opencodeSyncDrift, opencodeConfigPath } from "../src/opencode-sync.ts";
@@ -13,6 +13,7 @@ import { EXIT_NO_WORK } from "../src/breaker.ts";      // LOOP-543: the outcome 
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
@@ -42,7 +43,7 @@ const GOOD: ProviderEntry = { kind: "openai-compatible", baseUrl: "https://api.x
 { const f = base(); (f.team as Record<string, unknown>).opencodePermission = { "*": "deny", bash: "allow" }; ok(codes(f).length === 0, "E16: an object opencodePermission validates clean"); }
 
 // ── render + sync (create-or-merge, never clobber) ──────────────────────────────────────────────────
-const ROOT = mkdtempSync(join(tmpdir(), "dl-provider-routing-"));
+const ROOT = tmpRoot("dl-provider-routing-");
 try {
   const entry = renderProviderEntry("synth", GOOD) as { npm: string; options: Record<string, unknown>; models: Record<string, unknown> };
   ok(entry.npm === "@ai-sdk/openai-compatible", "render: custom endpoints ride @ai-sdk/openai-compatible");
@@ -114,8 +115,11 @@ try {
   const fakeBin = join(ROOT, "fake-opencode");
   writeFileSync(fakeBin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(join(dumpDir, "args.txt"))}\nprintf '%s' "$OPENCODE_PERMISSION" > ${JSON.stringify(join(dumpDir, "perm.json"))}\nprintf '%s' "$DEVLOOP_ACTOR/$DEVLOOP_PROJECT" > ${JSON.stringify(join(dumpDir, "identity.txt"))}\nexit 0\n`);
   chmodSync(fakeBin, 0o755);
+  // --no-daemon on every tick: a real (non-dry) scheduler run ensures the board daemon, which forks a
+  // DETACHED process that outlives this suite. Two of them survived every run of this file, holding
+  // production-band ports with their cwd in a fixture directory that had already been deleted.
   const runSched = (args: string[], env: Record<string, string | undefined>) =>
-    spawnSync(process.execPath, [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd: ws, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_OPENCODE_BIN: fakeBin, ...env } as NodeJS.ProcessEnv });
+    spawnSync(process.execPath, [join(hubRoot, "src", "run-agents.ts"), "--no-daemon", ...args], { cwd: ws, encoding: "utf8", env: { ...scrubFireEnv(), DEVLOOP_OPENCODE_BIN: fakeBin, ...env } as NodeJS.ProcessEnv });
   const ledgerPath = join(ws, ".dev-loop", "team", "fires.jsonl");
   const ledgerRows = () => (existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 

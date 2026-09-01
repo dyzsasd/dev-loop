@@ -4,8 +4,8 @@
 // The load-bearing assertions are AC3 (the grant-time key lint — design §4 calls it "a hard refusal,
 // never a warning") and AC5 (expiry derived at consult time, so a stale row cannot authorise even
 // though no sweeper has ever run). Everything else exists so those two cannot regress unnoticed.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
@@ -15,8 +15,9 @@ import {
   parseActionKey, parseDuration, requestApproval, resolveExpiry, revokeApproval,
   type ApprovalRow,
 } from "../src/approvals.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-approvals-")));
+const tmp = realpathSync(tmpRoot("dl-approvals-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const refuses = (fn: () => unknown, code: string): { hit: boolean; got: string } => {
@@ -292,6 +293,16 @@ try {
     ok(resolveExpiry(undefined, from) === "2026-08-07T00:00:00.000Z",
       `AC7: omitting --expires yields 24h, never unbounded (got ${resolveExpiry(undefined, from)})`);
     ok(resolveExpiry(NEVER, from) === null, "AC7: --expires never stores NULL");
+    // A duration that parses cleanly can still land outside the range a Date can represent, and
+    // `toISOString()` answers that with a bare RangeError — which the CLI, catching ApprovalError and
+    // nothing else, let escape. `--expires 99999999d` is a plausible way to write "effectively never", and
+    // it left the usage-error path entirely: a stack trace instead of the documented exit 2.
+    ok(refuses(() => resolveExpiry("99999999d", from), "bad-expiry").hit,
+      "an --expires beyond the representable date range is a typed bad-expiry, not a bare RangeError");
+    ok(refuses(() => resolveExpiry("300000000d", from), "bad-expiry").hit,
+      "…and so is an absurd one — the CLI's catch only sees ApprovalError");
+    ok((resolveExpiry("3650d", from) ?? "").startsWith("20"),
+      `…while a long-but-representable duration still resolves (got ${resolveExpiry("3650d", from)})`);
     ok(refuses(() => resolveExpiry("forever", from), "bad-expiry").hit,
       "AC7: only the exact word 'never' is unbounded — 'forever' is refused, not silently accepted");
 

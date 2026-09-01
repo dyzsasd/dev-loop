@@ -1,8 +1,8 @@
 // run-agents team mode + locks: WRR plan, --project filter, enabled/weight exclusion, fires.jsonl ledger,
 // the team run lock, and with-repo-lock serialization.
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
-import { tmpdir, platform } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock } from "../src/locks.ts";
@@ -10,14 +10,17 @@ import { EXIT_NO_WORK } from "../src/breaker.ts"; // LOOP-543: the outcome code 
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-sched-")));
+const tmp = realpathSync(tmpRoot("dl-sched-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra });
 const team = (args: string[], cwd: string) => spawnSync("node", [join(hubRoot, "src", "team.ts"), ...args], { cwd, env: env(), encoding: "utf8" });
+// --no-daemon on every tick: a real (non-dry) scheduler run ensures the board daemon, which forks a
+// DETACHED process that outlives this suite (measured: one survivor per run, cwd in a deleted fixture).
 const runAgents = (args: string[], cwd: string, extra: Record<string, string> = {}) => {
-  const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), ...args], { cwd, env: env(extra), encoding: "utf8" });
+  const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--no-daemon", ...args], { cwd, env: env(extra), encoding: "utf8" });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 };
 // Only the numbered plan rows ("  1  pm → alpha"), never the header line (which also contains →).
@@ -275,13 +278,30 @@ try {
       delete c3.projects.gamma.hub;
       writeFileSync(join(svcWs, "dev-loop.json"), JSON.stringify(c3, null, 2));
     }
+
+    // ── D3 (team mirror): a lane that finds no eligible job SAYS so, per candidate project ────────
+    // The team scheduler's lane branch `continue`d in silence, exactly like the legacy one: a lane
+    // that declined every candidate produced no start line, no log file and no skip line, so a
+    // correct skip and a crashed slot were indistinguishable. gamma is seeded and its board is empty
+    // (the fires above write no tickets), so qa-maintenance has nothing to verify and nothing to unblock.
+    {
+      const laneOnce = runAgents(["--agents", "qa-maintenance", "--once"], svcWs, { DEVLOOP_CLAUDE_BIN: fakeBin });
+      const skip = laneOnce.out.split("\n").find((l) => /\[qa-maintenance\] skipped: /.test(l)) ?? "";
+      ok(laneOnce.code === 0, "D3 team: a lane with nothing eligible still exits 0");
+      ok(skip !== "",
+        `D3 team: the team scheduler prints '[qa-maintenance] skipped: <reason>' (lines seen: ${JSON.stringify(laneOnce.out.split("\n").filter((l) => /qa-maintenance/.test(l)))})`);
+      ok(/qa-maintenance lane in 'gamma'/.test(skip) && /0 In Review/.test(skip),
+        `D3 team: the reason names the lane, the candidate PROJECT it declined, and the board counts (got ${JSON.stringify(skip)})`);
+      ok(!/qa-maintenance: start \(/.test(laneOnce.out),
+        "D3 team control: the declining lane launched nothing, so the skip line is the only report of it");
+    }
   }
 
   // ── team run lock: a live holder blocks a second scheduler ──
   const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
   mkdirSync(dirname(lockPath), { recursive: true });
   writeFileSync(lockPath, JSON.stringify({ pid: process.pid, team: "sched-team", startedAt: new Date().toISOString() })); // THIS process = a live holder
-  const blocked = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--max-fires", "1"], { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: fakeBin }), encoding: "utf8", timeout: 8000 });
+  const blocked = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--no-daemon", "--agents", "pm", "--max-fires", "1"], { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: fakeBin }), encoding: "utf8", timeout: 8000 });
   ok((blocked.status ?? 1) !== 0 && /already running/.test(`${blocked.stdout}${blocked.stderr}`), "a second scheduler refuses while a live run lock is held");
   rmSync(lockPath, { force: true });
 

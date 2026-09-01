@@ -6,16 +6,17 @@
 // §16-clean: no real secret VALUES — export runs --insecure-plaintext on a minimal fresh workspace.
 import { execFileSync, spawnSync } from "node:child_process";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-gitguard-"));
+const ROOT = tmpRoot("dl-gitguard-");
 try {
   const cli = (args: string[], cwd: string, env: Record<string, string | undefined> = {}) =>
     spawnSync(process.execPath, [join(hubRoot, "src", "cli.ts"), ...args], { cwd, encoding: "utf8", env: { ...scrubFireEnv(), ...env } as NodeJS.ProcessEnv });
@@ -479,7 +480,7 @@ try {
   ok(!/git working tree/.test(expPlain.stderr), "(b) export outside a git tree is silent — no tree warning");
 
   // (c) explicit --out to a path OUTSIDE the tree (from inside the git-ws) ⇒ unchanged / silent.
-  const outsideDir = mkdtempSync(join(tmpdir(), "dl-outside-"));
+  const outsideDir = tmpRoot("dl-outside-");
   const expOut = cli(exportArgs(join(outsideDir, "ws.bundle")), gitWs);
   ok(expOut.status === 0, `(c) export with --out outside the tree exits 0 (got ${expOut.status})`);
   ok(!/git working tree/.test(expOut.stderr), "(c) --out to a path outside the tree is unchanged (no warning), even when the workspace root is a git tree");

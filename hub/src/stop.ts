@@ -7,6 +7,7 @@
 // the holder (the scheduler forwards SIGINT/SIGTERM to in-flight fires and exits when they drain), and
 // escalates to SIGKILL only if it won't die. The hub daemon is deliberately untouched — the board stays up.
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { pidMatchesRecord } from "./pid-identity.ts";
 import { tryResolveWorkspace, wsLockPath } from "./workspace.ts";
 
 function pidAlive(pid: number): boolean {
@@ -33,6 +34,15 @@ async function main(): Promise<void> {
   if (!pid || !pidAlive(pid)) {
     try { unlinkSync(lockPath); } catch { /* raced */ }
     console.log(`dev-loop stop: stale run lock (pid ${pid ?? "?"} is gone) — removed; nothing was running`);
+    return;
+  }
+  // The pid answers a zero-signal probe, which only proves SOME process holds it. This verb signals, and
+  // escalates to SIGKILL, so it confirms the pid is still OUR scheduler first: a stale lock over a
+  // recycled pid would otherwise kill an unrelated process — the hazard this verb was written to prevent.
+  const identity = pidMatchesRecord(pid, holder.startedAt, "run-agents");
+  if (!identity.ok) {
+    console.error(`dev-loop stop: refusing to signal — ${identity.why}. The run lock at ${lockPath} is stale; remove it with \`rm ${lockPath}\` once you have confirmed no scheduler is running (\`dev-loop status\`).`);
+    process.exitCode = 1;
     return;
   }
   console.log(`dev-loop stop: stopping scheduler pid ${pid} (team '${ws.file.team.key}'${holder.startedAt ? `, up since ${holder.startedAt}` : ""}) — in-flight fires get SIGINT and drain`);

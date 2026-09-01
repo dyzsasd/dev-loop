@@ -67,16 +67,21 @@ worktree on `dev-loop/<id>` (§7), commit only this ticket's files, push, open t
 comment the URL.
 - `git.autoMerge:true` (§12c) ⇒ the ticket STAYS `In Progress` (you own landing it) until Step 0.5 merges the
   green PR — only then `In Review`. Poll the checks yourself; never GitHub `--auto`/branch protection.
-- `autoMerge` absent/false ⇒ Step 7 now (a human reviews + merges); `autoPush:false` ⇒ commit locally, note a
-  human must push + open the PR.
+- `autoMerge` absent/false ⇒ Step 7 now (a human reviews + merges). `pr` needs a remote by definition; a
+  repo with none lands `direct` instead.
 - NEVER deploy in pr mode — `autoDeploy` is ignored and Step 6.5 does not run.
 
 **`landing:"direct"`:** a split tier lands via the §7 merge-back (sync / rebase-if-stale → ONE `with-repo-lock`
 wrapping the `--ff-only` merge + push → cleanup; pull `references/conventions/worktree-landing.md`); only the
 legacy solo dev commits in place.
 - `git.autoCommit` ⇒ commit on the resolved `defaultBranch` (§19; if absent, on the current branch, noted —
-  never a divergent branch), message referencing the id + co-author trailer. `git.autoPush` ⇒ push (the
-  constitution's push-guard / fast-forward-only rule binds).
+  never a divergent branch), message referencing the id + co-author trailer. **Push when the repo has a
+  remote** — it is part of the landing, not a flag; the constitution's push-guard / fast-forward-only rule
+  binds, and a merge commit in the range is a push-guard refusal (rebase, never merge the base in).
+- **Never realign the shared checkout destructively.** No `git reset --hard origin/<defaultBranch>`,
+  no `git checkout -B <defaultBranch> origin/<defaultBranch>`: both discard landed-but-unpushed work,
+  including another lane's. A refused `git pull --ff-only` means the branch diverged — run
+  `dev-loop push --repo <ref>` to publish what is there, then retry the landing from its first step.
 - **Before ANY deploy step apply the constitution's Deploy ceiling (§12d):** a `"manual"` `team.deployPolicy`
   env is a HARD BAIL + operator park, never a prompt (command-shape deploys with no env mapping = prod).
 - `git.autoDeploy` + a resolved `deploy.command` ⇒ run it and confirm success. A repo with NO deploy skips it
@@ -96,6 +101,11 @@ Only if you actually deployed to prod this step (a `deploy.command` ran):
    restored.
 
 ## Step 7 — Hand off to In Review
+**First re-read the ticket** (§3): re-fetch it and read `.state`, `.labels` and every comment added since you
+claimed it. A claimed ticket has no inbound channel (§7), so this is the only point where a `blocked` label,
+a `Blocked-by:` edge or a stop instruction written while you worked is collected. Found one ⇒ **park instead
+of handing off**: `Todo` + `blocked` + a `Bail-shape:` comment naming the marker (§9), and do not move to
+`In Review`. Otherwise:
 `state:"In Review"` (verify, §10) + a comment: what changed, where (files/routes), how you verified the gates,
 the commit/deploy ref if shipped, and a pointer to the ACs so the owner (PM for features, QA for bugs) can
 verify. A partial ship MUST cite the follow-up ID filed this run (Step-4 split); a `Bug`/`Feature` hand-off

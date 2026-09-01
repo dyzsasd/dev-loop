@@ -92,7 +92,9 @@ machine-local in both sinks** — only the body + 点评 thread move to Linear.
 - **Resolve the doc:** cached id → `get_document(id)`; else `list_documents(projectId)` +
   client-side **exact** title-regex → cache; else `save_document(...)` then re-query (no
   atomic create — on a race keep the lexicographically-first id, **never delete** the dupe).
-- **Markers:** `date +%F` / `+%G-W%V` / `+%Y-%m` (never reason about dates); parse
+- **Markers:** `date -u +%F` / `-u +%G-W%V` / `-u +%Y-%m` (never reason about dates; `-u` is
+  load-bearing, exactly as in §22 — LOOP-214: the day key must be stamped by the same clock as the
+  data it indexes, and every artifact a report describes is UTC); parse
   newest-per-section by **strict anchored heading regex** (`^### \d{4}-\d{2}-\d{2}$` etc.);
   agents must not emit heading-shaped lines in prose. 点评 lives in comments, so it can never
   match a report heading (the §22 "no bare glob" exclusion is automatic).

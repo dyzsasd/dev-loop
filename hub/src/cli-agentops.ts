@@ -52,8 +52,8 @@ LAYER 1 — sugar verbs (every verb prints the op result as JSON on stdout; erro
                          [--labels a,b,c] [--priority 0-4] [--assignee A|me] [--blocked-by ids] [--related-to ids]
       --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
   dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                         [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
-      HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
+                         [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--blocked-by ids] [--unblocked-by ids]
+      HAZARD: labels REPLACE the full set (re-pass all). --blocked-by writes the §9c marker ('Blocked-by: <id>') AND adds 'blocked' to the ticket's CURRENT label set (no re-pass needed); --unblocked-by writes the retirement marker ('Unblocked-by: <id>'), bare-line form.
       HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
   dev-loop comment add <id> (--body TEXT | --body-file F | '-' = stdin)
   dev-loop comments <id>
@@ -168,12 +168,30 @@ export function openHub(): Hub {
     process.exit(4);
   }
   let db: DatabaseSync;
+  // Resolved ONCE, inside the try, and reused by the catch. The catch used to call resolveHubDbPath()
+  // again to name the path — and when the resolver is what threw (no DEVLOOP_HUB_DB, no DEVLOOP_HOME, no
+  // workspace: the shape 5592825 created by retiring the ~/.dev-loop fallback) it threw a SECOND time,
+  // out of the catch, past process.exit(5). Measured: exit 1 and a stack trace whose top frame is this
+  // very line, for every agent write verb. The exit-5 mapping this catch exists to provide never ran on
+  // the most common way to reach it — an error handler that reuses the failing operation is not a handler.
+  let dbPath: string | null = null;
   try {
-    db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — a bare `dev-loop op` at the workspace root must hit ITS board, not the global default
+    dbPath = resolveHubDbPath(); // workspace-aware ladder (P2 #1) — a bare `dev-loop op` at the workspace root must hit ITS board, not the global default
+    db = openDb(dbPath);
     ensureActors(db); // idempotent (server.ts does the same) — the G1 guard below needs the roster present; INSERTs, so it belongs inside the busy mapping (codex #3)
   } catch (e) {
-    if (isBusy(e)) { console.error(`dev-loop: hub db is busy past the 5s busy_timeout: ${(e as Error).message}`); process.exit(5); }
-    throw e;
+    // ANY failure to open the board is "hub unavailable" (exit 5). Busy was the only one mapped, so a
+    // corrupt file (SQLITE_NOTADB), a permission denial (SQLITE_CANTOPEN) and a path that is a directory
+    // all re-threw — and an escape from a CLI verb is not a neutral event: it left the contract entirely
+    // and surfaced as a stack trace. Measured on the same workspace, same fault: `dev-loop tickets` gave
+    // a trace while `dev-loop approvals`, which catches broadly, gave 5 and a sentence. Two answers to one
+    // question, from one binary. Busy keeps its own message because "retry" is useful advice and "the file
+    // is not a database" is not, but both are 5 — the board is what is unavailable either way.
+    const msg = (e as Error).message ?? String(e);
+    if (isBusy(e)) console.error(`dev-loop: hub db is busy past the 5s busy_timeout: ${msg}`);
+    // `dbPath` is null when the RESOLVER threw, in which case its own message already says what to do.
+    else console.error(dbPath === null ? `dev-loop: ${msg}` : `dev-loop: cannot open the board at ${dbPath} — ${msg}`);
+    process.exit(5);
   }
   if (!actorExists(db, actor)) { // G1 phantom-actor guard — a typo'd DEVLOOP_ACTOR must never write unattributably
     console.error(`dev-loop: DEVLOOP_ACTOR='${actor}' is not a known actor. Valid: ${listActorHandles(db).join(", ")}. Fix DEVLOOP_ACTOR in the launcher.`);
@@ -398,11 +416,11 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   const { flags, pos } = parseFlags(targs, {
     "--state": "v", "--title": "v", "--description": "v", "--description-file": "v",
     "--labels": "v", "--assignee": "v", "--priority": "v",
-    "--related-to": "v", "--duplicate-of": "v", "--unblocked-by": "v", ...COMMON,
+    "--related-to": "v", "--duplicate-of": "v", "--blocked-by": "v", "--unblocked-by": "v", ...COMMON,
   });
   iAmTheOperator = flags["--i-am-the-operator"] === true;
   const id = pos[0];
-  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--description TEXT|'-'] [--description-file F] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID] [--unblocked-by ids]");
+  if (!id) fail("usage: dev-loop ticket update <id> [--state S] [--title T] [--description TEXT|'-'] [--description-file F] [--labels FULL,SET] [--assignee A] [--priority N] [--related-to +ids] [--duplicate-of ID] [--blocked-by ids] [--unblocked-by ids]");
   if (pos.length > 1) fail(`unexpected argument '${pos[1]}'`);
   if (flags["--description"] !== undefined && flags["--description-file"] !== undefined) fail("pass --description OR --description-file, not both");
   const descFlag = str(flags, "--description");
@@ -420,8 +438,11 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   if (flags["--project"] !== undefined) args.project = str(flags, "--project");
   // LOOP-287: `--unblocked-by` alone is a legitimate call — retiring an edge is a real update to the
   // §9c ledger even though it writes no ticket FIELD. Excluding it here is what made the flag exit 2.
-  if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0) && flags["--unblocked-by"] === undefined)
-    fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of/--unblocked-by");
+  if (Object.keys(args).length === 1 + (args.project !== undefined ? 1 : 0)
+      && flags["--unblocked-by"] === undefined && flags["--blocked-by"] === undefined)
+    fail("nothing to update — pass at least one of --state/--title/--description/--description-file/--labels/--assignee/--priority/--related-to/--duplicate-of/--blocked-by/--unblocked-by");
+  if (flags["--blocked-by"] !== undefined && flags["--unblocked-by"] !== undefined)
+    fail("pass --blocked-by OR --unblocked-by, not both — one call cannot both open and retire an edge");
   const hub = openHub();
   // Review-admission gate (LOOP-110): refuse In Progress→In Review for pr+autoMerge tickets
   // whose PR is not MERGED. Fail-open on every error path — never a false refusal.
@@ -450,11 +471,43 @@ async function ticketUpdate(targs: string[]): Promise<never> {
   //
   // Symmetric with create: the flag emits the marker in the ONE form the parser reads.
   const unblockedBy = flags["--unblocked-by"] !== undefined ? csv(str(flags, "--unblocked-by")!) : [];
+  // Edge CREATION on an EXISTING ticket had no verb. `create --blocked-by` writes both halves
+  // (LOOP-190) and `update --unblocked-by` retires an edge (LOOP-287), but a block DISCOVERED after
+  // the ticket was filed — the ordinary case — could only be recorded by hand: a `comment add` whose
+  // marker the parser silently drops if it is not line-anchored, plus a `--labels` call that REPLACES
+  // the whole set and quietly loses any label the caller forgot to re-pass.
+  //
+  // Both failure modes are on the live jinko-browser-use board. JBU-70/72/73 each name A1 (= JBU-69)
+  // in their `Depends on` prose and carried neither marker nor label, so all three sat servable at a
+  // pick position right behind the ticket they wait on; the next fires would have claimed and bailed.
+  // Same shape as LOOP-190, one path over.
+  const blockedBy = flags["--blocked-by"] !== undefined ? csv(str(flags, "--blocked-by")!) : [];
+  if (blockedBy.length) {
+    // The `blocked` label is the ENFORCEMENT half (every serving path filters on it; none reads the
+    // marker). When the caller did not pass --labels we must union onto the ticket's CURRENT set —
+    // writing `args.labels = ["blocked"]` would replace it. If the read fails we refuse rather than
+    // write the marker alone: a ledger edge with no enforcement label is exactly LOOP-190's bug.
+    let base: string[];
+    if (flags["--labels"] !== undefined) {
+      base = args.labels as string[];
+    } else {
+      const cur = await runOp(hub, "get_issue", { id });
+      const curLabels = (cur.body as { labels?: unknown } | undefined)?.labels;
+      if (cur.status !== 200 || !Array.isArray(curLabels)) {
+        console.error(`ticket update --blocked-by: cannot read ${id}'s current labels (status ${cur.status}) — refusing, because writing the marker without the 'blocked' label leaves the ticket servable`);
+        process.exit(1);
+      }
+      base = curLabels as string[];
+    }
+    args.labels = [...new Set([...base, "blocked"])];
+  }
   const res = await runOp(hub, "save_issue", args);
-  if (!(res.status >= 200 && res.status < 300) || unblockedBy.length === 0) return emit("save_issue", res);
+  const markers = blockedBy.length ? blockedBy.map((b) => `Blocked-by: ${b}`)
+    : unblockedBy.map((b) => `Unblocked-by: ${b}`);
+  if (!(res.status >= 200 && res.status < 300) || markers.length === 0) return emit("save_issue", res);
   console.log(JSON.stringify(res.body));
   const c = await runOp(hub, "save_comment", {
-    issueId: id, body: unblockedBy.map((b) => `Unblocked-by: ${b}`).join("\n"),
+    issueId: id, body: markers.join("\n"),
     ...(flags["--project"] !== undefined ? { project: str(flags, "--project") } : {}),
   });
   if (c.status < 200 || c.status >= 300) { console.error(JSON.stringify(c.body)); process.exit(1); }

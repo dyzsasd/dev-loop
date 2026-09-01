@@ -12,8 +12,8 @@
 // Every refusal is additionally asserted against the STORE (rows/events unchanged) — an exit code alone
 // cannot tell a refusal from a write that also printed one.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -23,8 +23,9 @@ import { planRuling, parseArgs } from "../src/rule-cli.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 const CLI = join(hubRoot, "src", "cli.ts");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-rule-cli-")));
+const tmp = realpathSync(tmpRoot("dl-rule-cli-"));
 const DB = join(tmp, "hub.db");
 
 let fails = 0;

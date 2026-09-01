@@ -12,7 +12,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { spawnSync, spawn } from "node:child_process";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { tmpRoot } from "./tmp-root.ts";
 import { once } from "node:events";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, ensureProject, findProject } from "../src/seed.ts";
@@ -127,6 +129,39 @@ const parkedWithLabels = cli(["ticket", "create", "--title", "Edge plus labels",
 const pwl = j(parkedWithLabels.stdout).labels as string[];
 ok(parkedWithLabels.status === 0 && pwl.includes("blocked") && pwl.includes("dev-loop") && pwl.includes("qa"),
   `LOOP-190: it ADDS to an explicit --labels set rather than replacing it (got ${JSON.stringify(pwl)})`);
+
+// ── edge CREATION on an EXISTING ticket ────────────────────────────────────────────────────────
+// A block discovered AFTER filing is the ordinary case, and it had no verb: `create --blocked-by`
+// only exists at create, so recording it meant a hand-typed `comment add` (whose marker the parser
+// drops unless it is line-anchored) plus a `--labels` call that REPLACES the whole set. Both failure
+// modes were on the live jinko-browser-use board — JBU-70/72/73 named their blocker in prose only,
+// carried neither marker nor label, and sat servable at a pick position right behind it.
+const later = cli(["ticket", "create", "--title", "Blocked later", "--type", "Feature", "--labels", "dev-loop,pm,junior-dev"]);
+const laterId = later.status === 0 ? j(later.stdout).id : "";
+const blockedLater = cli(["ticket", "update", laterId, "--blocked-by", "CW-42"]);
+ok(blockedLater.status === 0, `ticket update --blocked-by → exit 0, i.e. it is a legitimate call on its own (got ${blockedLater.status})`);
+const laterComments = cli(["comments", laterId]);
+ok(laterComments.status === 0 && j(laterComments.stdout).some((c: any) => c.body === "Blocked-by: CW-42"),
+  "ticket update --blocked-by → writes the line-anchored marker, the one form blocked-by.ts parses");
+const laterLabels = blockedLater.status === 0 ? (j(blockedLater.stdout).labels as string[]) : [];
+ok(laterLabels.includes("blocked"),
+  `ticket update --blocked-by → sets the 'blocked' ENFORCEMENT label too (got ${JSON.stringify(laterLabels)})`);
+// The discriminating half: no --labels was passed, so the ticket's EXISTING labels must survive.
+// Writing args.labels = ["blocked"] would have replaced them, which is the silent-loss hazard the
+// verb exists to remove.
+ok(["dev-loop", "pm", "junior-dev"].every((l) => laterLabels.includes(l)),
+  `…unioned onto the CURRENT set, not replacing it (got ${JSON.stringify(laterLabels)})`);
+
+const withLabels = cli(["ticket", "create", "--title", "Blocked later, labels re-passed", "--type", "Feature", "--labels", "dev-loop,qa"]);
+const wlId = withLabels.status === 0 ? j(withLabels.stdout).id : "";
+const wlUpd = cli(["ticket", "update", wlId, "--labels", "dev-loop,qa,edge-case", "--blocked-by", "CW-43"]);
+const wlLabels = wlUpd.status === 0 ? (j(wlUpd.stdout).labels as string[]) : [];
+ok(wlUpd.status === 0 && wlLabels.includes("blocked") && wlLabels.includes("edge-case") && wlLabels.includes("qa"),
+  `ticket update --blocked-by ADDS to an explicit --labels set rather than replacing it (got ${JSON.stringify(wlLabels)})`);
+
+const contradictory = cli(["ticket", "update", laterId, "--blocked-by", "CW-1", "--unblocked-by", "CW-1"]);
+ok(contradictory.status !== 0,
+  `ticket update refuses --blocked-by and --unblocked-by in one call — it cannot both open and retire an edge (got ${contradictory.status})`);
 
 // ── LOOP-287: edge RETIREMENT finally has an emitter ───────────────────────────────────────────
 // Creation has been correct by construction since §9c shipped; retirement was 100% hand-typed prose
@@ -413,6 +448,42 @@ if (bareVerify.length > 0) {
 }
 if (opVerify.length > 0) {
   ok(opVerify.every((v) => !("landing" in v)), "LOOP-111 AC2: 'op queue' verify items have NO 'landing' field (daemon stays gh-free)");
+}
+
+// ── any failure to open the board is "hub unavailable" (5), not an escape ─────────────────────
+// isBusy mapped SQLITE_BUSY/LOCKED and re-threw everything else, so a corrupt file, a permission denial
+// and a path that is a directory all left the contract and surfaced as a stack trace — while
+// `dev-loop approvals`, in the SAME binary against the SAME fault, caught broadly and answered 5 with a
+// sentence. One question, two answers. The board is what is unavailable in every one of these.
+{
+  const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+  const bad = tmpRoot("dl-hub5-");
+  const badEnv = { ...scrubFireEnv(), DEVLOOP_HOME: join(bad, "home") };
+  const ws5 = join(bad, "ws");
+  spawnSync("node", [join(srcDir, "team.ts"), "init", "--dir", ws5, "--key", "t5", "--backend", "linear", "--linear-team", "L1"], { cwd: bad, env: badEnv, encoding: "utf8" });
+  spawnSync("node", [join(srcDir, "team.ts"), "add-project", "p", "--linear-project", "P"], { cwd: ws5, env: badEnv, encoding: "utf8" });
+  const opEnv = { ...badEnv, DEVLOOP_WORKSPACE: ws5, DEVLOOP_PROJECT: "p" };
+  const runOp5 = () => spawnSync("node", [join(srcDir, "cli.ts"), "op", "get_project"], { cwd: ws5, env: opEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  spawnSync("node", [join(srcDir, "cli.ts"), "seed", "p", "Proj", "PRJ"], { cwd: ws5, env: opEnv, encoding: "utf8" });
+  ok(runOp5().status === 0, "fixture: the op verb answers 0 against a healthy board");
+
+  // The resolver ITSELF failing is the commonest way to reach that catch, and it was the one shape the
+  // exit-5 mapping never handled: the catch called resolveHubDbPath() again to name the path, so when the
+  // resolver was what threw it threw a second time, out of the catch, past process.exit(5). Exit 1 and a
+  // stack trace whose top frame is the catch — for every agent write verb. 5592825 created this shape by
+  // retiring the ~/.dev-loop fallback; an error handler that reuses the failing operation is not a handler.
+  const unresolvable = spawnSync("node", [join(srcDir, "cli.ts"), "op", "queue"], {
+    cwd: bad, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...scrubFireEnv(), DEVLOOP_PROJECT: "x" },   // project set, but no db, no home, no workspace
+  });
+  ok(unresolvable.status === 5, `an UNRESOLVABLE board is hub-unavailable (5), not a second throw out of the catch (got ${unresolvable.status})`);
+  ok(/no hub database resolved/.test(unresolvable.stderr ?? "") && !/\bat \w+ \(/.test(unresolvable.stderr ?? ""),
+    "…and the resolver's own guidance reaches the operator instead of a stack trace");
+
+  writeFileSync(join(ws5, ".dev-loop", "hub.db"), "not a database at all");
+  const corrupt = runOp5();
+  ok(corrupt.status === 5, `a corrupt hub.db is hub-unavailable (5), not an escaped SQLITE_NOTADB (got ${corrupt.status})`);
+  ok(/cannot open the board/.test(corrupt.stderr ?? ""), "…and it says so in a sentence, naming the path");
 }
 
 console.log(fails === 0 ? "\nCLI_AGENTOPS_OK" : `\n${fails} CHECK(S) FAILED`);

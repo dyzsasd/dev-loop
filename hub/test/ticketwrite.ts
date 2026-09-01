@@ -2,9 +2,9 @@
 // to senior-dev (assignee + label swap) in BOTH insertTicket and updateTicketRow, and log
 // issue.retier. Must be a strict no-op when sensitive label absent, junior-dev absent, or
 // senior-dev actor not registered. Design: sensitive-routing §2 / LOOP-79 Child A.
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { rmSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { openDb } from "../src/db.ts";
 import { insertTicket, updateTicketRow, moveTicket, insertComment, verifyCreateGateRejection, waitingOnFor, parseRuling, rulingBody, rulingCommentPolicy, recordRuling } from "../src/ticketwrite.ts";
 import type { NewTicketFields, TicketUpdateFields } from "../src/ticketwrite.ts";
@@ -12,9 +12,10 @@ import { agentOp, type OpResult } from "../src/agentops.ts"; // LOOP-183 Vector 
 import { AGENT_HANDLES } from "../src/seed.ts"; // LOOP-208: drive the actor-coverage assertion from the REAL roster, so a future handle fails the test
 
 let fails = 0;
+import { tmpRoot } from "./tmp-root.ts";
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-ticketwrite-"));
+const ROOT = tmpRoot("dl-ticketwrite-");
 try {
   // ── Fixture: hub.db with actors and a project ─────────────────────────────────
   const dbPath = join(ROOT, "hub.db");
@@ -523,6 +524,21 @@ try {
   updateTicketRow(db, "p", "pm", bs2, "Todo", updateFields({ state: "Todo", labels: JSON.stringify(["dev-loop", "Feature", "pm", "blocked", "needs-pm"]) }));
   ok(bailLabels(bs2).length === 1 && bailLabels(bs2)[0] === "scope-design",
     "Decision 1: setting `blocked` derives the label from the pre-existing Bail-shape comment (write ordering cannot drift)");
+
+  // (d2) CREATE derives on the same terms as update — the two entry points must not disagree.
+  // insertTicket did not reconcile, so a bail-shape label passed at create survived the insert and was
+  // then silently dropped by the ticket's first update, including an update that re-passed the identical
+  // set. Reported from the field by pm and qa on the same day, from opposite ends: pm saw create-time
+  // labels vanish, qa saw --labels unable to set one.
+  const cr1 = insertTicket(db, "p", "pm", newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm", "external-prereq"] }), {});
+  ok(bailLabels(cr1).length === 0,
+    `Decision 1: create derives too — a bail-shape label passed at create with no Bail-shape comment does not survive (got ${JSON.stringify(bailLabels(cr1))})`);
+
+  const cr2 = insertTicket(db, "p", "pm", newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm", "blocked", "external-prereq"] }), {});
+  const acceptedAtCreate = labelsOf(cr2);
+  updateTicketRow(db, "p", "pm", cr2, "Todo", updateFields({ state: "Todo", labels: JSON.stringify(acceptedAtCreate) }));
+  ok(JSON.stringify(labelsOf(cr2)) === JSON.stringify(acceptedAtCreate),
+    `Decision 1: re-passing exactly what create accepted changes nothing — create and update agree (create ${JSON.stringify(acceptedAtCreate)} → update ${JSON.stringify(labelsOf(cr2))})`);
 
   // (e) a non-bail comment is a strict no-op; a bail comment on a non-blocked ticket sets nothing
   const bs3 = insertTicket(db, "p", "pm", newFields({ state: "Todo", labels: ["dev-loop", "Feature", "pm", "blocked", "needs-pm"] }), {});

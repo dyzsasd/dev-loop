@@ -8,12 +8,13 @@
 // nothing to schedule from. The per-fire LEDGER records every fire of every agent, and that is the
 // right anchor — matched by AGENT across all projects, because slots are per-agent and the target
 // project is chosen when the slot fires.
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { lastFirePerAgent, seedSlotNextAt } from "../src/run-agents-seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-cadence-")));
+const tmp = realpathSync(tmpRoot("dl-cadence-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

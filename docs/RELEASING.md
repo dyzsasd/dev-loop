@@ -32,6 +32,33 @@ refuses to release without one. Accumulate entries under `## Unreleased` as PRs 
 renames that heading into the version being cut (the rename rides the release commit). Finalizing the
 heading by hand before releasing also works — matching `## <version>` passes the gate directly.
 
+## The source-integrity gate (run it BEFORE dispatching)
+
+`release-npm.yml` runs `security/source_integrity.py --all-history`. `test.yml` does not — it runs only
+the default tracked-worktree pass — so `main` can be fully green while every release attempt dies on a
+gate nothing else exercises.
+
+Run it first. But run it the way CI does, or the result is not comparable:
+
+```sh
+# CI's shape: actions/checkout@v4 takes ONLY the ref being built, then tags.
+d=$(mktemp -d) && git clone --single-branch --branch <ref> . "$d" && git -C "$d" fetch --force --tags
+( cd "$d" && python3 security/source_integrity.py --all-history )
+```
+
+`--all-history` walks `git rev-list --all`, which in a working clone includes remote-tracking refs. A
+maintainer clone therefore scans branches CI never fetches — measured here: 172 `injected-require-shim`
+findings, every one of them in a blob unreachable from `main` or from the release branch, all carried by
+stale `refs/remotes/origin/dev-loop/LOOP-*` refs left from the 2026-07-18 injection event. Running the
+bare local command reports a red that CI does not have, and a check that is always red stops being read.
+
+Two things follow. A finding from the bare local run is not a release blocker until you have confirmed the
+blob is reachable from the ref being released (`git rev-list --objects <ref> | grep <blob>`). And the
+inverse holds: this gate says nothing about branches CI does not fetch, so those 170 remote `dev-loop/LOOP-*`
+branches stay unscanned by the release path — they are quarantined by checkout scope, not by the scanner.
+Deleting the merged ones is the durable fix; until then, do not add a full-ref fetch to the release job
+without deleting them first, because the gate turns red the moment it can see them.
+
 ## Cut a release
 
 1. Open the **Release npm package** workflow in GitHub Actions.

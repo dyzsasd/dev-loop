@@ -234,11 +234,21 @@ state** (below + §9). These state names are authoritative in both backends.
 | `Backlog` | **The universal intake state (§5a)**: EVERY newly-discovered ticket lands here — PM ideation, QA bugs, Architect tech-debt, human intake (§9a) — plus a design's staged children (§21a). Not yet visible to any dev pick-query. | every filing agent + humans (on create); senior-dev (design-child staging, §21a) |
 | `Todo` | Groomed, ready to be picked up. **Reachable ONLY via PM promotion (§5a)** — with three carve-outs: an owner's verify-fail follow-up (already-groomed work, stays Todo), an un-block re-queue, and a CONFIRMED ops incident (prod-down cannot wait a PM fire). | PM (promotion, §5a); owner (verify-fail follow-up); Dev (un-block); Ops (confirmed incident only) |
 | `In Progress` | A Dev has claimed it and is actively working | Dev (claim) |
-| `In Review` | Dev finished; awaiting verification by the owner | Dev (done coding) |
-| `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9). Resumes to `Todo` on resolution. | PM (when it can't resolve a block) / operator |
+| `In Review` | Dev finished; awaiting verification by the owner. **Re-read the ticket immediately before this move** — see below | Dev (done coding) |
+| `Human-Blocked` | **(`service` only)** Parked for the operator — an unresolvable human-only block (decision/credential/legal). The daemon periodically reminds the channel (§9). Resumes to `Todo` on resolution. **Only while `humanBlocked:"on"` (the default)**: under `"off"` nobody is coming, the write layer refuses an agent's move into it, and PM decides and records a `Ruling:` instead (§9). | PM (when it can't resolve a block) / operator |
 | `Done` | Verified passing against acceptance criteria | Owner (PM/QA) |
 | `Canceled` | Won't-do / obsolete / superseded | Any agent, with a comment why |
 | `Duplicate` | Same as another ticket; set `duplicateOf` | Dev (during grooming) |
+
+**Re-read before the hand-off (`In Progress` → `In Review`).** A claimed ticket has no inbound channel
+(§7): everything written on it after your claim — a `blocked` label, a `Blocked-by:` edge, a comment
+telling you to stop — arrives where nothing is reading. So immediately before moving to `In Review`,
+re-fetch the ticket and read its `.state`, its `.labels`, and every comment added since you claimed it.
+If a `blocked` label or a `Blocked-by:` edge appeared in that window, **park instead of handing off**:
+`Todo` + `blocked` + a `Bail-shape:` comment naming the marker you found (§9). This is the same
+verify-after-write action §10 already requires on every state move; the only new part is that it also
+reads what arrived while you worked. Measured: a park instruction landed 13 minutes before a hand-off,
+the fire never saw it, and the ticket was canceled after the most expensive fire of its window.
 
 **Verify-fail ⇒ close + follow-up (the universal rule).** An `In Review` ticket that does NOT meet its ACs
 is `Canceled` with `review failed: <what failed / observed behaviour>; superseded by <new-id>` and a
@@ -412,6 +422,18 @@ Two Dev runs could race for the same ticket. The claim **is** the state move:
    another Dev won the race — drop it and pick the next one.
 4. Only then start coding.
 
+**A claimed ticket has no inbound channel.** The claim moves the ticket, not a mailbox: once a fire is
+running, nothing it holds is re-read until it chooses to re-read it, and a fire is a single forward pass.
+A comment you write on an `In Progress` ticket therefore reaches the **verifier** — whoever picks it up at
+`In Review` — and not the fire holding it. Two consequences, both binding:
+
+- **Writing to a held ticket:** address the verifier. Say what to check at `In Review` ("verify X was not
+  touched; if it was, verify-fail and re-file"), not what the holder should stop doing — the holder will
+  not read it. A stop instruction phrased at the holder reads as satisfied when the work lands anyway.
+- **Holding a ticket:** the §3 re-read before the hand-off is the one point where that mail is collected.
+  It is also why a REPLACE-style field (`labels`, §10) on a held ticket is safe to leave alone: the holder
+  will overwrite it. Carry the intent in a comment written for the verifier instead of racing the write.
+
 Same idea for verification: an owner verifying an `In Review` ticket should leave
 a comment as it starts, so a second verifier sees it's in progress. For an
 instantaneous verification/re-test you may fold that claim into your single
@@ -439,10 +461,16 @@ Two cases, and they compose:
 - **`git.landing:"pr"` (§12b/§12c) — even for the legacy solo `dev`.** The
   branch-per-ticket flow needs the shared checkout parked on `defaultBranch` anyway.
 
-The pattern (both cases): a dedicated `git worktree` on branch `dev-loop/<ticket-id>` at
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/wt/<ticket-id>` (outside the repo), created off the
+The pattern (both cases): a dedicated `git worktree` on branch `dev-loop/<ticket-id>` at a path outside
+the repo — ask for it, never compose it: `dev-loop worktree path <ticket-id> --repo <repo-ref>` prints it (`<workspace>/.dev-loop/wt/<ticket-id>/<repo-ref>`) — created off the
 up-to-date base, removed after landing; the shared checkout stays on `defaultBranch`; `git worktree prune`
 at fire-start; base-clone mutations run under `dev-loop with-repo-lock <repo-ref> -- <cmd>` (§27).
+**Never realign a shared checkout destructively.** `git reset --hard origin/<defaultBranch>` and
+`git checkout -B <defaultBranch> origin/<defaultBranch>` discard every landed-but-unpushed commit in
+the tree, including other lanes'. A refused `git pull --ff-only` means the branch diverged: publish
+what is there (`dev-loop push`) and retry — never discard. With a remote, landing by pushing
+`HEAD:<defaultBranch>` from the ticket's own worktree avoids the shared ref entirely.
+
 `"pr"` ⇒ push the branch + open the PR (§12b). `"direct"` ⇒ the **direct merge-back**: sync (fetch under
 the lock; rebase onto the advanced base; re-run the gate if commits came in), land ATOMICALLY under ONE
 lock (`checkout <defaultBranch> && pull --ff-only && merge --ff-only dev-loop/<id> && push`; a refusal ⇒
@@ -499,7 +527,8 @@ scan `project` + `dev-loop` + `blocked` + their owner label (always `project`-sc
 additionally scans `blocked`+`needs-pm` ACROSS owner labels** — and for each either **resolve** (answer /
 fix, remove `blocked` + `needs-*`, leave `Todo`, encode any safety in the ACs — resolving MEANS unblocking,
 never replying and leaving it parked; a standing block is reserved for human-only calls: irreversible prod
-actions, money, legal, security) or **cancel** (`Canceled`/`Duplicate` + comment). **Re-scan, don't
+actions, money, legal, security — and under **`team.humanBlocked:"off"`** even those are not parked: PM
+rules on them itself and only an external prerequisite waits, at `Backlog`+`blocked`+its labels) or **cancel** (`Canceled`/`Duplicate` + comment). **Re-scan, don't
 fire-and-forget:** an escalation resolves out-of-band as a comment and `blocked` may be stripped while
 `needs-*` lingers — re-read the latest comment on tickets you parked, treat `needs-*` without `blocked` as
 "finish the job", clear the stale label and act (a sensitive/irreversible action is executed ATTENDED by
@@ -709,8 +738,9 @@ else proceeds. Under `full`, escalate only those. Full text: `references/convent
 Orthogonal to `mode`/`autonomy`, each project's **`git.landing`** chooses HOW Dev lands a
 finished ticket. **Absent ⇒ `"direct"`.**
 
-- **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch` and,
-  per `git.autoPush`/`autoDeploy`, pushes and (if a `deploy.command` resolves) deploys
+- **`"direct"` (default)** — Dev commits to the target repo's resolved `defaultBranch`, **pushes it
+  when the repo has a remote configured** (no remote ⇒ the merge-back is the whole landing), and per
+  `git.autoDeploy` (if a `deploy.command` resolves) deploys
   (dev-agent Step 6/6.5). The human is not in the landing loop. **In a split-dev project
   (§21a) the commit still happens in the ticket's isolated worktree and reaches
   `defaultBranch` via the §7 direct merge-back sequence** — `direct` names WHERE the change
@@ -719,7 +749,7 @@ finished ticket. **Absent ⇒ `"direct"`.**
 - **`"pr"`** — Dev never commits to `defaultBranch`: per finished ticket it branches `dev-loop/<ticket-id>`
   off `origin/<defaultBranch>`, commits ONLY that ticket's files (§7), pushes, opens the PR (`gh pr create`),
   comments the URL and moves the ticket to **`In Review`**; it **never deploys** in `pr` mode (no Step 6.5);
-  `autoPush:false` ⇒ commit locally, report that a human must push. "Already shipped" (Step 0) = an
+  a repo with no remote cannot run `pr` at all. "Already shipped" (Step 0) = an
   open/merged PR referencing the id or the `dev-loop/<id>` branch on origin — never a commit on
   `defaultBranch`.
 
@@ -1012,7 +1042,7 @@ target decides your action):**
   `repos[]` wins.
 - **Resolution:** a per-repo setting = the repo's own value if present, else top-level — `build`,
   `defaultBranch` (⇐ `git.defaultBranch`), `landing`, `autoMerge`, `mergeChecks`, `deploy`,
-  `contributorSkill`; `autoCommit`/`autoPush`/`autoDeploy` stay product-level; an empty resolved `deploy`
+  `contributorSkill`; `autoCommit`/`autoDeploy` stay product-level; an empty resolved `deploy`
   skips deploy, never inheriting a sibling's; `role` is load-bearing, `lang` informational.
 - **The target is the `repo:<name>` label** (both backends; full-set re-pass §10 #1), **required** in a
   multi-repo project: missing/contradictory ⇒ Dev BLOCKS (`info-needed`/`scope-design`), Sweep flags,
@@ -1208,8 +1238,8 @@ capability, on by default, with no change to ticket / product / board behavior.
 
 **Resident rules (every agent, every fire):**
 - **Where:** machine-local, never committed, §16-bound (no secrets / verbatim PII) —
-  `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/{daily,weekly,monthly}/` (`<agent>` = the
-  full skill name, e.g. `pm-agent`), one file per period (`%F` / `%G-W%V` / `%Y-%m`), lazily created; `reports.sink:"linear"` (§23) is the opt-in alternative.
+  `${DEVLOOP_DATA_DIR}/<project-key>/reports/<handle>/{daily,weekly,monthly}/` (`<handle>` = the
+  agent's runtime handle, the value of `DEVLOOP_ACTOR` — e.g. `pm`, `junior-dev`), one file per period (`%F` / `%G-W%V` / `%Y-%m`), lazily created; `reports.sink:"linear"` (§23) is the opt-in alternative.
 - **Markers = the tree + a UTC shell call, never date reasoning:** `TODAY=$(date -u +%F)`,
   `WEEK=$(date -u +%G-W%V)`, `MONTH=$(date -u +%Y-%m)` (`-u` is load-bearing); the newest report per level
   matches ONLY the dated grammar (`^\d{4}-\d{2}-\d{2}\.md$` etc.), never a bare `*.md` glob.

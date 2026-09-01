@@ -117,6 +117,22 @@ publish through YOU, quoting the diff first. Product code changes ride tickets (
 daemon, pause, status, system) refuse over attach; that is correct, say so. Backups:
 `dev-loop bundle export --backup` on a schedule.
 
+### 6. Inspect the loop (DELEGATED)
+
+**You never read `run.log` or a runner-log here.** Nine hand inspections cost ~100k tokens each,
+nearly all raw log text. Spawn a FRESH sub-agent (an inspection carries no state) with this brief:
+
+> Run `dev-loop inspect --json` and read it — a model-free snapshot of scheduler + in-flight,
+> daemons, board counts + stalled claims, fires by agent/errorClass/cost, breaker, doctor CODES,
+> repo + worktree git state, per-lane last fire, and `warnings` (each carrying its evidence). Dig
+> only into an object a warning NAMES (e.g. one lane's runner-log tail); never survey. Report four
+> sections: **status** (`normal`/`degraded`/`stalled` + the field it came from) · **changes since
+> last time** · **problems + proposed action**, each traced to its warning or code · **needs a human
+> decision** (or none).
+
+Cadence (`/loop 30m`, cron) or on demand. NOT a scheduler lane: no ticket, no board write, no fire.
+The inspecting agent reports; you act from this session.
+
 ## HARD LIMITS
 
 - **Config through mutators only** — never hand-edit `dev-loop.json` (E-codes catch what a hand-edit

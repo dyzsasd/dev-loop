@@ -4,8 +4,8 @@
 // FAIL-SOFT: a section that cannot be computed reports {error} and never blocks its siblings, and
 // (d) the CLI surface (--json, --project, text mode's NEXT line, the workspace-less one-liner).
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -18,12 +18,13 @@ import { writeProposal } from "../src/system-propose.ts";
 import { BREAKER_STATE_SCHEMA, type BreakerStateFile } from "../src/breaker.ts";
 import { breakerStatePath, teamDirOf } from "../src/scheduler-build.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-status-")));
+const tmp = realpathSync(tmpRoot("dl-status-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string | undefined> = {}) => ({ ...scrubFireEnv(), DEVLOOP_HOME: HOME, ...extra } as NodeJS.ProcessEnv);
 const cli = (args: string[], cwd: string, extra: Record<string, string | undefined> = {}) => {
@@ -164,12 +165,39 @@ try {
   const lt = renderStatus(rl);
   ok(/breakers \[live\]: OPEN provider openrouter:auth ×9 → junior-dev,qa \(next probe in 1m\) · OPEN sweep \(no-output\) ×7 \(probe in flight\)/.test(lt) && !/approximate/.test(lt),
     `renderStatus: live entries with lanes, next probe, probe-in-flight, and no replay caveat (${lt.split("\n").find((l) => /breakers/.test(l))})`);
+  // A scheduler that STOPPED wrote this file on its own way out, together with `reason`. That is the last
+  // statement the process made about itself, and it beats a replay — which cannot see half-open state,
+  // probe timing or unclassified-failure identity, and which reaches back a fixed 24 h ACROSS scheduler
+  // generations. Field case: a stopped workspace reported `streak provider anthropic:rate-limit ×3`
+  // replayed from fires 15 h earlier under a previous scheduler, while the file recorded no provider
+  // entries at all. So this case is `final`, not `replay` — it is served from the file, with a note
+  // saying when the scheduler stopped. The three cases below stay `replay`: a dead writer may have been
+  // cut off mid-write, a foreign writer is not ours, and an unknown schema cannot be read.
   writeFileSync(bpath, JSON.stringify(liveFile({ stoppedAt: iso(NOW - 1000) })));
   const rs = await statusReport(ws, { nowMs: NOW });
-  ok(!isSectionError(rs.scheduler) && rs.scheduler.breakers.source === "replay" && rs.scheduler.breakers.providers[0]?.streak === 5 && typeof rs.scheduler.breakers.note === "string", "stale (stoppedAt set): the replay, marked source=replay with the caveat");
+  const rsb = isSectionError(rs.scheduler) ? null : rs.scheduler.breakers;
+  ok(rsb?.source === "final" && rsb.providers[0]?.streak === 9 && rsb.agents[0]?.state === "half-open",
+    `stopped cleanly: the scheduler's OWN final state, not a replay (source=${rsb?.source}, provider streak ${rsb?.providers[0]?.streak})`);
+  ok(typeof rsb?.note === "string" && /stopped at/.test(rsb.note) && !/approximate/.test(rsb.note),
+    `stopped cleanly: the note says it is a recorded final state, not an approximation (${rsb?.note ?? "<none>"})`);
+  // …but a fire ledgered AFTER the stop means the file no longer describes the state, and the replay is
+  // right again. This is the one condition that can invalidate a cleanly stopped file.
+  writeFileSync(bpath, JSON.stringify(liveFile({ stoppedAt: iso(NOW - 7_200_000) })));
+  const rsf = await statusReport(ws, { nowMs: NOW });
+  const rsfb = isSectionError(rsf.scheduler) ? null : rsf.scheduler.breakers;
+  ok(rsfb?.source === "replay" && /after the breaker.json was written/.test(rsfb.note ?? ""),
+    `stopped, then fires happened: back to the replay, and the note says why (source=${rsfb?.source}, note=${rsfb?.note?.slice(0, 80) ?? "<none>"})`);
+
   writeFileSync(bpath, JSON.stringify(liveFile({ pid: 2147483000 })));
   const rd = await statusReport(ws, { nowMs: NOW });
   ok(!isSectionError(rd.scheduler) && rd.scheduler.breakers.source === "replay", "stale (dead pid): the replay");
+  // The run lock here is alive and names a different pid, so this file is FOREIGN before it is stale —
+  // the lock is the authority on which process is the scheduler. What matters is that the caveat names
+  // the reason that actually applied: the old note asserted "the scheduler wrote no live breaker.json"
+  // for all four fallbacks, which was false in three of them.
+  ok(!isSectionError(rd.scheduler) && /a pid the run lock does not vouch for/.test(rd.scheduler.breakers.note ?? "")
+     && !/wrote no breaker\.json/.test(rd.scheduler.breakers.note ?? ""),
+    `…and the caveat names the reason that applied, not a blanket claim (${isSectionError(rd.scheduler) ? "<err>" : (rd.scheduler.breakers.note ?? "<none>").slice(0, 90)})`);
   writeFileSync(bpath, JSON.stringify(liveFile({ pid: process.ppid })));
   const rf = await statusReport(ws, { nowMs: NOW });
   ok(!isSectionError(rf.scheduler) && rf.scheduler.breakers.source === "replay", "foreign (an alive pid that is not the lock holder): the replay — the lock names the scheduler");

@@ -28,7 +28,7 @@ Compute today's key with a shell call (`TODAY=$(date -u +%F)`), never by reasoni
 output file for TODAY; if it already exists and the user did not explicitly ask for a rewrite ⇒ no-op
 and report the existing path (a daily agent never generates competing articles for one date). Output
 paths (§21): `output:"data"` ⇒
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/communications/YYYY-MM-DD.md`; `output:"repo"` ⇒ the
+`${DEVLOOP_DATA_DIR}/<project-key>/communications/YYYY-MM-DD.md`; `output:"repo"` ⇒ the
 doc-home repo under `repoOutputDir`, left for operator review. Retention (§22, D6): prune `data` drafts
 past the 90-day tail at fire start; `repo` drafts are operator-reviewed — never delete, note an
 over-retention tail in your report. In `dry-run`: print the title, outline, source list, and target

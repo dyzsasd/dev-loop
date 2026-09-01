@@ -3,6 +3,7 @@
 // an operator-known fact; the output is deterministic scaffolding (dev-loop.json + .dev-loop/ tree, and
 // for a service backend the hub.db + seeded _team intake project). Backend writes (verify Linear team,
 // labels, create projects) are deferred to the first `/dev-loop:add-project`, which runs in a coding CLI.
+import { writeConfigAtomic } from "./atomic-write.ts";
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -148,7 +149,7 @@ export function teamInit(argv = process.argv.slice(2), opts: { next?: boolean } 
     try { console.log(readFileSync(filePath, "utf8").split("\n").map((l) => "  | " + l).join("\n")); } catch { /* unreadable */ }
   }
 
-  writeFileSync(filePath, JSON.stringify(file, null, 2) + "\n");
+  writeConfigAtomic(filePath, JSON.stringify(file, null, 2) + "\n"); // tmp+rename — see team-edit.ts
   const ws: Workspace = { root: o.dir, filePath, file, warnings: [] };
   ensureStateDirs(ws);
   upsertWorkspaceIndex(o.key, o.dir);

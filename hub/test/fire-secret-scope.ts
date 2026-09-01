@@ -10,18 +10,19 @@
 // The differential below is the reproduction: two keys, same file, same fire, neither in the fire's
 // keep-set, one pre-exported. Before the fix exactly one of them is stripped.
 import { spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { parseSecretsEnv, secretsDeclaredKeys, secretsInjectedKeys, scopeFireSecrets, loadWorkspaceSecrets } from "../src/secrets.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-fire-secret-scope-"));
+const tmp = tmpRoot("dl-fire-secret-scope-");
 try {
 
 // ── AC4: the declared-key set reuses parseSecretsEnv, and is silent on an absent file ─────────────

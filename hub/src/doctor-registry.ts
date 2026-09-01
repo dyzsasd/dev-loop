@@ -569,9 +569,10 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       await checkConsecutiveFailures(ctx.ws, ctx.out.warn);
     },
   },
-  // Row 34 — W46 (unroutable block, Decision 1). Board scope: a blocked ticket with no bail-shape
-  // label and no parseable Bail-shape comment cannot be routed to an unblock owner. NEW check, so it
-  // carries no design §7 number and does not renumber the rows above.
+  // Row 34 — W46 (unroutable block, Decision 1). Board scope: a blocked ticket reaching none of the
+  // three routable signals — a bail-shape label, a parseable Bail-shape comment, or a live
+  // `Blocked-by:` edge — cannot be routed to an unblock owner. NEW check, so it carries no design §7
+  // number and does not renumber the rows above.
   {
     codes: ["W46"],
     id: "w46-blocked-no-bailshape",

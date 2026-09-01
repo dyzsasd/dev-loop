@@ -17,15 +17,15 @@ Reports are **machine-local per-operator runtime state**, never committed (like
 **namespaced per project and per agent**:
 
 ```
-${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/reports/<agent>/
+${DEVLOOP_DATA_DIR}/<project-key>/reports/<handle>/
   daily/    2026-06-19.md        # one file per calendar day (ISO date, %F)
   weekly/   2026-W25.md          # one file per ISO week (%G-W%V)
   monthly/  2026-06.md           # one file per month (%Y-%m)
 ```
 
-`<agent>` is the full skill name (`pm-agent` / `qa-agent` / `dev-agent` / `senior-dev-agent` /
-`junior-dev-agent` / `sweep-agent` / `reflect-agent` / `ops-agent` / `architect-agent` /
-`communication-agent`). The tree is created
+`<handle>` is the agent's runtime handle — the value the fire receives as `DEVLOOP_ACTOR` (`pm` /
+`qa` / `dev` / `senior-dev` / `junior-dev` / `sweep` / `reflect` / `ops` / `architect` /
+`communication`), with no `-agent` suffix. The tree is created
 **lazily on first write** (init may scaffold it, §13). The operator reads these on disk
 exactly like `lessons.md` / the state files.
 
@@ -115,7 +115,7 @@ The operator critiques a report by dropping a **sibling file** next to it:
 **`<report>.review.md`** (e.g. `daily/2026-06-18.md.review.md`). This is the **one**
 canonical channel — chosen over an in-file section because the daily is append-only (a
 sibling never collides with the agent's own writes) and it is detected deterministically
-by globbing `reports/<agent>/**/*.review.md`. A review is **optional** — most reports have
+by globbing `reports/<handle>/**/*.review.md`. A review is **optional** — most reports have
 none; its content is free-form operator prose.
 
 **Trust boundary (load-bearing for the firewall below).** A review is **ONLY** a sibling
@@ -204,11 +204,11 @@ writes" contract.)
 ### Reflect overlap — no double-write
 Reflect already writes a **daily loop-level retrospective** and curates `lessons.md` (§17).
 That retrospective **IS Reflect's §22 daily report** — Reflect **writes it to**
-`reports/reflect-agent/daily/<date>.md` (not just printed) and authors no second daily. On
+`reports/reflect/daily/<date>.md` (not just printed) and authors no second daily. On
 a **quiet-window bail** (Reflect exits at Job 0 before the retro), it still appends the §22
 idle entry (`idle — no activity`) so a quiet day isn't a missing report. A **2nd same-day**
 Reflect fire appends a clearly-delimited delta (uniform append model). Reflect's per-agent
-**weekly / monthly** files under `reports/reflect-agent/{weekly,monthly}/` **are** the
+**weekly / monthly** files under `reports/reflect/{weekly,monthly}/` **are** the
 loop-level cross-agent roll-ups (third-person, across all agents) — one artifact, no second
 file. Every other agent still owns its **first-person** per-agent reports and its own
 review→lessons loop; the two coexist (per-agent "what I did" vs Reflect's loop-level "what

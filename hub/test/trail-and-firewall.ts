@@ -7,15 +7,16 @@
 // Each was written down as a hard invariant, in STRATEGY.md or conventions, and each was enforced by
 // nothing but whether a human happened to look.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { checkInRepoWorktrees } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { reportTrailGaps } from "../src/metrics.ts";
 import { pushGuard, touchesOutsideCheatsheet, cheatsheetRanges } from "../src/push-guard.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-trail-")));
+const tmp = realpathSync(tmpRoot("dl-trail-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const git = (dir: string, ...a: string[]): string =>
@@ -54,18 +55,19 @@ try {
       fireRow("sweep", ago(1 * HOUR)),
     ].join("\n") + "\n");
 
-    // qa reported today; sweep reported today; junior-dev never did. The `<handle>-agent` mapping is
-    // the thing most likely to be wrong, and getting it wrong makes EVERY agent look untraced.
-    mkdirSync(join(reports, "qa-agent", "daily"), { recursive: true });
-    writeFileSync(join(reports, "qa-agent", "daily", `${ago(1 * HOUR).slice(0, 10)}.md`), "# qa\n");
-    mkdirSync(join(reports, "sweep-agent", "daily"), { recursive: true });
-    writeFileSync(join(reports, "sweep-agent", "daily", `${ago(1 * HOUR).slice(0, 10)}.md`), "# sweep\n");
+    // qa reported today; sweep reported today; junior-dev never did. The directory segment is the
+    // RUNTIME handle (DEVLOOP_ACTOR) — the name every fire writes under — and getting it wrong makes
+    // EVERY agent look untraced.
+    mkdirSync(join(reports, "qa", "daily"), { recursive: true });
+    writeFileSync(join(reports, "qa", "daily", `${ago(1 * HOUR).slice(0, 10)}.md`), "# qa\n");
+    mkdirSync(join(reports, "sweep", "daily"), { recursive: true });
+    writeFileSync(join(reports, "sweep", "daily", `${ago(1 * HOUR).slice(0, 10)}.md`), "# sweep\n");
 
     const gaps = reportTrailGaps(ledger, reports);
     ok(gaps.length === 1 && gaps[0].agent === "junior-dev" && gaps[0].fires === 4,
       `LOOP-28: exactly one finding — junior-dev, 4 fires, no report (got ${JSON.stringify(gaps.map((g) => `${g.agent}:${g.fires}`))})`);
-    ok(gaps[0].expectedDir.endsWith(join("junior-dev-agent", "daily")),
-      `LOOP-28: …naming the expected <handle>-agent path (${gaps[0].expectedDir})`);
+    ok(gaps[0].expectedDir.endsWith(join("junior-dev", "daily")),
+      `LOOP-28: …naming the expected <handle> path (${gaps[0].expectedDir})`);
     ok(!gaps.some((g) => g.agent === "qa"), "LOOP-28: an agent that fired AND reported produces no finding");
     ok(!gaps.some((g) => g.agent === "sweep"), "LOOP-28: a workspace-scoped agent reporting correctly does not false-positive");
     ok(!gaps.some((g) => g.agent === "pm"), "LOOP-28: an agent with ZERO fires produces no finding — that is W16's job, not this one");
@@ -73,8 +75,8 @@ try {
     // A report from OUTSIDE the window does not excuse fires inside it. This is the case a
     // "directory is non-empty" check passes and must not: the trail has to cover the days worked.
     const stale = join(tmp, "reports-stale");
-    mkdirSync(join(stale, "junior-dev-agent", "daily"), { recursive: true });
-    writeFileSync(join(stale, "junior-dev-agent", "daily", "2020-01-01.md"), "# ancient\n");
+    mkdirSync(join(stale, "junior-dev", "daily"), { recursive: true });
+    writeFileSync(join(stale, "junior-dev", "daily", "2020-01-01.md"), "# ancient\n");
     ok(reportTrailGaps(ledger, stale).some((g) => g.agent === "junior-dev"),
       "LOOP-28: a report from outside the window does NOT excuse fires inside it");
 
@@ -103,8 +105,8 @@ try {
       JSON.stringify({ ts: new Date(Date.now() - 1 * HOUR).toISOString(), agent: "sweep", fireId: "s1", exitCode: 0 }),
     ].join("\n") + "\n");
     // _team has reports for reflect, not for sweep (legacy)
-    mkdirSync(join(teamReports, "reflect-agent", "daily"), { recursive: true });
-    writeFileSync(join(teamReports, "reflect-agent", "daily", `${new Date(Date.now() - 1 * HOUR).toISOString().slice(0, 10)}.md`), "# reflect\n");
+    mkdirSync(join(teamReports, "reflect", "daily"), { recursive: true });
+    writeFileSync(join(teamReports, "reflect", "daily", `${new Date(Date.now() - 1 * HOUR).toISOString().slice(0, 10)}.md`), "# reflect\n");
 
     // AC 1: team-scoped fires with reports present → 1 finding for legacy sweep (no _team reports for sweep)
     const teamPresentGaps = reportTrailGaps(ledger, teamReports, { project: "_team" });

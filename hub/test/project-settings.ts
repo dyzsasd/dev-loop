@@ -14,19 +14,20 @@
 // planted in the same tree and MUST fail. Without it, deleting node's resolution error (or pointing
 // the harness at a tree that does have node_modules) would turn every arm green.
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { cpSync, rmSync, writeFileSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { humanWriteEnabled } from "../src/project-settings.ts";
 import { openDb } from "../src/db.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-project-settings-")));
+const tmp = realpathSync(tmpRoot("dl-project-settings-"));
 
 try {
   // ── AC2 — the leaf loads from a tree with no node_modules ────────────────────────────────────

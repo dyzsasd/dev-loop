@@ -24,7 +24,7 @@ The Communication agent is the team's PR/media drafting role. It reads the strat
 the published roadmap when available, recent verified Done work, changelog/git facts, and
 the public product surface, then writes at most one article **draft** per cadence
 (`communication.cadence`, daily by default). Its output is either machine-local under
-`${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project-key>/communications/YYYY-MM-DD.md` or, when
+`${DEVLOOP_DATA_DIR}/<project-key>/communications/YYYY-MM-DD.md` or, when
 `communication.output:"repo"` is explicitly set, a Markdown draft under the doc-home repo's
 `communication.repoOutputDir` (default `docs/communications/`). It never publishes to a CMS,
 social channel, email list, or webhook; never commits/pushes/deploys; and never transitions or

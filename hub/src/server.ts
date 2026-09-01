@@ -14,15 +14,12 @@ import { ok, err, registerTools } from "./tooldefs.ts"; // DL-85: the ONE {name,
 import { hubDbPath } from "./paths.ts";
 
 // ─── Environment / identity ──────────────────────────────────────────────────
-const DB_PATH = hubDbPath();
-// DL-85: the DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd resolution lives ONCE in resolve-project.ts (was re-derived
-// here AND in shim.ts). An EXPLICIT DEVLOOP_PROJECT wins; else cwd-resolve (DL-13: an agent launched inside a
-// project folder auto-pins it); else unresolved. projectFromCwd drives the clearer not-seeded error below.
-const { actor: ACTOR, projectKey: PROJECT_KEY, projectFromCwd, projectResolved } = resolveIdentity();
-
 // `dev-loop-hub resolve-project [--cwd <path>]` (DL-13) — print the project KEY whose repo CONTAINS the
 // cwd (default: process.cwd()), or exit non-zero with no output. The launcher reuses THIS matcher so the
 // launcher, the hub fallback, and any prose agree on exactly ONE rule.
+// It runs BEFORE DB_PATH is composed: the answer comes from the project registry alone, and
+// hubDbPath() now refuses when neither a workspace nor an env var names a board — which would turn a
+// question that has a perfectly good answer into a startup failure.
 if (process.argv[2] === "resolve-project") {
   const cwd = process.argv[3] === "--cwd" && process.argv[4] ? process.argv[4] : process.cwd();
   const cfg = loadProjectsConfig();
@@ -30,6 +27,12 @@ if (process.argv[2] === "resolve-project") {
   if (key) { console.log(key); process.exit(0); }
   process.exit(1); // no match → empty stdout, non-zero → the launcher leaves DEVLOOP_PROJECT unset
 }
+
+const DB_PATH = hubDbPath();
+// DL-85: the DEVLOOP_ACTOR + DEVLOOP_PROJECT/cwd resolution lives ONCE in resolve-project.ts (was re-derived
+// here AND in shim.ts). An EXPLICIT DEVLOOP_PROJECT wins; else cwd-resolve (DL-13: an agent launched inside a
+// project folder auto-pins it); else unresolved. projectFromCwd drives the clearer not-seeded error below.
+const { actor: ACTOR, projectKey: PROJECT_KEY, projectFromCwd, projectResolved } = resolveIdentity();
 
 // `dev-loop-hub doctor` — read-only health check (no server, no auto-create).
 if (process.argv[2] === "doctor") {
@@ -90,7 +93,7 @@ if (!actorExists(db, ACTOR)) {
 // board the agent then works in by mistake. The project must already exist; create it deliberately
 // once (`node src/seed.ts <key> <name> <UNIQUE_PREFIX>`) or opt in with DEVLOOP_CREATE_PROJECT=1.
 if (!projectResolved) {
-  console.error("[hub] no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a repo configured in ~/.dev-loop/projects.json.");
+  console.error("[hub] no project resolved. Set DEVLOOP_PROJECT=<key>, or run from inside a workspace repo. 1.0 no longer reads ~/.dev-loop/projects.json — create a workspace with `dev-loop team init`, or migrate a v1 setup once with `dev-loop team import`.");
   process.exit(1);
 }
 const projectId =

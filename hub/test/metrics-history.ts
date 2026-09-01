@@ -4,11 +4,12 @@
 // fail-before/pass-after: run against the pre-fix code and this assertion
 // FAILS; run against the shipped code and it PASSES.
 
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-m352-")));
+import { join } from "node:path";
+import { tmpRoot } from "./tmp-root.ts";
+
+const tmp = realpathSync(tmpRoot("dl-m352-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

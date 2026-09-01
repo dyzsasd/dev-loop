@@ -29,7 +29,7 @@ import { DatabaseSync } from "node:sqlite";
 import { openDb, actorExists, fireIdStore } from "./db.ts";
 import { findProject } from "./seed.ts";
 import { loadProjectsConfig, repoFileStrategyPath } from "./resolve-project.ts"; // + docs P3b: the ONE strategyDoc→repo-file rule (doc-home, §19)
-import { hubDbPath, pkgVersion, pkgVersionFresh, pkgBuildCommit, pkgBuildCommitFresh } from "./paths.ts";
+import { hubDbPath, tryHubDbPath, pkgVersion, pkgVersionFresh, pkgBuildCommit, pkgBuildCommitFresh } from "./paths.ts";
 import { resolveDoc, docSave, docPublish, statusForDocErr, type DocKind } from "./docstore.ts";
 import { createTicket, addComment, moveTicket, assignTicket } from "./ticketwrite.ts";
 import { agentOp, AGENT_WRITE_OPS, isAgentOp, resolveProjectOverride } from "./agentops.ts"; // DL-43: the daemon agent op-API's 5-op core (mirrors server.ts)
@@ -498,7 +498,7 @@ export function startProjectNotifiers(deps: {
         timers.push(snapTimer);
         active.push("board-snapshot");
         log(`[daemon] board snapshot active (every ${Math.round(cfg.intervalMs / 60_000)} min, keep ${cfg.keep} → ${cfg.dir})`);
-      } else log(`[daemon] board snapshot DISABLED (team.backup.everyHours = 0)`);
+      } else log(`[daemon] board snapshot DISABLED (${cfg.source === "env" ? "DEVLOOP_BOARD_SNAPSHOT_MS" : "team.backup.everyHours"} = 0)`);   // name the field that actually produced the 0 — blaming everyHours for an env override sends the operator to the wrong file
     }
   } catch (e) { log(`[daemon] board snapshot not started: ${(e as Error)?.message ?? String(e)}`); }
   return { active, timers };
@@ -526,6 +526,7 @@ interface RouteCtx {
   projectKey: string;
   prefixed: boolean;
   authedByToken: boolean;
+  tokenConfigured: boolean;   // a token is set for this daemon (so an unauthenticated caller is a stranger, not the local operator)
   db: DatabaseSync;
   writeDb?: DatabaseSync;
   canWrite: boolean;
@@ -581,7 +582,7 @@ function resolvePathProject(res: ServerResponse, db: DatabaseSync, seg0: string[
 // opt-in) and the DL-19 Origin/Host guard BEFORE any mutation; the op-API owns the whole /api/op/* path
 // (a dormant mount 404s). Bodies delegate to handleDocWrite / handleTicketWrite / handleAgentOp.
 async function handleWriteRoutes(ctx: RouteCtx): Promise<boolean> {
-  const { req, res, method, seg, path, projectId, projectKey, authedByToken, db, writeDb, canWrite, actor, pg, divergenceFor } = ctx;
+  const { req, res, method, seg, path, projectId, projectKey, authedByToken, tokenConfigured, db, writeDb, canWrite, actor, pg, divergenceFor } = ctx;
   const isDocWrite = seg.length === 3 && seg[0] === "doc" && (seg[2] === "save" || seg[2] === "publish");
   const isRoadmapAlias = path === "/roadmap/save" || path === "/roadmap/publish";
   if (method === "POST" && canWrite && (isDocWrite || isRoadmapAlias) && humanWriteEnabled(db, projectId)) {
@@ -681,7 +682,7 @@ function serveStream(ctx: RouteCtx): void {
 // health, tickets, tickets/:id, docs, docs/:kind, then the terminal 404 fallthrough (an unknown /api/* →
 // JSON 404; a page navigation → the friendly HTML 404, DL-36). Always returns true — it owns the dispatch tail.
 function handleApiRoutes(ctx: RouteCtx): boolean {
-  const { res, url, seg, path, projectId, projectKey, db, writeDb, actor, pg, rawPath } = ctx;
+  const { res, url, seg, path, projectId, projectKey, db, writeDb, actor, pg, rawPath, authedByToken, tokenConfigured } = ctx;
   if (path === "/api") {
     json(res, 200, {
       name: "dev-loop-hub daemon", project: projectKey, readOnly: true,
@@ -697,9 +698,19 @@ function handleApiRoutes(ctx: RouteCtx): boolean {
     // Use ctx.dbPath (the actual opened path) not workspaceId (which ignores DEVLOOP_HUB_DB overrides).
     const dbPresent = existsSync(ctx.dbPath);
     const buildCommit = pkgBuildCommit();
+    // …and `entryPath` is an absolute filesystem path, so it answers to the same rule. It was added later
+    // (LOOP-252) into the one response the rule above was written to protect: a caller with no token
+    // learned where the tree is installed. Included only when the request is authenticated, or when no
+    // token is configured at all — the loopback-only posture where this daemon's whole surface is already
+    // local. `daemon up` keeps its "running daemon is NEWER" line either way: it falls back to the
+    // runfile's own entryPath, which is a local file and never crossed HTTP.
+    // buildCommit stays ungated deliberately: sameDaemonCode reads it over health to decide whether to
+    // restart a skewed daemon, and an absent value reads as "same code", which would silently disable
+    // that check. It is a version fingerprint, not a path.
+    const entry = authedByToken || !tokenConfigured ? { entryPath: ctx.entryPath } : {};
     json(res, h.ok ? 200 : 503, h.ok
-      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), buildCommit, actor, dbPresent, entryPath: ctx.entryPath }
-      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), buildCommit, actor, dbPresent, error: h.error, entryPath: ctx.entryPath });
+      ? { ok: true, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), buildCommit, actor, dbPresent, ...entry }
+      : { ok: false, service: "dev-loop-hub", pid: process.pid, project: projectKey, version: pkgVersion(), buildCommit, actor, dbPresent, error: h.error, ...entry });
     return true;
   }
   if (path === "/api/tickets") {
@@ -782,7 +793,10 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
   // WS_ID is the authenticated surface's identity affordance — shows which workspace's board you're on.
   const DAEMON_VER = daemonVersionOpt ?? pkgVersion();
   const DAEMON_BUILD_COMMIT = pkgBuildCommit();
-  const WS_ID = daemonDbPath ?? hubDbPath();
+  // Empty when the caller named no db AND nothing resolves: WS_ID is a display identity and the
+  // inode probe's input, so an unresolvable board is "no identity to show", not a reason to refuse
+  // to construct the daemon. The processes that need a real board resolve it before they get here.
+  const WS_ID = daemonDbPath ?? tryHubDbPath() ?? "";
   // LOOP-367: the inode this daemon actually opened. Captured here rather than accepted as an option so no
   // caller can forget to pass it — every daemon, including the ones tests spawn, gets the swap check.
   const OPENED = ((): { path: string; ino: number } | undefined => {
@@ -839,7 +853,7 @@ export function createDaemon({ db, projectId: bootProjectId, projectKey: bootPro
       if (rp.done) return;
       const { seg, path, projectId, projectKey, prefixed } = rp;
       const ctx: RouteCtx = {
-        req, res, method, url, rawPath, seg, path, projectId, projectKey, prefixed, authedByToken,
+        req, res, method, url, rawPath, seg, path, projectId, projectKey, prefixed, authedByToken, tokenConfigured: uiToken !== null,
         db, writeDb, canWrite, actor, pg, divergenceFor, getBasePageOpts, dbPath: daemonDbPath ?? "", opened: OPENED, entryPath: daemonEntryPath, stream: streamGate,
       };
 

@@ -4,9 +4,9 @@
 // LOOP-65 regression: merge-guard --apply path writes objection comment + routes ticket on trip;
 // read path (no --apply) writes nothing; no-DB degrades silently; idempotent on re-run.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, chmodSync } from "node:fs";
+import { rmSync, writeFileSync, mkdirSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb, isToolWriteEventData } from "../src/db.ts";
 // LOOP-300 regression: a --strict run that evaluated NEITHER axis must not report a clean pass,
@@ -17,10 +17,11 @@ import { mergeGuard, skipClass, unevaluatedHold, registryGhRepos, buildCommentBo
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-merge-guard-"));
+const ROOT = tmpRoot("dl-merge-guard-");
 try {
   // ── Fixture: hub.db with tickets in each board state ──────────────────────────
   const dbPath = join(ROOT, "hub.db");
@@ -660,7 +661,7 @@ try {
   // ── LOOP-123 regression: agentReviewers read from workspace config (not just injected opts) ─────
   // Verify the full path: `team set team.agentReviewers` writes config → merge-guard reads it without
   // any opts.agentReviewers injection → the agent reviewer's CHANGES_REQUESTED is excluded.
-  const wsDir = mkdtempSync(join(tmpdir(), "dl-mg-ws-"));
+  const wsDir = tmpRoot("dl-mg-ws-");
   try {
     // 1. Minimal valid service workspace (hand-created for setup; agentReviewers written by mutator below)
     writeFileSync(join(wsDir, "dev-loop.json"), JSON.stringify({

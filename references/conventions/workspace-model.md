@@ -10,8 +10,9 @@
   (`toLegacyView`), so every existing agent contract (§3/§4/§12b/§12c/reports) is unchanged.
 - **Portability (I4).** All run state is under `<workspace>/.dev-loop/` (per-project dirs, `team/`,
   `lessons/`, `wt/`, `locks/`, and for service `hub.db`). Copying the workspace folder migrates the
-  machine; only env vars + credentials (§16) follow separately. `~/.dev-loop/` holds just a rebuildable
-  index. After a move run `dev-loop team repair` (fixes worktree absolute paths, re-registers the index,
+  machine; only env vars + credentials (§16) follow separately. The one file outside the workspace is a
+  rebuildable index (`${XDG_CONFIG_HOME:-~/.config}/dev-loop/workspaces.json`) that maps `DEVLOOP_TEAM`
+  to a workspace root. After a move run `dev-loop team repair` (fixes worktree absolute paths, re-registers the index,
   truncates the WAL).
 - **Secrets (§16 extends).** `team.comms.webhookEnv` stores an ENV-VAR **name**, never the URL; a value
   containing `://` is rejected (`E07`). This is what keeps "copy the folder" safe — no secret ever lands

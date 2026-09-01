@@ -116,3 +116,14 @@ export function defaultBranchPushRefusalLine(v: DefaultBranchPushVerdict): strin
     : `this project has no repo-file strategyDoc, so NOTHING may land on '${v.branch}' directly`;
   return `⛔ landing: this repo is landing:"pr" and the range would push code to '${v.branch}' — ${shown}. ${allowNote}. Route: put these commits on a dev-loop/<ticket-id> branch and open a PR (\`dev-loop push\` + \`gh pr create\`); Step 0.5 lands it with \`dev-loop pr merge\`. §7's merge-back sequence is the landing:"direct" path and does not apply here.`;
 }
+
+/**
+ * The refusal for a merge commit in the range a direct landing would fast-forward onto the base.
+ *
+ * Shared because push-guard printed it and `dev-loop push` did not enforce the class at all — the two
+ * surfaces have to say the same sentence about the same commit, and a second copy is how the last few
+ * of these drifted.
+ */
+export function mergeCommitRefusalLine(m: { sha: string; subject: string }, defaultBranch: string): string {
+  return `merge commit: ${m.sha} "${m.subject}" — a direct landing fast-forwards ${defaultBranch} onto this branch, so this would put a merge commit on ${defaultBranch}. Rebase onto the base instead (§7: rebase, then land --ff-only), then re-run this guard.`;
+}

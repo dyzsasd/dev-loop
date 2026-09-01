@@ -51,7 +51,10 @@ create is the mirror-poller intake, a human's words). Terminal tickets are never
 one create — via SH-file-ticket; the §9c tracker pass follows SH-block-park.
 
 **Exit.** Every crack is re-routed to an owner, reset, or flagged in the digest; nothing stranded
-outside every owner query; the digest emitted. A clean board is a terse no-op; `dry-run` writes nothing.
+outside every owner query; the digest emitted **and written as this fire's §22 daily report whenever the
+fire mutated the board** — a digest that exists only in the fire's stdout is not a durable trail, and the
+board writes it justifies are then invisible in the only record the operator reads. A clean board is a
+terse no-op (no material work, so no report); `dry-run` writes nothing.
 
 **When blocked.** An ambiguous type/owner/repo is reported in the digest as a fact, never guessed (a
 wrong re-label mis-routes work). A §16 broader-access finding stops and surfaces.
@@ -123,8 +126,8 @@ dev-loop op <op-name> [--args-json '<JSON>']
     Dispatch any hub op; args ride --args-json, or stdin when --args-json is absent and stdin is piped.
 # save_issue (update)
 dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
-    HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--blocked-by ids] [--unblocked-by ids]
+    HAZARD: labels REPLACE the full set (re-pass all). --blocked-by writes the §9c marker ('Blocked-by: <id>') AND adds 'blocked' to the ticket's CURRENT label set (no re-pass needed); --unblocked-by writes the retirement marker ('Unblocked-by: <id>'), bare-line form.
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 # list_issue_labels
 dev-loop labels

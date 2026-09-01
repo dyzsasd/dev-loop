@@ -18,14 +18,13 @@ import { servableTodoDepth, servableBacklogDepth } from "./servable.ts"; // LOOP
 import { tryResolveStrategyDocStat, type StrategyDocStat } from "./context-bill.ts"; // LOOP-282: the §20 form-rule resolver, shared with the bill
 import { STRATEGY_DOC_MAX_BYTES, STRATEGY_DOC_WARN_FRACTION } from "./lessons.ts";
 import { reportTrailGaps, type DecisionItem } from "./metrics.ts"; // LOOP-28: W35 shares the finding shape with the metrics sibling
-import { reportsRoot } from "./views/reports.ts"; // LOOP-312: W33 shares the ONE definition of "dirty tracked" with the preflight that snapshots it
 import { pkgVersion, pkgBuildCommit, hubDbPath } from "./paths.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { platform } from "node:os";
 import { sameDaemonCode, readAutostartBinding, describeAutostartBinding, listSystemdBindings } from "./daemon-lifecycle.ts";
 import { DatabaseSync } from "node:sqlite";
 import { loadProjectsConfig, resolveProjectFromCwd } from "./resolve-project.ts";
-import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, resolveHubDbPath } from "./workspace.ts";
+import { tryResolveWorkspace, wsHubDb, wsStateRoot, wsFireLedger, wsReportsRoot, resolveHubDbPath } from "./workspace.ts";
 import { validateTeamFile, effectiveRepo, effectiveProject, deliveryProjects, resolveTodoDepthCap, isTeamProject, agentInterfaceFor, codexRoutedHandles, codexSandboxUnpinned, TEAM_INTAKE_PROJECT, WsValidationError, type Workspace, type WsError, type HubBlock, type ResolvedRepo } from "./team-config.ts";
 import { checkLessonsBudget, lessonsPaths } from "./lessons.ts";
 import { projectRowDivergences } from "./project-row-sync.ts"; // LOOP-410: W42 shares the ONE "diverged" definition with the projection that repairs it
@@ -35,6 +34,7 @@ import { opencodeSyncDrift } from "./opencode-sync.ts";
 import { openDb as openHubDbConn } from "./db.ts";
 import { findProject as findHubProject, AGENT_HANDLES } from "./seed.ts"; // AGENT_HANDLES: W45 expands a codex default across every handle
 import { BAIL_SHAPE_SET, latestBailShape } from "./bail-shape.ts"; // Decision 1: W46 reads the same canonical bail-shape vocabulary/parser as the derivation
+import { liveBlockerIds } from "./blocked-by.ts"; // W46's second routable signal — the ONE `Blocked-by:` parser (LOOP-264), shared with dependency-graph.ts
 import { detectRepoFacts } from "./team-edit.ts";
 import { claudeCliPermissions, DEVLOOP_PERMISSION, KAIZEN_PERMISSION } from "./team-init.ts";
 import * as metricsMod from "./metrics.ts";
@@ -413,13 +413,24 @@ export function checkDecisionQueueStall(ctx: DoctorCtx): { oldest: { id: string;
       // the arm W20 prescribes has to be decided from the OLDEST item's own project — a workspace can
       // hold one project with the board writable and another without.
       const allItems: Array<{ item: DecisionItem; enteredAt: string; pid: string; key: string }> = [];
+      // `humanBlocked:"off"` means this project has nobody to wait for: PM decides and records a
+      // Ruling. A queue W20 counts for such a project would be a stall report against a queue that is
+      // not supposed to drain by human action — so its items are reported as an informational line
+      // instead, including the ones parked BEFORE the switch, which are deliberately not migrated
+      // (rewriting someone else's parking decision automatically is worse than a visible to-do).
+      const offParked: string[] = [];
       for (const key of deliveryProjects(ws)) {
         const pid = findHubProject(db, key);
         if (!pid) continue;
-        for (const t of decisionQueue(db, pid) as DecisionItem[]) {
-          allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t), pid, key });
+        const items = decisionQueue(db, pid) as DecisionItem[];
+        if (effectiveProject(ws, key).humanBlocked === "off") {
+          for (const t of items) if (t.kind !== "approval") offParked.push(`${t.id} (${key})`);
+          continue;
         }
+        for (const t of items) allItems.push({ item: t, enteredAt: decisionItemEnteredAt(db, t), pid, key });
       }
+      if (offParked.length)
+        ctx.out.info(`decision queue: ${offParked.length} ticket(s) sit in Human-Blocked on a project running humanBlocked:"off" (${offParked.slice(0, 5).join(", ")}${offParked.length > 5 ? ", …" : ""}) — nothing will come for them, because the decision is PM's here. Clear each with \`dev-loop rule <id> approve|reject --reason "<why>"\`, or set the project back to "on". They were left where they were on purpose: the switch never rewrites a parking decision somebody already made.`);
       if (allItems.length > 0) {
         allItems.sort((a, b) => a.enteredAt < b.enteredAt ? -1 : a.enteredAt > b.enteredAt ? 1 : 0);
         const { item: oldest, enteredAt: oldestEnteredAt, pid: oldestPid, key: oldestKey } = allItems[0];
@@ -618,7 +629,7 @@ export function checkOwnerLiveness(ctx: BoardCtx): void {
   for (const f of ownerLiveness(db, pid, join(ws.root, ".dev-loop", "team", "fires.jsonl"), { manualHandles: manual })) {
     const age = f.lastFireTs ? `last fire ${f.lastFireTs.slice(0, 10)}` : "no fire on record";
     if (f.manual) out.info(`[${key}] manual owner '${f.owner}': ${f.openTickets} open servable ticket(s) awaiting a human (oldest ${f.oldestUpdatedAt.slice(0, 10)})`);
-    else out.warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or mark the role manual: dev-loop team set (agents.${f.owner}.manual true is a config edit)`);
+    else out.warn(`[W16] [${key}] owner '${f.owner}' has ${f.openTickets} open servable ticket(s) — Todo/In Review/In Progress, blocked excluded (oldest ${f.oldestUpdatedAt.slice(0, 10)}) but ${age} in 7d — re-owner them, or say why the lane is silent in config: agents.${f.owner}.manual true if a HUMAN runs this role (the scheduler then skips it and this warning becomes an info line), or agents.${f.owner}.enabled false to park the lane while KEEPING this warning (both are config edits)`);
   }
 }
 
@@ -731,18 +742,41 @@ export function checkNullAssigneeRow(ctx: BoardCtx): void {
 
 /**
  * Row 10b (board scope) — W46 unroutable block (Decision 1): a non-terminal ticket carrying the
- * `blocked` label but NO bail-shape label AND no parseable `Bail-shape:` comment. This is the ONE
- * genuinely fail-closed hole in blocked-ticket routing: the scheduler reads labels (not comment
- * bodies) to send a blocked ticket to its owner's unblock job, so a block with neither the label nor
- * the legacy comment reaches no owner. A block that still carries a parseable comment is NOT warned —
- * it is routable (legacy form) and the sweep backfills its label. Rows only (tickets + comments), no
- * fs/forge — same board-scope contract as W27/W43.
+ * `blocked` label that reaches NONE of the three routable signals. The scheduler reads labels (not
+ * comment bodies) to send a blocked ticket to its owner's unblock job, so a block with no signal at
+ * all reaches no owner. The three signals, in the order they are checked:
+ *
+ *   1. a bail-shape label — the routable form;
+ *   2. a parseable `Bail-shape:` comment — the legacy form; routable, and the sweep backfills the label;
+ *   3. a LIVE `Blocked-by:` edge — dev-loop's second blocking mechanism (LOOP-190,
+ *      `ticket create --blocked-by`), parsed by blocked-by.ts and routed by dependency-graph.ts,
+ *      which the §9c auto-unpark clears when the blocker goes terminal. Such a block needs no unblock
+ *      OWNER: the edge is what releases it. Treating an edge-blocked ticket as unroutable reports
+ *      correct sequencing as a defect, which is the noise that trains an operator to ignore W46.
+ *
+ * An edge is LIVE only when it names a ticket row that exists and is non-terminal. An edge onto a
+ * terminal blocker, an edge retired by a later `Unblocked-by:`, and an edge naming an id with no
+ * ticket row are all edges nothing will ever resolve — §9c cannot fire on them — so those tickets
+ * still reach no owner and W46 stands.
+ *
+ * Rows only (tickets + comments), no fs/forge — same board-scope contract as W27/W43.
  */
 export function checkBlockedNoBailShape(ctx: BoardCtx): void {
   const { db, projectKey: key, projectId: pid, out } = ctx;
   try {
     const TERMINAL = new Set(["Done", "Canceled", "Duplicate"]);
     const rows = db.prepare("SELECT id, state, labels FROM tickets WHERE project_id=?").all(pid) as { id: string; state: string; labels: string }[];
+    const commentsOf = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid");
+    const stateOf = db.prepare("SELECT state FROM tickets WHERE id=?");
+    /** Does this ticket carry an edge onto a blocker that exists and has not gone terminal? */
+    const hasLiveBlockerEdge = (bodies: string[]): boolean => {
+      const { live } = liveBlockerIds(bodies.map((body) => ({ body })));
+      for (const id of live) {
+        const row = stateOf.get(id) as { state: string } | undefined;
+        if (row && !TERMINAL.has(row.state)) return true;
+      }
+      return false;
+    };
     const unroutable: string[] = [];
     for (const r of rows) {
       if (TERMINAL.has(r.state)) continue;
@@ -750,12 +784,13 @@ export function checkBlockedNoBailShape(ctx: BoardCtx): void {
       try { labels = JSON.parse(r.labels) as string[]; } catch { continue; }
       if (!labels.includes("blocked")) continue;
       if (labels.some((l) => BAIL_SHAPE_SET.has(l))) continue;                                    // has the routable label
-      const comments = db.prepare("SELECT body FROM comments WHERE ticket_id=? ORDER BY created_at, rowid").all(r.id) as { body: string }[];
-      if (latestBailShape(comments.map((c) => c.body))) continue;                                 // legacy parseable comment ⇒ routable, sweep backfills
+      const bodies = (commentsOf.all(r.id) as { body: string }[]).map((c) => c.body);
+      if (latestBailShape(bodies)) continue;                                                      // legacy parseable comment ⇒ routable, sweep backfills
+      if (hasLiveBlockerEdge(bodies)) continue;                                                   // LOOP-190 edge ⇒ routed by the dependency graph, no owner needed
       unroutable.push(r.id);
     }
     if (unroutable.length) {
-      out.warn(`[W46] [${key}] ${unroutable.length} blocked ticket(s) carry no bail-shape label and no parseable 'Bail-shape:' comment — the scheduler routes blocked tickets by LABEL, so these reach no unblock owner: ${unroutable.join(", ")}. Re-block via §9 (set 'blocked' + owner + a 'Bail-shape: <info-needed|decision-needed|scope-design|external-prereq|fix-exhausted>' comment; the label is derived from it), or clear 'blocked' if it is resolved.`);
+      out.warn(`[W46] [${key}] ${unroutable.length} blocked ticket(s) carry no bail-shape label, no parseable 'Bail-shape:' comment and no live 'Blocked-by:' edge — the scheduler routes blocked tickets by LABEL and the dependency graph routes them by EDGE, so these reach no unblock owner: ${unroutable.join(", ")}. Re-block via §9 (set 'blocked' + owner + a 'Bail-shape: <info-needed|decision-needed|scope-design|external-prereq|fix-exhausted>' comment; the label is derived from it), record the dependency (\`Blocked-by: <id>\`) if one exists, or clear 'blocked' if it is resolved.`);
     }
   } catch { /* best-effort — never fails doctor */ }
 }
@@ -786,17 +821,22 @@ export function checkTierStarvationRow(ctx: BoardCtx): void {
  * individual check. The board db is opened LAZILY on the first board row and closed once here, which
  * is why exactly one openHubDbConn call remains on this path.
  */
-export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
+export async function doctorWorkspace(ws: Workspace, opts: { exec?: import("./landing.ts").ExecFn; boardDb?: string; out?: DoctorOut } = {}): Promise<{ ok: boolean; stalledRepo?: string; decisionStall?: { oldest: { id: string; enteredAt: string; state: string }; count: number; ruleOn?: string } | null; skewResult?: { codeBehind: number; version: string } | null; fails: string[] }> {
   let ok = true;
   const fails: string[] = [];
+  // A caller may supply its own sink (`dev-loop inspect` collects CODES rather than prose). The
+  // verdict bookkeeping stays here either way — `ok`/`fails` are this function's return value, not the
+  // sink's business — so a collector cannot accidentally change what doctor concluded. With no sink
+  // the console path is byte-identical to before, header line included.
+  const sink = opts.out;
   const out: DoctorOut = {
-    pass: (m: string) => console.log("✅ " + m),
-    fail: (m: string) => { console.log("❌ " + m); ok = false; fails.push(m); },
-    warn: (m: string) => console.log("⚠️  " + m),
-    info: (m: string) => console.log("•  " + m),
+    pass: (m: string) => { if (sink) sink.pass(m); else console.log("✅ " + m); },
+    fail: (m: string) => { if (sink) sink.fail(m); else console.log("❌ " + m); ok = false; fails.push(m); },
+    warn: (m: string) => { if (sink) sink.warn(m); else console.log("⚠️  " + m); },
+    info: (m: string) => { if (sink) sink.info(m); else console.log("•  " + m); },
   };
 
-  console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
+  if (!sink) console.log(`\ndev-loop workspace — '${ws.file.team.key}' @ ${ws.root} (backend:${ws.file.team.backend})`);
 
   const report: DoctorReport = {};
   // Opened LAZILY on the first row that needs the board, closed once below. Held in an object
@@ -1149,16 +1189,26 @@ export function checkReportTrail(ws: Workspace, warn: (msg: string) => void): vo
     const sink = (ws.file.team.reports as { sink?: unknown } | undefined)?.sink;
     if (typeof sink === "string" && sink !== "files") return;
     const ledger = wsFireLedger(ws);
+    // Both roots come from `ws`, the same handle the ledger comes from. They used to be resolved by
+    // reportsRoot(), whose ladder is environment-only (DEVLOOP_REPORTS_DIR > DEVLOOP_DATA_DIR >
+    // DEVLOOP_HUB_DB-derived > the home default): a CLI `dev-loop doctor` sets none of those, so the
+    // check compared this workspace's ledger against a machine-global tree and reported every agent
+    // as untraced while its reports sat in the workspace.
     // Delivery-project scope: each project's fires checked against its own reports root.
     for (const key of deliveryProjects(ws)) {
-      for (const f of reportTrailGaps(ledger, reportsRoot(key), { project: key })) {
+      for (const f of reportTrailGaps(ledger, wsReportsRoot(ws, key), { project: key })) {
         warn(`[W35] [${key}] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
       }
     }
     // Team scope: team-scoped fires and legacy rows (no project field) checked
     // against the _team reports root, tagged with [_team] rather than a project key.
-    const teamReportsRoot = reportsRoot("_team");
-    for (const f of reportTrailGaps(ledger, teamReportsRoot, { project: "_team" })) {
+    // A steward lane is ledgered `_team` but writes its report where its state lives — ops keeps
+    // `ops-state.json` in the project dir and writes `<project>/reports/ops/daily/` beside it. Checking
+    // only `_team` reported ops as untraced while two daily reports sat in the project scope. The team
+    // root stays FIRST so it is what the finding names; the project roots are searched behind it.
+    const teamReportsRoot = wsReportsRoot(ws, TEAM_INTAKE_PROJECT);
+    const stewardRoots = [teamReportsRoot, ...deliveryProjects(ws).map((k) => wsReportsRoot(ws, k))];
+    for (const f of reportTrailGaps(ledger, stewardRoots, { project: "_team" })) {
       warn(`[W35] [_team] agent '${f.agent}' fired ${f.fires}x in ${f.windowDays}d but wrote no report under ${f.expectedDir} — its work left no durable trail (§22), so those fires are invisible in the only record the operator reads.`);
     }
   } catch { /* best-effort — never fails doctor */ }

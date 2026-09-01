@@ -9,8 +9,8 @@
 // With the winner at the lower rowid, `candidates.at(-1)` returns the loser, so each assertion is red
 // against the old code rather than green by coincidence of insertion order. A precedence test that
 // seeds the winner last passes against a plain `at(-1)` and proves nothing.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openDb } from "../src/db.ts";
@@ -19,8 +19,9 @@ import {
   AUTHORISING_STATE, REASON_PRECEDENCE, consultApproval, coverageQuery, dischargeApproval,
   grantApproval, requestApproval, revokeApproval, type ApprovalState,
 } from "../src/approvals.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-approvals-reason-")));
+const tmp = realpathSync(tmpRoot("dl-approvals-reason-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

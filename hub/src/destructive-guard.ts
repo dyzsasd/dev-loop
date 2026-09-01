@@ -31,7 +31,8 @@
 // That residual gap is stated here rather than left implied, because the sentence above reads like a
 // guarantee and it is only a guarantee about this module's callers. `--force-reseed` was exactly such
 // a verb for two tickets (LOOP-316), and it was found by an incident, not by a test.
-import { readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { writeConfigAtomic } from "./atomic-write.ts";
 import type { DatabaseSync } from "node:sqlite";
 import type { Workspace } from "./team-config.ts";
 
@@ -226,25 +227,6 @@ export interface TwoPhase {
   // would have turned the 2026-08-04 cascade delete into a five-minute restore instead of a
   // two-hour hand-run `sqlite3 .recover` that still lost 19 tickets.
   preSnapshot?: () => string | null;  // throws ⇒ the verb REFUSES (fail-closed); null ⇒ no board to copy
-}
-
-// Write `configPath` through a same-directory tmp + rename, so a reader never observes a partially
-// written file. Same directory is load-bearing: `renameSync` is only atomic within one filesystem, and a
-// half-written `dev-loop.json` is unloadable — it takes the whole workspace down.
-//
-// Takes `string | Buffer` because the COMPENSATING path restores the exact bytes it retained. Passing the
-// retained Buffer straight through keeps the restore byte-exact; decoding it to a string first would round
-// -trip through UTF-8 and silently substitute U+FFFD for any byte sequence that did not decode — turning a
-// rollback that promises "unchanged" into a quiet corruption of the file it was rescuing.
-function writeConfigAtomic(configPath: string, text: string | Buffer): void {
-  const tmp = `${configPath}.tmp-${process.pid}`;
-  try {
-    writeFileSync(tmp, text);
-    renameSync(tmp, configPath);
-  } catch (e) {
-    try { unlinkSync(tmp); } catch { /* never created, or already gone — not the failure worth reporting */ }
-    throw e;
-  }
 }
 
 /** Throws on failure, having restored both halves. Returns only when BOTH halves are durable. */

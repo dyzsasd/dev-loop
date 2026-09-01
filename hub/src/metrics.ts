@@ -6,7 +6,7 @@
 //     accept rate = Done ÷ (Done + verify-fail Cancels, i.e. the §3 In Review→Canceled edge), blocked count.
 //     On linear there is no local board mirror — the digest agent computes board numbers via MCP queries
 //     at fire time, per the §22 digest contract; this CLI never guesses them.
-import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync, statSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainEntry } from "./is-entry.ts";
@@ -318,28 +318,94 @@ export function fireMetrics(
 // (codingAgent, model) priced history exists in the window to derive a median rate.
 const FALLBACK_RATE_PER_MS = 18.21 / 3_600_000; // ≈ 5.058e-6 $/ms (~$18.21/hr) conservative floor
 
+/**
+ * The span of ledger history the rate is measured over: from the oldest row inside the window to now,
+ * clamped to [1h, windowMs]. A ledger younger than an hour is reported as an hour so that a couple of
+ * fires cannot extrapolate to an absurd daily figure; a ledger older than the window is bounded by it,
+ * because rows outside the window were not summed.
+ */
+export function ledgerSpanMs(rows: FireRow[], windowMs: number, nowMs: number): number {
+  const cutoff = nowMs - windowMs;
+  let oldest: number | null = null;
+  for (const r of rows) {
+    const t = Date.parse(r.ts);
+    if (!Number.isFinite(t) || t < cutoff || t > nowMs) continue;
+    if (oldest === null || t < oldest) oldest = t;
+  }
+  if (oldest === null) return windowMs; // no rows in the window; the caller has already returned on zero spend
+  return Math.min(windowMs, Math.max(3_600_000, nowMs - oldest));
+}
+
+// The LARGEST 24h rolling total the ledger has ever held — the quantity `budgetGateReason` compares
+// `team.budget.dailyUsd` against, so it is the one an operator can size a ceiling from directly.
+//
+// It is deliberately NOT the same number as the lifetime average below it. The average divides total
+// spend by how long the ledger has EXISTED, which is the right way to read a young ledger (that is what
+// ledgerSpanMs is for) and the wrong way to read an idle one: with the scheduler stopped the numerator
+// is frozen while the divisor grows, so the figure falls every hour without any change in spending. Read
+// as an average that is correct; read as "what this loop bills in a day" — which is how a line ending in
+// "/day" gets read, and how the ceiling gets sized — it understates by however long the loop has been
+// down. Measured on the jinko-browser-use ledger: the same $345.91 printed $487/day, then $169, then
+// $112 across three days of downtime, and the ceiling would have been sized from whichever number the
+// operator happened to look at.
+//
+// What ONE fire cost, for spend arithmetic. Extracted because two callers computed it differently and
+// the difference was printed as if it were the same number: the W47 line named the peak as "what the
+// ceiling is compared against" while the gate compared a total that also ESTIMATES the rows the peak
+// silently skipped. On a ledger with two unpriced kills the gate saw $18.00 and the line printed $6.00,
+// so an operator sizing dailyUsd from the message was refused the moment the loop restarted.
+//   * a trustworthy receipt is the cost;
+//   * no receipt (or a watchdog kill, whose receipt covers only completed turns) is duration x rate;
+//   * for a kill, whichever is larger — the receipt is a lower bound, never the whole cost.
+function rowSpendUsd(r: FireRow, ratePerMs: number): number {
+  const measured = typeof r.usage?.costUsd === "number" ? r.usage.costUsd : null;
+  const modelled = (r.durationMs ?? 0) * ratePerMs;
+  if (measured === null) return modelled;
+  return wasWatchdogKilled(r) ? Math.max(measured, modelled) : measured;
+}
+
+// A per-profile median $/ms over the rows that can price one, killed rows excluded (LOOP-445: a truncated
+// fire's quotient is not the lane's rate). Shared by both figures for the same reason rowSpendUsd is.
+function ratesByProfileOf(rows: FireRow[]): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const r of rows) {
+    if (wasWatchdogKilled(r)) continue;
+    if (typeof r.usage?.costUsd === "number" && typeof r.durationMs === "number" && r.durationMs > 0)
+      (out[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
+  }
+  return out;
+}
+const rateFor = (rates: Record<string, number[]>, r: FireRow): number => {
+  const xs = rates[`${r.codingAgent ?? ""}/${r.model ?? ""}`];
+  return xs?.length ? (median(xs) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
+};
+
+// The peak is scanned at each row as a window END, which is where a maximum can occur.
+export function peakRolling24hUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
+  const cutoff = nowMs - windowMs;
+  const eligible = rows.filter((r) => { const t = Date.parse(r.ts); return Number.isFinite(t) && t >= cutoff && t <= nowMs; });
+  const rates = ratesByProfileOf(eligible);
+  const inWindow = eligible
+    .map((r) => ({ t: Date.parse(r.ts), usd: rowSpendUsd(r, rateFor(rates, r)) }))
+    .sort((a, b) => a.t - b.t);
+  let peak = 0;
+  for (let end = 0; end < inWindow.length; end++) {
+    const from = inWindow[end]!.t - 86_400_000;
+    let sum = 0;
+    for (let k = end; k >= 0 && inWindow[k]!.t >= from; k--) sum += inWindow[k]!.usd;
+    if (sum > peak) peak = sum;
+  }
+  return Number.isFinite(peak) ? peak : 0;
+}
+
 export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
   const cutoff = nowMs - windowMs;                                   // LOOP-314: closed era, both bounds
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
-
-  // Collect per-(codingAgent, model) rates from priced rows for median derivation
-  const ratesByProfile: Record<string, number[]> = {};
-  for (const r of inWindow) {
-    if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
-      (ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
-  }
-
+  // Both spend figures value a row through rowSpendUsd and rate it through ratesByProfileOf. They used to
+  // carry separate copies of that logic, and the copies disagreed — see the note on rowSpendUsd.
+  const rates = ratesByProfileOf(inWindow);
   let total = 0;
-  for (const r of inWindow) {
-    if (r.usage != null && r.usage.costUsd !== null) {
-      total += r.usage.costUsd;
-    } else {
-      // Unpriced or killed fire: estimate duration × ratePerMs, never $0
-      const rates = ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`];
-      const ratePerMs = rates?.length ? (median(rates) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
-      total += (r.durationMs ?? 0) * ratePerMs;
-    }
-  }
+  for (const r of inWindow) total += rowSpendUsd(r, rateFor(rates, r));
   return total;
 }
 
@@ -431,7 +497,15 @@ export function ratePerMsBasis(rows: FireRow[], codingAgent: string | null | und
     // ratchet: it needs only the killed rows to reach half the window to pin the whole profile at $0 and
     // hand every fire the conservative fallback.
     if (wasWatchdogKilled(r)) continue;
-    if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
+    // The THIRD copy of the slip c255fc2 fixed — that commit said "two expressions, one slip" and was
+    // wrong about the count. Here it is worse than a NaN total: `median` sorts with `(a,b) => a-b`, so a
+    // NaN makes the comparator return NaN, which the spec treats as 0 — equal to everything — breaking
+    // transitivity and letting the sort scramble the FINITE samples around it. Measured over every
+    // insertion position in a 20-sample array: 10 of 21 return a finite but WRONG median, and only 1
+    // returns NaN. A NaN would at least be caught downstream by `m != null && m > 0`; a wrong number is
+    // returned with `measured: true` on it, which is exactly the "a model presented as a measurement"
+    // failure LOOP-445 is written above to prevent. It feeds perFireDeadline on every launch.
+    if (typeof r.usage?.costUsd === "number" && typeof r.durationMs === "number" && r.durationMs > 0)
       rates.push(r.usage.costUsd / r.durationMs);
   }
   const m = median(rates);
@@ -454,14 +528,51 @@ export function checkBudget(ws: Workspace): WsWarning[] {
     const rows = readFireRows(wsFireLedger(ws));
     const now = Date.now();
     if (dailyUsd == null) {
-      const burnPerDay = rollingSpendUsd(rows, 7 * 86_400_000, now) / 7; // 7d avg daily burn (estimate-augmented)
-      if (burnPerDay <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
-      return [{ code: "W28", path: "team.budget.dailyUsd",
-        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured, 7d avg) with no cap; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
+      // The daily rate is spend ÷ the span the ledger actually covers, NOT ÷ 7. A fixed divisor of 7 reads a
+      // young ledger as seven days of history: a workspace 42 minutes old that had billed $51 was reported as
+      // $7.30/day, understating the real rate by more than two orders of magnitude — and this number is the
+      // only figure an operator has to size the ceiling from. The span is clamped to [1h, 7d]: below an hour a
+      // handful of fires would extrapolate to an absurd figure, and above 7d the window itself is the bound.
+      const windowMs = 7 * 86_400_000;
+      const spend = rollingSpendUsd(rows, windowMs, now);
+      // `!Number.isFinite` as well as `<= 0`: a poisoned sum used to reach the message and print
+      // "~$NaN/day", which is worse than silence — it reads as a measurement.
+      // Two different silences were collapsed here. `spend <= 0` is a legitimate quiet: nothing has been
+      // measured yet, so there is nothing to size a ceiling from. A NON-FINITE total is not that — the
+      // ledger was read and its arithmetic produced a non-number, which budgetGateReason reports on stderr
+      // rather than passing over. Doctor stayed silent for the same event, and for Infinity that was a
+      // regression: before the guard, `Infinity > dailyUsd` was true and the breach DID warn.
+      if (!Number.isFinite(spend))
+        return [{ code: "W47", path: "team.budget.dailyUsd",
+          message: `the rolling spend could not be computed from ${wsFireLedger(ws)} — a row's usage is malformed (a non-numeric or non-finite costUsd). The ceiling cannot be sized or enforced until that row is fixed or removed.` }];
+      if (spend <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
+      const spanMs = ledgerSpanMs(rows, windowMs, now);
+      const burnPerDay = spend / (spanMs / 86_400_000);
+      const spanLabel = spanMs >= 86_400_000 ? `${(spanMs / 86_400_000).toFixed(1)}d` : `${Math.round(spanMs / 3_600_000)}h`;
+      // The average alone was sizing the ceiling, and it is diluted by idle time (see peakRolling24hUsd).
+      // Both numbers are printed: the average says what the ledger has cost per day of its life, the peak
+      // says what the GATE will see, and the idle note says how stale the average is. An operator reading
+      // only the first number during a long stop sizes the ceiling far under the loop's actual busiest day.
+      const peak24h = peakRolling24hUsd(rows, windowMs, now);
+      let newest = 0;
+      for (const r of rows) { const t = Date.parse(r.ts); if (Number.isFinite(t) && t <= now && t > newest) newest = t; }
+      const idleMs = newest ? now - newest : 0;
+      const idleNote = idleMs >= 2 * 3_600_000
+        ? `; the loop has been idle ${idleMs >= 86_400_000 ? `${(idleMs / 86_400_000).toFixed(1)}d` : `${Math.round(idleMs / 3_600_000)}h`}, which dilutes that average`
+        : "";
+      return [{ code: "W47", path: "team.budget.dailyUsd",
+        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured over ${spanLabel} of ledger) with no cap${idleNote}; its busiest 24h billed $${peak24h.toFixed(2)}, and THAT is what the ceiling is compared against; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
     }
     const rolling = rollingSpendUsd(rows, 86_400_000, now);
+    // The nag branch above and budgetGateReason both refuse a non-finite total; this one did not, and
+    // `NaN > dailyUsd` is false, so doctor would have reported "no breach" for a spend it could not
+    // compute. Unreachable now that the three producers are guarded — kept so the next NaN source, if
+    // there is one, cannot slip through the one path that was left asymmetric.
+    if (!Number.isFinite(rolling))
+      return [{ code: "W47", path: "team.budget.dailyUsd",
+        message: `a daily ceiling is set ($${dailyUsd.toFixed(2)}) but the rolling 24h spend could not be computed from ${wsFireLedger(ws)} — a row's usage is malformed. The ceiling is configured and cannot be checked.` }];
     if (rolling > dailyUsd)
-      return [{ code: "W28", path: "team.budget.dailyUsd",
+      return [{ code: "W47", path: "team.budget.dailyUsd",
         message: `budget BREACH — rolling 24h spend $${rolling.toFixed(2)} is over dailyUsd $${dailyUsd.toFixed(2)}; the scheduler is refusing launches until it drops below (raise the ceiling, or let the 24h window roll over)` }];
     return [];
   } catch { return []; }
@@ -476,6 +587,15 @@ export function pruneFireLedger(ledgerPath: string, keepMs = 90 * 86_400_000, no
     const keep = readFireRows(ledgerPath).filter((r) => Date.parse(r.ts) >= cutoff);
     const tmp = `${ledgerPath}.${process.pid}.tmp`;
     writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""));
+    // The rename REPLACES the ledger inode, so the replacement carries the temp file's umask-derived
+    // mode (0644 on a default umask) rather than the ledger's. Rotation therefore undid an operator's
+    // `chmod 600` on every scheduler start, and recordFire's hardening only warns about a
+    // pre-existing loose mode instead of tightening it — the ledger reverted to world-readable at
+    // each restart and the finding could never be closed. Carry the mode across the replacement:
+    // the ledger's own when it had one, 0600 when it is new.
+    let mode = 0o600;
+    try { mode = statSync(ledgerPath).mode & 0o777; } catch { /* no ledger yet ⇒ the 0600 default */ }
+    try { chmodSync(tmp, mode); } catch { /* a filesystem without modes ⇒ rename anyway */ }
     renameSync(tmp, ledgerPath);
   } catch { /* rotation is best-effort; never blocks the scheduler */ }
 }
@@ -993,10 +1113,23 @@ export function boardMetrics(db: any, projectId: string, windowMs: number, nowMs
 }
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
+// The shape check needed a MAGNITUDE check beside it. `--window` becomes `nowMs - windowMs`, which goes
+// through `new Date(...).toISOString()`; a duration can match this regex, be a safe integer, and still
+// land outside the ±8.64e15 ms a Date can represent, where toISOString answers with a bare RangeError.
+// `--window 999999999d` — the obvious way to write "everything" — therefore left this flag's own exit-2
+// path and crashed. Same boundary and same "effectively forever" spelling as `--expires` in approvals.ts.
+// The ceiling is 100 years: past the ledger's own span every larger window selects the same rows, so
+// refusing here removes nothing an operator can express, and the message names the spelling that works.
+const MAX_WINDOW_MS = 100 * 365 * 86_400_000;
 function parseWindow(s: string): number {
   const m = s.trim().match(/^(\d+)(d|h)$/);
   if (!m) { console.error(`metrics: invalid --window '${s}' (use e.g. 7d, 24h)`); process.exit(2); }
-  return Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000);
+  const ms = Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000);
+  if (!Number.isFinite(ms) || ms > MAX_WINDOW_MS) {
+    console.error(`metrics: --window '${s}' is longer than 100 years; any window past the ledger's own span selects the same rows — use a smaller one (the whole ledger is already the default for --since/--until)`);
+    process.exit(2);
+  }
+  return ms;
 }
 
 // P1-3: the operator's decision queue as ONE queryable set — Human-Blocked ∪ In Review assigned to the
@@ -1140,7 +1273,14 @@ export interface ReportTrailFinding { agent: string; fires: number; expectedDir:
 
 export function reportTrailGaps(
   ledgerPath: string,
-  reportsRootDir: string,
+  /**
+   * One reports root, or several searched together. A STEWARD lane (ops, sweep) is ledgered under the
+   * team scope but writes its daily report where its state lives — the project it stewards — so checking
+   * only `_team` reported `ops` as having left no trail while its reports sat in
+   * `<project>/reports/ops/daily`. A report found under ANY of the given roots satisfies the trail; the
+   * first root is what the finding names as the expected place.
+   */
+  reportsRootDir: string | readonly string[],
   opts: { windowMs?: number; nowMs?: number; handles?: readonly string[]; project?: string } = {},
 ): ReportTrailFinding[] {
   const windowMs = opts.windowMs ?? 7 * 86_400_000;
@@ -1176,14 +1316,19 @@ export function reportTrailGaps(
   for (const h of handles) {
     const days = firedDays.get(h);
     if (!days?.size) continue;                       // zero fires in the window is W16's business
-    // §22's tree is <reports>/<handle>-agent/daily/<YYYY-MM-DD>.md. The `-agent` suffix is the
-    // mapping, and getting it wrong would make every agent look untraced.
-    const dir = join(reportsRootDir, `${h}-agent`, "daily");
-    let present: Set<string>;
-    try { present = new Set(readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3))); }
-    catch { present = new Set(); }                   // no tree yet ⇒ nothing reported, which IS the finding
-    if ([...days].some((d) => present.has(d))) continue;
-    out.push({ agent: h, fires: [...rows].filter((r) => r.agent === h && r.ts >= since).length, expectedDir: dir, windowDays: Math.round(windowMs / 86_400_000) });
+    // §22's tree is <reports>/<handle>/daily/<YYYY-MM-DD>.md. The directory segment is the RUNTIME
+    // handle — the identity a fire receives as DEVLOOP_ACTOR and writes under — and getting it wrong
+    // would make every agent look untraced. Measured: 8 of 8 agents on a live workspace wrote
+    // `<handle>/`, while this check and the §22 prose both said `<handle>-agent/`; the prose was
+    // corrected to the runtime name rather than the runtime to the prose.
+    const dirs = (typeof reportsRootDir === "string" ? [reportsRootDir] : reportsRootDir).map((root) => join(root, h, "daily"));
+    const present = new Set<string>();
+    for (const dir of dirs) {
+      try { for (const f of readdirSync(dir)) if (f.endsWith(".md")) present.add(f.slice(0, -3)); }
+      catch { /* no tree under this root — another root may still hold the report */ }
+    }
+    if ([...days].some((d) => present.has(d))) continue; // reported somewhere ⇒ the trail exists
+    out.push({ agent: h, fires: [...rows].filter((r) => r.agent === h && r.ts >= since).length, expectedDir: dirs[0]!, windowDays: Math.round(windowMs / 86_400_000) });
   }
   return out;
 }
@@ -2126,7 +2271,13 @@ export async function metricsCli(argv = process.argv.slice(2)): Promise<number> 
   }
 
   // ── default team-KPI path ─────────────────────────────────────────────────────
-  const fires = fireMetrics(wsFireLedger(ws), windowMs);
+  // `nowMs` is the era's END, not the wall clock: resolveEra maps --since/--until to
+  // { windowMs: until - since, nowMs: until }. Omitting it here let fireMetrics fall back to its
+  // `nowMs = Date.now()` default, so the fire half of the report silently measured [now - windowMs, now]
+  // while `windowDays` and the board half (which are handed nowMs on the two lines below) measured the
+  // era the operator asked for. A before/after comparison — the reason --since/--until exist — then read
+  // the same trailing window twice and always reported no difference.
+  const fires = fireMetrics(wsFireLedger(ws), windowMs, nowMs);
   const out: Record<string, unknown> = { team: ws.file.team.key, windowDays: windowMs / 86_400_000, fires };
 
   await collectBoardMetrics(ws, windowMs, out, boardDb, escapeSignalSourceRan(fires), nowMs);

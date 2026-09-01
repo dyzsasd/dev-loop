@@ -7,7 +7,7 @@
 // config through here, and legacy consumers get an unchanged view via `toLegacyView` (the M1 de-risk).
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { AGENT_HANDLES, AGENT_HANDLE_SET, LANES, LANE_SET } from "./agent-handles.ts";
+import { AGENT_HANDLES, AGENT_HANDLE_SET, LANES, LANE_SET, LANE_ACTOR, STEWARD_HANDLES, type Lane } from "./agent-handles.ts";
 import { actionClasses } from "./approvals.ts"; // LOOP-394 — the ONE action-class registry (design §4)
 
 // ─── Types (impl §2.1) ───────────────────────────────────────────────────────
@@ -15,7 +15,11 @@ export type DocRef = string | { linearDocument: string } | { hubDoc: string } | 
 
 // `manual:true` (P1-4): the operator runs this role by hand (no scheduled fires) — owner-liveness
 // (doctor W16 / the Sweep digest) reports its stranded tickets as "awaiting a human", never as a warn.
-export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean; fireTimeout?: string; stallTimeout?: string;
+export interface AgentLaunchConfig { codingAgent?: string; model?: string; effort?: string; cadence?: string; manual?: boolean;
+  // The scheduling switch. `false` ⇒ the scheduler does not fire this lane; absent/true ⇒ it does.
+  // Distinct from `manual` on purpose — see laneScheduleBlock for which question each one answers.
+  enabled?: boolean;
+  fireTimeout?: string; stallTimeout?: string;
   // LOOP-237 — point THIS agent at the on-demand conventions slice instead of pushing the corpus.
   // Per-agent and default OFF: with it off the fire prompt is byte-identical to today.
   conventionsPull?: boolean;
@@ -90,6 +94,12 @@ export type Autonomy = (typeof AUTONOMIES)[number];
 // through, never stored and never resolved. It exists so a workspace written by an older
 // `team init` keeps loading without a migration touching the operator's file.
 export const AUTONOMY_INPUTS = ["ask", "full", "guarded"] as const;
+// Whether `Human-Blocked` exists as a PARKING PLACE. Orthogonal to autonomy on purpose: `autonomy`
+// decides how boldly an agent decides, `humanBlocked` decides whether there is still anybody to wait
+// for. `ask` + `off` is a legal, meaningful pair — PM decides cautiously, by itself. The STATE always
+// exists (history is never migrated); `off` changes who may park a ticket there and who may take it out.
+export const HUMAN_BLOCKED_MODES = ["on", "off"] as const;
+export type HumanBlockedMode = (typeof HUMAN_BLOCKED_MODES)[number];
 export type AutonomyInput = (typeof AUTONOMY_INPUTS)[number];
 
 // The alias DIRECTION is the safety property, not an implementation detail: `guarded` meant
@@ -114,6 +124,7 @@ export interface TeamBlock {
   comms?: { provider: "slack" | "lark"; webhookEnv: string };
   reports?: unknown;
   agents?: Record<string, AgentLaunchConfig>;
+  humanBlocked?: HumanBlockedMode;   // "on" (default) ⇒ Human-Blocked is a parking place; "off" ⇒ PM rules instead
   defaultCodingAgent?: string;
   codingAgentDefaults?: Record<string, { model?: string; effort?: string }>;
   hub?: HubBlock;
@@ -171,7 +182,10 @@ export interface ProjectEntry {
   blockedStateName?: string | null;   // a real Linear "Blocked" column name; null → the `blocked` label park (§9)
   notify?: unknown;                   // per-project §9 notify webhook override (E15; team.comms is canonical on v2 and bridges into it)
   communication?: unknown;            // the communication agent's ARTICLE config (E14); NOT the §22a digest gate (that keys on team.comms)
-  agents?: unknown;
+  // Typed like team.agents (it was `unknown`): validateAgentConfigs checks BOTH sides against the same
+  // shape, and effectiveProject merges them per lane, so a reader that can hold one can hold the other.
+  agents?: Record<string, AgentLaunchConfig>;
+  humanBlocked?: HumanBlockedMode;   // per-project override of team.humanBlocked
   models?: unknown;
   efforts?: unknown;
   reports?: unknown;
@@ -267,11 +281,13 @@ type Emit = (code: string, path: string, message: string) => void;
 // silence and then resolved to itself, so `"fulll"` reached an agent's prose as an autonomy posture
 // no section defines — the operator's typo decided nothing and said nothing. The path in the message
 // is the exact key to fix, which is the whole point of naming it here rather than at the read site.
-function checkGovernanceTokens(o: { mode?: unknown; autonomy?: unknown }, base: string, E: Emit): void {
+function checkGovernanceTokens(o: { mode?: unknown; autonomy?: unknown; humanBlocked?: unknown }, base: string, E: Emit): void {
   if (o.mode !== undefined && !(MODES as readonly unknown[]).includes(o.mode))
     E("E19", `${base}.mode`, `mode must be one of ${MODES.join("|")} (got ${JSON.stringify(o.mode)})`);
   if (o.autonomy !== undefined && !(AUTONOMY_INPUTS as readonly unknown[]).includes(o.autonomy))
     E("E19", `${base}.autonomy`, `autonomy must be one of ${AUTONOMIES.join("|")} (got ${JSON.stringify(o.autonomy)}) — "guarded" is also accepted as a legacy alias and resolves to "ask"`);
+  if (o.humanBlocked !== undefined && !(HUMAN_BLOCKED_MODES as readonly unknown[]).includes(o.humanBlocked))
+    E("E19", `${base}.humanBlocked`, `humanBlocked must be one of ${HUMAN_BLOCKED_MODES.join("|")} (got ${JSON.stringify(o.humanBlocked)}) — "off" means Human-Blocked is not a parking place and PM rules instead (§9)`);
 }
 
 // E12 — an intake block (team default or per project): mode governs PM origination (§5a).
@@ -391,6 +407,18 @@ function validateAgentConfigs(agents: unknown, path: string, E: Emit, isProjectS
       W("W04", apath, `'${agent}' is not a known agent — this block is never applied (known: ${[...AGENT_HANDLES, ...LANES].join(", ")}). Check the spelling.`);
     if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) { E("E17", apath, "agent config must be an object"); continue; }
     const a = cfg as Record<string, unknown>;
+    // Both scheduling switches are typed. `manual` was accepted-and-unread for its scheduling meaning
+    // until 2026-08-29 (the scheduler contained no occurrence of the word), which is how an operator
+    // set it to stop a lane, watched the lane fire 11 minutes later, and got no line explaining why.
+    for (const field of ["manual", "enabled"] as const) {
+      if (a[field] !== undefined && typeof a[field] !== "boolean")
+        E("E17", `${apath}.${field}`, `agents.${agent}.${field} must be a boolean (got ${JSON.stringify(a[field])})`);
+      // A steward (sweep/ops/reflect/communication) fires at TEAM scope against `_team`, never per
+      // delivery project, so a project-scope park could only be accepted and ignored — the defect this
+      // switch exists to fix. Refused the same way project-scope `cadence` already is.
+      if (isProjectScope && a[field] !== undefined && (STEWARD_HANDLES as readonly string[]).includes(agent))
+        E("E17", `${apath}.${field}`, `projects.<key>.agents.${agent}.${field} is not honoured — ${agent} is a steward and fires at team scope, not per project; set it under team.agents.${agent}.${field} instead`);
+    }
     for (const field of ["fireTimeout", "stallTimeout"] as const) {
       if (a[field] !== undefined) {
         const v = a[field];
@@ -438,6 +466,13 @@ function validateBackup(backup: unknown, E: Emit): void {
     if (!BACKUP_KEYS.has(k)) E("E18", `team.backup.${k}`, `unknown backup key '${k}' (expected ${[...BACKUP_KEYS].join(", ")})`);
   if (b.everyHours !== undefined && (typeof b.everyHours !== "number" || !Number.isFinite(b.everyHours) || b.everyHours < 0))
     E("E18", "team.backup.everyHours", `backup.everyHours must be a non-negative number (0 disables the cadence) (got ${JSON.stringify(b.everyHours)})`);
+  // …and an UPPER bound, for the reason parseDuration already refuses one (run-agents.ts): the value
+  // becomes a setTimeout delay, and Node coerces anything past its 32-bit limit to 1ms. `everyHours: 600`
+  // does not mean "every 25 days", it means a board snapshot EVERY MILLISECOND — the cadence inverts at
+  // the top of the range instead of saturating. The lower bound was validated here and the upper one was
+  // not, so the only shape that turns this block into a disk-filling loop was the shape that passed.
+  else if (typeof b.everyHours === "number" && b.everyHours * 3_600_000 > 2_147_483_647)
+    E("E18", "team.backup.everyHours", `backup.everyHours ${b.everyHours} (${b.everyHours * 3_600_000}ms) exceeds Node's 32-bit timer limit (~596.5h / 24.8d); setTimeout would coerce it to 1ms, snapshotting the board every millisecond`);
   if (b.keep !== undefined && (typeof b.keep !== "number" || !Number.isInteger(b.keep) || b.keep < 1))
     E("E18", "team.backup.keep", `backup.keep must be an integer >= 1 — keeping zero generations is a backup system that deletes its own output (got ${JSON.stringify(b.keep)})`);
   if (b.dir !== undefined && (typeof b.dir !== "string" || !b.dir.trim()))
@@ -775,7 +810,9 @@ export function loadWorkspace(root: string): Workspace {
 // ─── Resolution API (impl §2.3) ───────────────────────────────────────────────
 export interface ResolvedRepo extends RepoEntry { ref: string; absPath: string; defaultBranch: string }
 // `autonomy` NARROWS on resolution: the input alias set goes in, the canonical §12a pair comes out.
-export interface ResolvedProject extends Omit<ProjectEntry, "autonomy"> { key: string; backend: string; mode?: Mode; autonomy?: Autonomy; docSystem?: string; reports?: unknown }
+export interface ResolvedProject extends Omit<ProjectEntry, "autonomy" | "humanBlocked"> { key: string; backend: string; mode?: Mode; autonomy?: Autonomy; docSystem?: string; reports?: unknown;
+  /** Always resolved (absent config ⇒ "on"), so no reader re-defaults it and they cannot disagree. */
+  humanBlocked: HumanBlockedMode }
 
 export function effectiveRepo(ws: Workspace, ref: string): ResolvedRepo {
   const r = ws.file.repos[ref];
@@ -795,6 +832,62 @@ export function resolveDefaultBranchForPath(ws: Workspace, absDir: string): stri
 }
 
 // Behavior fields resolve project ∥ team (nearest wins, §4.2). Physical fields live only on the registry.
+/**
+ * Should the scheduler REFUSE to fire this lane, and why? `null` ⇒ fire it.
+ *
+ * Two keys, because the operator has two different intents and conflating them cost a lane's liveness
+ * warning during the incident that produced this function:
+ *
+ *   • `enabled: false` — "do not run this lane for now". The scheduler skips it; doctor's W16
+ *     owner-liveness warning is UNAFFECTED, because a deliberately parked lane still has stranded
+ *     tickets worth reporting. This is the stop-gap switch.
+ *   • `manual: true` — "a human runs this role BY HAND" (config-schema's own words). The scheduler
+ *     skips it AND W16 downgrades to an info line, because "no fires in 7d" is the expected state for
+ *     a human-run role rather than a finding.
+ *
+ * Until 2026-08-29 `manual` did neither of the first halves: run-agents.ts contained no occurrence of
+ * the word, so the key was accepted, never read, and doctor's own W16 remedy told operators to set it
+ * to stop a lane. An operator set it at 15:30Z and the lane fired again at 15:41:03Z for $3.91, with
+ * no skip line anywhere. `cadence: 0` is refused by E17 as "a hot loop, not a disable", and
+ * project-scope `cadence` is refused outright — so before `enabled` there was no per-lane off switch
+ * at all.
+ *
+ * Scope: `projectKey` given ⇒ the project's merged view (effectiveProject already layers
+ * projects.<key>.agents over team.agents per field), so a lane can be parked for ONE project and keep
+ * serving its siblings. Omitted ⇒ the team block alone, which is the whole-lane answer.
+ *
+ * Key lookup is the exact SchedKey first, then the lane's owning ACTOR — so `agents.pm.enabled:false`
+ * parks pm-maintenance/groom/review together, while `agents.pm-groom.enabled:false` parks just one.
+ */
+export function laneScheduleBlock(
+  ws: Workspace, agent: string, projectKey?: string,
+): { key: string; reason: string } | null {
+  const blocks = projectKey && ws.file.projects[projectKey]
+    ? (effectiveProject(ws, projectKey).agents ?? {})
+    : (ws.file.team.agents ?? {});
+  const actor = LANE_ACTOR[agent as Lane] ?? agent;
+  const scope = projectKey ? `projects.${projectKey}.agents` : "team.agents";
+  for (const key of agent === actor ? [agent] : [agent, actor]) {
+    const c = blocks[key];
+    if (!c) continue;
+    if (c.enabled === false) return { key, reason: `${scope}.${key}.enabled is false — this lane is parked in config` };
+    if (c.manual === true) return { key, reason: `${scope}.${key}.manual is true — this role is run by a human, not the scheduler` };
+  }
+  return null;
+}
+
+/** Union of the lanes named on either side, each lane's fields merged with the project's winning. */
+function mergeAgentBlocks(
+  team: Record<string, AgentLaunchConfig> | undefined,
+  project: Record<string, AgentLaunchConfig> | undefined,
+): Record<string, AgentLaunchConfig> {
+  const out: Record<string, AgentLaunchConfig> = {};
+  for (const lane of new Set([...Object.keys(team ?? {}), ...Object.keys(project ?? {})])) {
+    out[lane] = { ...team?.[lane], ...project?.[lane] };
+  }
+  return out;
+}
+
 export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
   const p = ws.file.projects[key];
   if (!p) throw new Error(`unknown project '${key}'`);
@@ -807,12 +900,24 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
     // legacy `guarded` keeps working untouched and every reader sees the canonical `ask`.
     autonomy: normalizeAutonomy(p.autonomy ?? t.autonomy),
     docSystem: p.docSystem ?? t.docSystem,
+    humanBlocked: p.humanBlocked ?? t.humanBlocked ?? "on", // absent ⇒ "on": today's behaviour, byte for byte
+
     reports: p.reports ?? t.reports,
     defaultCodingAgent: p.defaultCodingAgent ?? t.defaultCodingAgent,
     codingAgentDefaults: p.codingAgentDefaults ?? t.codingAgentDefaults,
     // intake merges FIELD-WISE (not whole-block nearest-wins): mode and todoDepthCap are orthogonal
     // knobs, so a project tuning only its cap must not silently drop a team-level "passive".
     ...(p.intake || t.intake ? { intake: { ...t.intake, ...p.intake } } : {}),
+    // agents merges PER LANE, then per field. team.agents is the team-level launch default and
+    // projects.<key>.agents overrides it — the reading `dev-loop team set`'s whitelist has always
+    // implied (it offers team.agents.<a>.{codingAgent,model,effort,codexSandbox} and no project-level
+    // equivalent) and the one the built-in profile table's own comments state. Before this, the
+    // projection below emitted the PROJECT block alone, so the settable key reached no reader at all:
+    // an operator who set team.agents.pm-review.model got no error and no change.
+    //
+    // Per FIELD, not whole-block nearest-wins, for the reason intake and hub already merge that way:
+    // a project pinning only `model` must not silently drop the team's `effort` for that lane.
+    ...(p.agents || t.agents ? { agents: mergeAgentBlocks(t.agents, p.agents) } : {}),
     // hub merges FIELD-WISE too, one level deeper for agentInterface (a per-coding-agent map): a project
     // flipping only claude must not silently drop a team-level codex setting (D8 rollback granularity).
     ...(p.hub || t.hub ? {
@@ -830,12 +935,11 @@ export function effectiveProject(ws: Workspace, key: string): ResolvedProject {
 // This mirrors run-agents' resolveCodingAgent EXACTLY — per-agent project override, else the project's
 // (team-merged) defaultCodingAgent — and consults only the projects a fire can launch on (enabled, not
 // scratch). Steward fires resolve their profile against the first enabled project, so the per-project
-// walk covers them too. `team.agents.<h>.codingAgent` is deliberately NOT a source: the scheduler reads
-// team.agents for cadence, timeouts and codexSandbox but the launch-profile resolver never grew a reader
-// for codingAgent/model (LOOP-327 made the path settable; a dry-run with team.agents.sweep.codingAgent=
-// codex still renders sweep as cli=claude — verified 2026-08-27). Counting it would make W45 warn about
-// a lane that does not fire. `handles` is passed in rather than imported from seed.ts so this module
-// keeps its zero-dependency shape.
+// walk covers them too. `team.agents.<h>.codingAgent` IS a source, through effectiveProject's per-lane
+// merge: the launch-profile resolver reads the same merged block, so a lane routed to codex at team
+// level fires as codex and W45 must warn about it. (It was excluded while the resolver had no reader
+// for the key — counting it then would have warned about a lane that did not fire.) `handles` is
+// passed in rather than imported from seed.ts so this module keeps its zero-dependency shape.
 export interface CodexRoute { handle: string; via: string }
 export function codexRoutedHandles(ws: Workspace, handles: readonly string[]): CodexRoute[] {
   const out = new Map<string, string>();
@@ -966,7 +1070,7 @@ export function toLegacyView(ws: Workspace): LegacyProjectsConfig {
       reports: eff.reports,
       intake: eff.intake,
       hub: eff.hub,
-      agents: p.agents,
+      agents: eff.agents,
       models: p.models,
       efforts: p.efforts,
       defaultCodingAgent: eff.defaultCodingAgent,

@@ -13,12 +13,13 @@
 // route arms while being useless, so a squash-LANDED branch and a ticket with no branch at all are
 // asserted silent here.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+
 import { join } from "node:path";
 import { unlandedBranchResidue, unlandedWorkRejection } from "../src/ac-gate.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-unlanded-")));
+const tmp = realpathSync(tmpRoot("dl-unlanded-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

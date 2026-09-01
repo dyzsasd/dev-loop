@@ -5,11 +5,12 @@
 // The fixture DERIVES the artifact-name set from the source of truth the check reads (the same
 // STATE_ARTIFACT_RE pattern), so the test cannot silently agree with itself.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 // Derive the test artifact set from the same pattern the check reads.
 // If the pattern changes, this set must still represent valid matches.
@@ -27,7 +28,7 @@ const nonArtifacts = [
   "reports-extra",            // not reports/ prefix
 ].filter((a) => !STATE_ARTIFACT_RE.test(a));
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-w519-")));
+const tmp = realpathSync(tmpRoot("dl-doc-w519-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

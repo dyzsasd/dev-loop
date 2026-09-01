@@ -211,9 +211,47 @@ export function restoreBoard(opts: { from: string; dbPath: string; dir: string; 
 // `everyHours: 0 ⇒ not started at all`, the same cadence<=0 ⇒ no-op posture every other notifier has.
 export interface BoardSnapshotTimerOpts { dbPath: string; dir: string; keep: number; intervalMs: number; log?: (m: string) => void }
 
-export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: number; log?: (m: string) => void }): string | null {
+/**
+ * A cadence tick is skipped when this directory already holds a generation from the CURRENT interval.
+ *
+ * More than one daemon can share one hub.db — a workspace with a `_team` daemon and a project daemon has
+ * two, both holding `<workspace>/.dev-loop/hub.db` and both running this timer. They ticked a second
+ * apart and wrote BYTE-IDENTICAL copies (measured: two pairs, same SHA-256, 1 s apart). The wasted disk
+ * is bounded by `keep`, but the retention WINDOW is not: with every generation duplicated, `keep: 10`
+ * retains five distinct points in time instead of ten — and the older generations are the whole reason
+ * the cadence exists, since they are what makes `dev-loop board restore` undoable.
+ *
+ * Half the interval is the threshold rather than the whole of it: a tick that runs slightly early must
+ * still be able to take its own generation, while a second writer inside the same window is refused.
+ * Content is not compared — a duplicate is defined by TIME, so this also refuses two daemons whose
+ * boards happen to differ by one row in the second between their ticks.
+ */
+export function cadenceDuplicateOf(dir: string, intervalMs: number, nowMs: number): string | null {
+  if (!(intervalMs > 0)) return null;
+  const newest = listSnapshots(dir).find((s) => s.reason === "cadence");
+  if (!newest) return null;
+  const takenMs = Date.parse(newest.takenAt.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, "$1-$2-$3T$4:$5:$6Z"));
+  if (!Number.isFinite(takenMs)) return null;
+  return nowMs - takenMs < intervalMs / 2 ? newest.path : null;
+}
+
+export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: number; intervalMs?: number; log?: (m: string) => void }): string | null {
   try {
-    return takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "cadence" });
+    const dup = cadenceDuplicateOf(opts.dir, opts.intervalMs ?? 0, Date.now());
+    if (dup) {
+      opts.log?.(`[daemon] board snapshot skipped: ${dup} already covers this interval (another daemon on the same hub.db took it)`);
+      return null;
+    }
+    // A SUCCESSFUL tick logs too. Failure and skip already did; success did not, which made the whole
+    // cadence unauditable after the fact — the operator could see that a snapshot exists, but not that
+    // the timer ran, and could not tell a timer that stopped firing from one whose writes were failing.
+    // That is not hypothetical: the `_team` daemon produced a generation on four consecutive cycles and
+    // none on the fifth, and the reason could not be recovered from the scene, because neither outcome
+    // left a line. The startup line ("board snapshot active …") announces the intent; this one records
+    // that it happened.
+    const written = takeBoardSnapshot({ dbPath: opts.dbPath, dir: opts.dir, keep: opts.keep, reason: "cadence" });
+    opts.log?.(`[daemon] board snapshot written: ${written}`);
+    return written;
   } catch (e) {
     // Best-effort like every other daemon timer: a failed snapshot must never take the daemon down.
     // It is NOT silent — W-code coverage for a cadence that has stopped is Child D's job, and this
@@ -225,7 +263,7 @@ export function boardSnapshotTick(opts: { dbPath: string; dir: string; keep: num
 
 export function startBoardSnapshot(opts: BoardSnapshotTimerOpts): ReturnType<typeof setInterval> | null {
   if (!(opts.intervalMs > 0)) return null; // everyHours: 0 ⇒ disabled, not started at all
-  const timer = setInterval(() => boardSnapshotTick(opts), opts.intervalMs);
+  const timer = setInterval(() => boardSnapshotTick({ ...opts, intervalMs: opts.intervalMs }), opts.intervalMs);
   timer.unref?.();
   return timer;
 }
@@ -257,12 +295,29 @@ export function snapshotBeforeDestructive(opts: { dbPath: string; dir: string; k
 }
 
 /** Resolve `team.backup.*` with the shipped defaults. everyHours 0 ⇒ the cadence is off. */
-export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep?: number; dir?: string } } | undefined, stateRoot: string): { intervalMs: number; keep: number; dir: string } {
+export function resolveBackupConfig(team: { backup?: { everyHours?: number; keep?: number; dir?: string } } | undefined, stateRoot: string): { intervalMs: number; keep: number; dir: string; source: "env" | "config" } {
   const b = team?.backup ?? {};
   const everyHours = typeof b.everyHours === "number" ? b.everyHours : 6;
   const keep = typeof b.keep === "number" ? b.keep : 10;
+  // The bound lives HERE, at the choke point, not only on the config field. E18 refuses an out-of-range
+  // `everyHours` at load — which is the better error, because it names the field — but this line composes
+  // the value that actually reaches setInterval out of TWO inputs, and the env override answers to no
+  // validator. Past Node's 32-bit limit setInterval coerces the delay to 1ms, so the failure is not a
+  // slow cadence but a board snapshot every millisecond against a shared hub.db. Guarding the validator
+  // alone left exactly one input still able to produce it.
+  // Out of range resolves to 0, which is this block's already-documented "disabled": a cadence that
+  // cannot be honoured must not silently become the fastest one possible.
+  // `||` made 0 fall THROUGH to the config cadence, so `DEVLOOP_BOARD_SNAPSHOT_MS=0` did not disable —
+  // it silently ran at team.backup.everyHours instead, and 0 is the one value this block documents as OFF.
+  // The same truthiness slip as c255fc2's, in the line 24e219c touched. Presence decides whether the
+  // override applies; only then does the value.
+  const envRaw = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+  const envMs = envRaw === undefined || envRaw.trim() === "" ? null : Number(envRaw);
+  const overridden = envMs !== null && Number.isFinite(envMs) && envMs >= 0 && envMs <= 2_147_483_647;
+  const raw = overridden ? (envMs as number) : Math.max(0, everyHours) * 3_600_000;
   return {
-    intervalMs: Number(process.env.DEVLOOP_BOARD_SNAPSHOT_MS) || Math.max(0, everyHours) * 3_600_000,
+    source: overridden ? "env" : "config" as const,
+    intervalMs: Number.isFinite(raw) && raw >= 0 && raw <= 2_147_483_647 ? raw : 0,
     keep,
     dir: b.dir ?? join(stateRoot, "snapshots"),
   };

@@ -41,7 +41,7 @@ import { prTicketIds, ticketFromBranch } from "./pr-tickets.ts"; // LOOP-150: ev
 import { existsSync, realpathSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { openDb } from "./db.ts";
-import { resolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
+import { resolveHubDbPath, tryResolveHubDbPath, tryResolveWorkspace } from "./workspace.ts";
 import { readPrReviewState, defaultGhExec, type ExecFn, readCiFreshness, type CiFreshness } from "./landing.ts";
 import { addComment, updateTicketRow, readTicketUpdateFields } from "./ticketwrite.ts";
 
@@ -541,8 +541,10 @@ export function mergeGuard(
     // without --pr at all the caller simply gave nothing to resolve from.
     boardState = { claimedTicketIds, ticketId: null, ticketState: null, trip: false, skipped: true, skipReason: prLookupFailure ?? "no-ticket-input" };
   } else {
-    // Resolve dbPath: explicit > DEVLOOP_HUB_DB env > workspace-inferred
-    const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? resolveHubDbPath(repoDir);
+    // Resolve dbPath: explicit > DEVLOOP_HUB_DB env > workspace-inferred. The try- form because the
+    // board axis DEGRADES when there is no board (skipReason "no-hub-db" below) — the guard still
+    // reports its other axes rather than failing the whole check on an unresolvable path.
+    const dbPath = opts.dbPath ?? process.env.DEVLOOP_HUB_DB ?? tryResolveHubDbPath(repoDir);
     if (!dbPath || !existsSync(dbPath)) {
       boardState = { claimedTicketIds, ticketId, ticketState: null, trip: false, skipped: true, skipReason: "no-hub-db" };
     } else {

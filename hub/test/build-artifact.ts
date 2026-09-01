@@ -11,10 +11,11 @@
 import { spawnSync } from "node:child_process";
 import { registerDaemonPid } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), ".."); // hub/
 const repoRoot = join(hubRoot, "..");
@@ -37,7 +38,7 @@ function parsePackJson(stdout: string): Array<{ files?: Array<{ path: string }> 
   catch { return []; }
 }
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-build-artifact-"));
+const tmp = tmpRoot("dl-build-artifact-");
 try {
   // ── AC1: the publish/prepack build succeeds and emits BOTH compiled bin entry points ──
   const build = run("npm", ["run", "build"]);

@@ -5,6 +5,7 @@
 // status — never a response body that could echo a credential.
 import type { DatabaseSync } from "node:sqlite";
 import { createHmac } from "node:crypto";
+import { timerEnvMs } from "./timer-env.ts";
 export type Provider = "slack" | "lark";
 // DL-52: how a channel sends. 'bot' = the provider bot API (chat.postMessage / im.messages, needs a token /
 // tenant_access_token) — the default, every existing channel. 'webhook' = a one-way incoming-webhook URL
@@ -67,7 +68,7 @@ export interface InboundMsg { providerMsgId: string; authorRef: string; text: st
 
 export type FetchImpl = typeof fetch;
 // mirror §9 notify's `curl --max-time 10`; overridable for tests (the timeout path must be fast to assert)
-const timeoutMs = (): number => Number(process.env.DEVLOOP_CHANNEL_TIMEOUT_MS) || 10_000;
+const timeoutMs = (): number => timerEnvMs("DEVLOOP_CHANNEL_TIMEOUT_MS", 10_000);
 
 // ── timeout-wrapped JSON fetch ───────────────────────────────────────────────
 async function httpJson(

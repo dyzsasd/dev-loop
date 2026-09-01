@@ -2,13 +2,14 @@
 // AC1–AC4: Predicate arms (detectConsecutiveFailures): N threshold, recency window, controls.
 // AC5: Registry row + codes parity test.
 // AC6: Regression test with mutation check.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { detectConsecutiveFailures, readFireRows } from "../src/metrics.ts";
 import type { FireRow } from "../src/metrics.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w44-")));
+const tmp = realpathSync(tmpRoot("dl-w44-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

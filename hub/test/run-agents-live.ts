@@ -3,9 +3,9 @@
 // real API tokens in production never executed under test. A stub `claude` on DEVLOOP_CLAUDE_BIN
 // stands in for the CLI: it records its env + argv, optionally sleeps, and marks completion.
 import { spawnSync, execFileSync, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, openSync, closeSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { EXIT_NO_WORK } from "../src/breaker.ts";      // LOOP-543: the outcome code a fire that produced nothing is ledgered under
@@ -15,11 +15,12 @@ import { insertTicket } from "../src/ticketwrite.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 const repoRoot = resolve(hubRoot, "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-run-live-"));
+const tmp = tmpRoot("dl-run-live-");
 try {
   const data = join(tmp, "data");
   const repo = join(tmp, "repo");
@@ -31,7 +32,7 @@ try {
   writeFileSync(stub, `#!/bin/sh
 rec="$STUB_OUT/rec-$$.txt"
 { echo "ACTOR=$DEVLOOP_ACTOR"; echo "PROJECT=$DEVLOOP_PROJECT"; echo "SPLIT=$DEVLOOP_DEV_SPLIT"; echo "NARGS=$#"; } > "$rec"
-[ -n "$STUB_SLEEP" ] && sleep "$STUB_SLEEP"
+[ -n "$STUB_SLEEP" ] && { trap 'exit 130' INT; sleep "$STUB_SLEEP" & wait $!; }
 echo "COMPLETED" >> "$rec"
 exit 0
 `);
@@ -73,11 +74,15 @@ exit 0
     "the in-flight fire ran to completion during drain (was: SIGINT'd milliseconds after launch)");
   clearRecs();
 
-  // ── 3. fire timeout: a wedged child is SIGTERM'd, the slot recovers, the loop exits by drain ──
+  // ── 3. fire timeout: a wedged child is SIGINT'd, the slot recovers, the loop exits by drain ──
+  // The signal changed from SIGTERM: claude's terminal usage object is flushed on the way out for SIGINT
+  // and not for SIGTERM, so a SIGTERM timeout guaranteed no receipt for the most expensive kind of fire
+  // there is. The 10s escalation to a group SIGKILL is unchanged, so a child that ignores SIGINT still
+  // dies on the same deadline — which is what arm 8 below reads.
   const t0 = Date.now();
   const timeoutRun = runLive(["--max-fires", "1", "--stagger", "0", "--fire-timeout", "1s", ...common], { STUB_SLEEP: "600" }, 60_000);
   const r3 = recs();
-  ok(/fire exceeded 1s — SIGTERM/.test(timeoutRun.out), "a wedged fire logs the timeout escalation");
+  ok(/fire exceeded 1s — SIGINT/.test(timeoutRun.out), "a wedged fire logs the timeout escalation");
   ok(r3.length === 1 && !/COMPLETED/.test(r3[0]), "the wedged child was actually killed (no completion marker)");
   ok(Date.now() - t0 < 30_000, "the timeout path completes promptly (slot is not held for the child's full sleep)");
   clearRecs();
@@ -183,8 +188,8 @@ sleep 600
   ok(gcAlive !== 0, `grandchild (pid ${gcPid}) was reaped by the process-group kill`);
 
   // ── 8. Scheduler survives the group kill (it is NOT in the child's process group) ──
-  // The fire-timeout run above proves it: if SIGTERM/SIGKILL had hit the scheduler, it would have
-  // exited with a signal (code null), not code 0.
+  // The fire-timeout run above proves it: if the fire's SIGINT/SIGKILL had hit the scheduler, it would
+  // have exited with a signal (code null), not code 0.
   ok(gcRun.code === 0, `scheduler survived the group kill of its fire (exit ${gcRun.code})`);
 
   // ── 9. Retry-loop detection: output keeps arriving but no NEW content → errorClass "retry-loop" ──
@@ -273,7 +278,7 @@ done
   writeFileSync(stubSlow, `#!/bin/sh
 i=0
 while [ $i -lt 5 ]; do echo "healthy progress step $i (genuinely new content)"; i=$((i+1)); sleep 0.3; done
-sleep 600
+exec sleep 600
 `);
   chmodSync(stubSlow, 0o755);
   const slowCommon = ["--root", repoRoot, "--data", data, "--hub-db", slowDb, "--project", "slow", "--cwd", repo, "--cli", "claude", "--agents", "sweep", "--once"];

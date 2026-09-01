@@ -13,19 +13,20 @@
 // code handoffs LOOP-309 exists to catch (LOOP-31, LOOP-294) are still refused. Both directions are
 // asserted here; an exemption asserted in one direction only is unfalsifiable.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { insertTicket, updateTicketRow } from "../src/ticketwrite.ts";
 import type { NewTicketFields, TicketUpdateFields } from "../src/ticketwrite.ts";
 import { handoffGateRejection } from "../src/handoff-gate.ts";
 import { AGENT_HANDLES } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string): void => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-l360-")));
+const tmp = realpathSync(tmpRoot("dl-l360-"));
 const cwd0 = process.cwd();
 try {
   // ── 1. The gate's own contract, in both directions ────────────────────────────────────────────

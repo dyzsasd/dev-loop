@@ -349,6 +349,19 @@ function parseGoFunctions(root: string, file: string, source: string): FnSpan[] 
 }
 
 // Run \`go test -coverprofile\` and paint per-file covered/claimed byte maps from the block ranges.
+// A temp dir this process removes when it ends, on EVERY path.
+//
+// The Go coverage profile went into a bare mkdtemp that nothing ever removed: two early returns (no
+// go.mod, no coverprofile) and the normal one all walked past it, so each quality run left a directory
+// behind for good. try/finally would still miss the exits that matter most — the threshold gate calls
+// process.exit(1) from inside the coverage path — so the removal is hung off process exit instead, which
+// covers the early returns, the exits, and an uncaught throw with one mechanism.
+function ephemeralDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* tmp — never fail a gate on cleanup */ } });
+  return dir;
+}
+
 function collectGoCoverage(root: string, wanted: Map<string, string>, goTestCmd: string | null):
   { painted: Map<string, Uint8Array>; claimed: Map<string, Uint8Array> } {
   const painted = new Map<string, Uint8Array>();
@@ -356,7 +369,7 @@ function collectGoCoverage(root: string, wanted: Map<string, string>, goTestCmd:
   let moduleName = "";
   try { moduleName = (readFileSync(join(root, "go.mod"), "utf8").match(/^module\s+(\S+)/m)?.[1]) ?? ""; }
   catch { console.error("quality: no go.mod at the root — Go coverage skipped (rows go N/A)"); return { painted, claimed }; }
-  const profile = join(mkdtempSync(join(tmpdir(), "devloop-quality-go-")), "cover.out");
+  const profile = join(ephemeralDir("devloop-quality-go-"), "cover.out");
   const cmd = goTestCmd ? goTestCmd.replaceAll("{profile}", profile)
     : `go test -count=1 -coverpkg=./... -coverprofile=${JSON.stringify(profile)} ./...`;
   console.error(`quality: running Go tests for coverage — ${cmd}`);
@@ -592,17 +605,30 @@ function main(): void {
   // coverage — per language pipeline, one merged row set
   let covDir = o.coverageDir;
   let ephemeral = false;
+  // Three early exits below used to skip the cleanup at the bottom of this function, leaking one coverage
+  // tree per run — the same shape 09e1726 fixed for the Go path. Removal is hung off process exit so it
+  // covers every exit, not only the one that falls through.
+  //
+  // The "no coverage matched" message used to name the directory for inspection, which is why deleting it
+  // felt wrong. But `--keep-coverage` already exists for exactly that, and it is the better answer: the
+  // default leaks nothing anywhere (CI included), and an operator who wants to look re-runs with the flag.
+  // Retaining by default would have been a second, implicit way to do what a documented flag already does.
   const painted = new Map<string, Uint8Array>();
   const claimed = new Map<string, Uint8Array>(); // Go only — V8 claims the whole loaded script
   if (tsjsFiles.length) {
     if (!covDir) {
       covDir = mkdtempSync(join(tmpdir(), "devloop-quality-"));
       ephemeral = true;
+      const created = covDir;
+      process.on("exit", () => {
+        if (!ephemeral || o.keepCoverage) return;
+        try { rmSync(created, { recursive: true, force: true }); } catch { /* tmp — never fail a gate on cleanup */ }
+      });
       runTests(root, o.testCmd ?? "npm test", covDir);
     }
     for (const [f, p] of collectCoverage(root, covDir, tsjsSources)) painted.set(f, p);
     if (![...painted.keys()].some((f) => !f.endsWith(".go"))) {
-      console.error(`quality: no V8 coverage matched the analyzed TS/JS files (dir: ${covDir}) — those rows go N/A. If tests run COMPILED output (dist/), point paths at what actually runs, or run tests directly on source (zero-build).`);
+      console.error(`quality: no V8 coverage matched the analyzed TS/JS files — those rows go N/A (re-run with --keep-coverage to inspect the coverage dir). If tests run COMPILED output (dist/), point paths at what actually runs, or run tests directly on source (zero-build).`);
       if (o.threshold !== null) {
         console.error(`quality: --threshold is set but no rows are scorable — gate cannot run (dir: ${covDir})`);
         process.exit(1);

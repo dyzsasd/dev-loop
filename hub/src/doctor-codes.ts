@@ -84,7 +84,8 @@ export const DOCTOR_CODES: readonly DoctorCode[] = [
   { code: "W43", name: "stale claim — In Progress ticket has had no activity for over 24h while its owner still fires", source: "doctor.ts" },
   { code: "W44", name: "agent firing consecutively but always failing — a dead lane", source: "doctor.ts" },
   { code: "W45", name: "codex lane on the SAFE default — team.codex.sandbox unset, an unattended codex fire cannot write and still records a success", source: "doctor.ts" },
-  { code: "W46", name: "blocked ticket with no bail-shape label and no parseable Bail-shape comment — unroutable", source: "doctor.ts" },
+  { code: "W46", name: "blocked ticket with no bail-shape label, no parseable Bail-shape comment and no live Blocked-by edge — unroutable", source: "doctor.ts" },
+  { code: "W47", name: "daily budget ceiling unset, breached, or not computable from the ledger", source: "metrics.ts" },
   { code: "E20", name: "home-anchored ~/.dev-loop tree still holds state the seam removal would orphan", source: "legacy-home.ts" },
 ] as const;
 

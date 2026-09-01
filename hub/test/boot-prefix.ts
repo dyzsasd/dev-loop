@@ -4,19 +4,20 @@
 // EXACTLY what context-bill's conventionsLoad bills (one span authority, two consumers);
 // (3) the §0a lessons slice (own + Shared, + Dev for split tiers); (4) per-backend
 // contract-file selection; (5) fail-open on a malformed/missing SKILL.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from "node:fs";
+
 import { join } from "node:path";
 import { assembleBootCorpus, assembleJobCorpus, conventionsUnionText, lessonsSlice } from "../src/boot-prefix.ts";
 import { loadWorkspace, toLegacyView } from "../src/team-config.ts";
 import { parseConventions, parseSectionsLine, splitSkill, conventionsLoad, pluginRoot, jobSlice, jobsOf, cheatSlice } from "../src/context-bill.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const root = pluginRoot();
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
 // ── fixture data dir with a lessons file ──────────────────────────────────────────────────────────
-const dataDir = mkdtempSync(join(tmpdir(), "devloop-boot-"));
+const dataDir = tmpRoot("devloop-boot-");
 mkdirSync(join(dataDir, "proj1"), { recursive: true });
 const LESSONS = [
   "# lessons", "",
@@ -143,7 +144,7 @@ ok(!!bareOps && !!realSingleAutoMerge && bareOps.hash !== realSingleAutoMerge.ha
 // §12c/§19).
 const lvTmpDirs: string[] = [];
 function legacyViewArgs(repos: Record<string, object>, projectRepos: { ref: string }[]) {
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "devloop-bootlv-")));
+  const tmp = realpathSync(tmpRoot("devloop-bootlv-"));
   lvTmpDirs.push(tmp);
   for (const r of Object.values(repos)) mkdirSync(join(tmp, (r as { path: string }).path), { recursive: true });
   writeFileSync(join(tmp, "dev-loop.json"), JSON.stringify({
@@ -273,7 +274,7 @@ if (a) ok(!a.text.includes("skills/dev-agent/SKILL.md —"), "non-dev-tier corpo
 // path. The new path is join(dataDir, "lessons", "INDEX.md") + join(dataDir, "lessons", "proj1.md").
 // Verify the assembler reads from the new path and delivers sentinel rules into the corpus.
 {
-  const wsDir = mkdtempSync(join(tmpdir(), "dl-bp-ws-"));
+  const wsDir = tmpRoot("dl-bp-ws-");
   try {
     // Create the new-path lessons structure (workspace-style: .dev-loop/lessons/)
     mkdirSync(join(wsDir, "lessons"), { recursive: true });
@@ -312,14 +313,14 @@ if (a) ok(!a.text.includes("skills/dev-agent/SKILL.md —"), "non-dev-tier corpo
     ok(!!c1 && c1.lessonsBytes > 0, `LOOP-163 AC4: lessonsBytes is a delivery count > 0 (got ${c1?.lessonsBytes})`);
 
     // AC3: absent INDEX (no lessons at all) is not an error — assembles cleanly, lessonsBytes=0
-    const emptyWs = mkdtempSync(join(tmpdir(), "dl-bp-empty-"));
+    const emptyWs = tmpRoot("dl-bp-empty-");
     const cEmpty = assembleBootCorpus(root, emptyWs, "pm", "proj1", "service");
     ok(!!cEmpty, "LOOP-163 AC3: no lessons dir at all — assembles cleanly (fail open)");
     ok(!!cEmpty && cEmpty.lessonsBytes === 0, "LOOP-163 AC3: lessonsBytes=0 when no lessons files present");
     rmSync(emptyWs, { recursive: true, force: true });
 
     // AC3b: legacy path <dataDir>/<project>/lessons.md still contributes when present
-    const legacyWs = mkdtempSync(join(tmpdir(), "dl-bp-legacy-"));
+    const legacyWs = tmpRoot("dl-bp-legacy-");
     mkdirSync(join(legacyWs, "proj1"), { recursive: true });
     writeFileSync(join(legacyWs, "proj1", "lessons.md"), [
       "# lessons", "",

@@ -2,17 +2,18 @@
 // (valid config, hub rows seeded, permissions provisioned, doctor NEXT = add-repo), resume mode never
 // re-inits, and the linear --yes path survives via the E09 warning instead of bricking.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-init-wizard-")));
+const tmp = realpathSync(tmpRoot("dl-init-wizard-"));
 const HOME = join(tmp, "home");
 const env = (extra: Record<string, string> = {}) => {
   const e: Record<string, string | undefined> = { ...scrubFireEnv(), DEVLOOP_HOME: HOME };

@@ -9,8 +9,8 @@
 // In-process throughout: openDb on a temp file, no CLI spawn, so no fire-marker/env leak (LOOP-193)
 // and no workspace resolution (LOOP-418) is involved. The two DB-reading surfaces take their handle
 // as an argument, which is what makes that possible.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { decisionQueue, decisionItemEnteredAt, decisionEnteredAt, renderHuman, type DecisionItem } from "../src/metrics.ts";
@@ -19,11 +19,12 @@ import { checkDecisionQueueStall, describeDecisionOldest, nextStep } from "../sr
 import { blockedNotifyTick } from "../src/daemon-notifiers.ts";
 import { operatorBrief } from "../src/operator-brief.ts";
 import type { FetchImpl } from "../src/channel.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-dq-appr-"));
+const tmp = tmpRoot("dl-dq-appr-");
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-08-10T12:00:00Z");
 const iso = (ms: number) => new Date(ms).toISOString();

@@ -4,8 +4,8 @@
 // rest through by silence: three of eight board states, two of the event kinds that change a ticket,
 // and a returned flag that was destructured and then never read. Silence reads as a decision, and in
 // all three cases the thing left out was the consequential one.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { isMergeEligible, MERGE_ELIGIBILITY_STATES } from "../src/merge-guard.ts";
 import { dependencyGraph } from "../src/dependency-graph.ts";
@@ -13,10 +13,11 @@ import { liveBlockerIds } from "../src/blocked-by.ts";
 import { ticketPage } from "../src/views/ticket.ts";
 import { openDb, STATES } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-omission-")));
+const tmp = realpathSync(tmpRoot("dl-omission-"));
 
 try {
   // ── LOOP-113: every board state is ENUMERATED, not eligible by omission ───────────────────────

@@ -31,7 +31,7 @@ per-agent inputs:
 - Lessons (§14): `## junior-dev` + `## Dev` + `## Shared`. Codex (§24): the same sub-flags as `dev`.
 - Open with a one-line summary: project, board, repo, `mode` (§12), `autonomy` (§12a), the dev model
   detected (split vs the legacy no-op), and the ship policy
-  (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`). `dry-run`: code locally; no board writes,
+  (`autoCommit`/`autoDeploy` + `deploy.command`). `dry-run`: code locally; no board writes,
   no push, no deploy.
 Sections: §0 §0a §2 §7 §9 §12 §12a §14 §16 §17 §18 §20 §21c §22 §24
 
@@ -139,8 +139,8 @@ dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--d
     --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
 # save_issue (update)
 dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
-    HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--blocked-by ids] [--unblocked-by ids]
+    HAZARD: labels REPLACE the full set (re-pass all). --blocked-by writes the §9c marker ('Blocked-by: <id>') AND adds 'blocked' to the ticket's CURRENT label set (no re-pass needed); --unblocked-by writes the retirement marker ('Unblocked-by: <id>'), bare-line form.
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 # doc.get
 dev-loop doc get (--slug S | --kind K) [--version N|latest]

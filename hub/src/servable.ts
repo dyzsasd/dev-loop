@@ -9,6 +9,9 @@
 // leaf imports only node:sqlite + the zod-free ./db.ts types, so it is safe to import from either side.
 import { DatabaseSync } from "node:sqlite";
 import type { State, Ticket } from "./db.ts";
+// The ONE mode-marker rule and the ONE design-parent predicate. design-parent.ts imports nothing
+// beyond node:sqlite, so this leaf stays loadable from a src-only checkout (LOOP-58).
+import { designParentIds, isDesignParent, modeMarkerOf } from "./design-parent.ts";
 
 // Row → API shape — a verbatim mirror of agentops.ts's toTicket/TicketRow (the accepted per-module adapter
 // pattern in this codebase; kept private here so this leaf stays self-contained and agentops-free).
@@ -122,16 +125,27 @@ export function qaMaintenanceSlice(db: DatabaseSync, projectId: string): { verif
 }
 
 // senior-dev Mode pick (job-scoped prompts, §21a) — which JOB corpus a senior-dev fire loads: `design`
-// (author the module design, stage junior children) vs `directcode` (ship an escalation itself). Read from
-// the picked ticket's `Mode:` marker, deterministically:
+// (author the module design, stage junior children) vs `directcode` (ship an escalation itself).
+//
 //   • the deciding ticket = the one senior-dev works THIS fire — an In Progress orphan it resumes (Step 0),
 //     else the top of its §5-ranked servable Todo (a fresh pick).
-//   • `Mode: direct-code` at the description head ⇒ `directcode`; `Mode: design` ⇒ `design`.
-//   • no marker ⇒ a follow-up (a non-empty `relatedTo`, i.e. it supersedes a Canceled predecessor per §21a)
-//     defaults to `directcode`; otherwise `design`.
-//   • nothing to pick ⇒ `design` (the normal complex path). Zero board access / read error is handled by the
-//     caller's fail-open (it defaults the job), never here.
-// Same leaf as servableSlice so the scheduler consumes it WITHOUT the agentops (zod) tree (LOOP-58).
+//   • its `Mode:` marker decides, read as a whole LINE anywhere in the body (design-parent.ts's
+//     modeMarkerOf — the one reader). This used to anchor at the description HEAD, which no ticket
+//     written to references/ticket-templates.md can satisfy (`## Context` is always the first line):
+//     measured on a live board, 9 of 86 tickets carried a marker and none of them at the head, so the
+//     marker branch never fired and every pick fell through to the guess below. A design parent was
+//     therefore launched with the direct-code corpus every 5 minutes and did nothing each time.
+//   • no marker ⇒ the guess, and it decides most picks (77 of those 86 tickets carry no marker), so its
+//     direction matters as much as the marker's. §21a's natural signal for an escalation is a ticket
+//     `relatedTo` a CANCELED `review failed:` predecessor — not any relation at all. `relatedTo` also
+//     carries §4 splits and §15 coverage siblings, which is how a design parent with a live sibling
+//     (JBU-13 → JBU-8) was read as an escalation. So: a design parent is `design` (the shared
+//     predicate, never a second copy of that rule); else a Canceled predecessor ⇒ `directcode`; else
+//     `design`, the normal complex path.
+//   • nothing to pick ⇒ `design`. Zero board access / read error is handled by the caller's fail-open
+//     (it defaults the job), never here.
+// Same leaf as servableSlice so the scheduler consumes it WITHOUT the agentops (zod) tree (LOOP-58) —
+// design-parent.ts is itself import-free beyond node:sqlite, so sharing its rule keeps that property.
 export function seniorDevModePick(db: DatabaseSync, projectId: string): "design" | "directcode" {
   const byState = (state: string): Ticket[] =>
     (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state=? ORDER BY created_at").all(projectId, state) as unknown as TicketRow[]).map(toTicket);
@@ -141,10 +155,23 @@ export function seniorDevModePick(db: DatabaseSync, projectId: string): "design"
     .sort((x, y) => PICK_RANK(x) - PICK_RANK(y) || x.created_at.localeCompare(y.created_at));
   const picked = inProgress[0] ?? todo[0] ?? null;
   if (!picked) return "design"; // nothing to pick ⇒ the normal complex path
-  const head = (picked.description ?? "").trimStart();
-  if (head.startsWith("Mode: direct-code")) return "directcode";
-  if (head.startsWith("Mode: design")) return "design";
-  return picked.relatedTo.length > 0 ? "directcode" : "design"; // no marker ⇒ follow-up is direct-code, else design
+  const marker = modeMarkerOf(picked.description ?? "");
+  if (marker) return marker;
+  // A design parent is a design, whatever its relations look like — asked through the SHARED predicate
+  // so this cannot drift from the write gates and the queue that ask the same question.
+  if (isDesignParent({ id: picked.id, description: picked.description ?? "", state: picked.state }, designParentIds(db, projectId))) return "design";
+  return supersedesCanceled(db, projectId, picked.relatedTo) ? "directcode" : "design";
+}
+
+/** §21a's escalation signal: this ticket supersedes a CANCELED predecessor (`review failed:`, §3). */
+function supersedesCanceled(db: DatabaseSync, projectId: string, relatedTo: readonly string[]): boolean {
+  if (!relatedTo.length) return false;
+  const placeholders = relatedTo.map(() => "?").join(",");
+  try {
+    const rows = db.prepare(`SELECT state FROM tickets WHERE project_id=? AND id IN (${placeholders})`)
+      .all(projectId, ...relatedTo) as unknown as { state: string }[];
+    return rows.some((r) => r.state === "Canceled");
+  } catch { return false; } // an unreadable relation is not an escalation claim
 }
 
 /**
@@ -173,6 +200,27 @@ export function servableBacklogDepth(db: DatabaseSync, projectId: string): { tot
     if (isTodoServableFor(t, "dev")) dev++;
   }
   return { total, "senior-dev": senior, "junior-dev": junior, dev };
+}
+
+/**
+ * A fingerprint of the Backlog Job B2 actually reads — count + newest touch, over the SAME non-blocked
+ * rows servableBacklogDepth counts, so the depth and the fingerprint can never describe different sets.
+ *
+ * It exists so the scheduler can tell "this lane already looked at exactly these rows" from "new work
+ * arrived". It moves when a Backlog row is created, edited, promoted or canceled — INCLUDING by the
+ * lane's own grooming, so a fire that shapes something is never mistaken for one that changed nothing.
+ * Deliberately Backlog-scoped rather than the board-wide change cursor: on a busy board that cursor
+ * moves on every unrelated dev write, which would make the predicate that reads this always trip.
+ */
+export function backlogFingerprint(db: DatabaseSync, projectId: string): string {
+  const rows = (db.prepare("SELECT * FROM tickets WHERE project_id=? AND state='Backlog'").all(projectId) as unknown as TicketRow[]).map(toTicket);
+  let count = 0, newest = "";
+  for (const t of rows) {
+    if (t.labels.includes("blocked")) continue; // the same exclusion servableBacklogDepth applies
+    count++;
+    if (t.updated_at > newest) newest = t.updated_at;
+  }
+  return `${count}|${newest}`;
 }
 
 // servableTodoDepth — the §5a todoDepth cap input, computed from the SAME servable-Todo

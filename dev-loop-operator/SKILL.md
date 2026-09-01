@@ -83,22 +83,24 @@ system: `cd <ws> && nohup dev-loop run --agents core >> .dev-loop/run.log 2>&1 &
 ## §4 Reading progress (the daily read)
 
 ```bash
-dev-loop status --json        # PRIMARY: one JSON — scheduler/daemon liveness, pause + breaker state,
-                              # decision queue, last fires, doctor W-codes (fallbacks below if absent)
+dev-loop inspect [--json]     # PRIMARY: liveness, queue, fires, breaker, doctor codes, repo + lane
+                              # state, warnings[]; --json is what a sub-agent reads
+dev-loop status --json        # the same, without git + lanes
 dev-loop hub status           # daemon per project: RUNNING → url (pid, version, actor) / stopped
-dev-loop doctor               # read-only health ladder; NEXT: line + W-codes
+dev-loop doctor               # the health GATE (inspect reports its codes)
 dev-loop metrics --window 24h # fire success by agent, $ + tokens, budget vs dailyUsd, errorClass tally
 dev-loop approvals            # the typed decision queue — what waits on a human
 dev-loop queue; dev-loop tickets --state "In Review"   # board view without the UI
 ```
 
-What matters: **the decision queue** (`approvals`, `needs-*`/`blocked` tickets, doctor **W20**) —
-answer with `dev-loop comment add <id> --body …` or `dev-loop approve <key>`; **breaker state** —
-`breaker OPEN <errorClass>` in `run.log`/`status` means consecutive identical failures (spend-limit /
+What matters: run **`dev-loop inspect`** first — one reading of scheduler/daemon, decision queue,
+fires, breaker, doctor codes and repo + lane state, with judgements in `warnings[]`,
+each with evidence. **Doctor's codes come back from `inspect`, not a list here** — a
+hand-maintained copy drifts. What needs a human is **the decision queue** (`approvals`,
+`needs-*`/`blocked`): `dev-loop comment add <id> --body …` or `dev-loop approve <key>`.
+**Breaker state**: `breaker OPEN <errorClass>` means consecutive identical failures (spend-limit /
 rate-limit / auth / network) parked that lane on a probe cadence; it closes itself once a probe
-succeeds; **W-codes that page you**: W09/W11 (CLI or binary missing), W12/W13 (secret unresolvable),
-W22 (landing stall), W25 (port band exhausted), W28 (daemon on old code), W36 (scheduler build
-skew), W39 (secrets.env world-readable), W44 (dead lane). A repo dirty *during* a fire is normal.
+succeeds. A repo dirty *during* a fire is normal.
 
 ## §5 Config changes — pause → drain → edit → resume
 

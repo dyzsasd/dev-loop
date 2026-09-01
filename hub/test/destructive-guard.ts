@@ -32,7 +32,7 @@
 // mutation-testable file on purpose: inverting a guard's condition must fail a suite whose name says
 // what it guards.
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +48,7 @@ import {
 import { FIRE_MARKER_VARS } from "./env-scrub.ts";
 import { codeOnly } from "./code-only.ts"; // LOOP-396: the ONE source-to-executable-text reduction
 import type { Workspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -74,7 +75,7 @@ ok(FIRE_MARKER_VARS.every((v) => process.env[v] === undefined),
 ok(activeFireMarker() === null,
   "AC1: with the ambient env scrubbed, activeFireMarker() reports no fire — the arms below measure the code, not the launcher");
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-destructive-guard-")));
+const tmp = realpathSync(tmpRoot("dl-destructive-guard-"));
 const canaryPath = join(tmp, "canary-hub.db");
 const canaryRows = () => {
   const db = new DatabaseSync(canaryPath);
@@ -395,11 +396,17 @@ const wsWs = (key: string, projects: Record<string, { scratch?: unknown }> = {})
     ok(where.length > 0, `coverage map: ${name} is imported and exercised by a suite (${where.join(", ") || "NOTHING"})`);
   }
 
-  // writeConfigAtomic is NOT exported, so AC2's "direct unit test" is unreachable for it without a
-  // src change this ticket's scope forbids. That is recorded as a CHECKED fact — if it is ever
-  // exported, the inventory arm above fails and this one does too, and the direct test becomes due.
-  ok(/^function writeConfigAtomic\(/m.test(src) && !/^export function writeConfigAtomic/m.test(src),
-    "coverage map: writeConfigAtomic is module-private — its contract is reachable only through commitBothHalves");
+  // writeConfigAtomic MOVED to src/atomic-write.ts: three config writers outside this module needed the
+  // same guarantee (team-edit's `team set`/`add-project`/`add-repo`, team-init, team-import), and a
+  // shared guarantee cannot live behind one module's private helper. The old note here said that if it
+  // were ever exported "the direct test becomes due" — it is now due and it exists. This module's own
+  // export surface is unchanged: it imports the helper and does not re-export it, so the inventory arm
+  // above still holds.
+  ok(!/function writeConfigAtomic\(/m.test(src) && /import \{ writeConfigAtomic \} from "\.\/atomic-write\.ts"/.test(src),
+    "coverage map: writeConfigAtomic lives in atomic-write.ts and is imported here, neither defined nor re-exported");
+  const atomicSuite = readFileSync(join(hubRoot, "test", "atomic-write.ts"), "utf8");
+  ok(/writeConfigAtomic/.test(atomicSuite) && /tmp/.test(atomicSuite),
+    "coverage map: …and the direct unit test its move made due exists in test/atomic-write.ts");
   const commitSuite = readFileSync(join(hubRoot, "test", "destructive-commit.ts"), "utf8");
   ok(/no \.tmp- residue/.test(commitSuite) && /byte-complete on disk \(rename, not a partial write\)/.test(commitSuite),
     "coverage map: writeConfigAtomic's tmp+rename contract IS asserted — the atomic-write and residue arms in destructive-commit.ts");

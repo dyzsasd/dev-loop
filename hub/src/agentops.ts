@@ -393,7 +393,7 @@ function opSaveComment(db: DatabaseSync, projectId: string, actor: string, a: { 
   if (a.issueId === undefined) return errR(400, "issueId required"); // === undefined, NOT falsy (DL-69): a zod-valid empty-string issueId must fall through to the not-found lookup, byte-identical to the pre-refactor native handler
   if (typeof a.body !== "string") return errR(400, "body required");
   if (!getRow(db, projectId, a.issueId)) return errR(404, `no such ticket ${a.issueId}`);
-  const pol = rulingCommentPolicy(db, actor, a.body);
+  const pol = rulingCommentPolicy(db, actor, a.body, { projectId });
   if (pol.error !== null) return errR(pol.status, pol.error);
   if (!pol.ruling) {
     const { id, createdAt } = insertComment(db, projectId, actor, a.issueId, a.body);

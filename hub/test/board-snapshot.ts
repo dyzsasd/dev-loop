@@ -7,9 +7,9 @@
 // catch was unreachable dead code) and `readFileSync` of a live SQLite main file is not an atomic
 // read. On 2026-08-04 the whole board was cascade-deleted and there was no copy to restore from.
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir, platform } from "node:os";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,11 +21,12 @@ import { commitBothHalves } from "../src/destructive-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-boardsnap-")));
+const tmp = realpathSync(tmpRoot("dl-boardsnap-"));
 
 // A WAL db with rows that were NEVER checkpointed — the shape the old path lost.
 function makeWalDb(path: string, rows: number): void {
@@ -327,12 +328,51 @@ try {
 
     // Trigger 1 — the cadence tick, best-effort by design: a failed periodic backup must never take
     // the daemon down. It writes a `cadence`-reasoned generation.
-    const made = boardSnapshotTick({ dbPath: src, dir, keep: 5 });
+    const madeLog: string[] = [];
+    const made = boardSnapshotTick({ dbPath: src, dir, keep: 5, log: (m) => madeLog.push(m) });
     ok(made !== null && /-cadence\.db$/.test(made), `LOOP-339: the cadence tick writes a cadence-reasoned generation (${made})`);
+    // A SUCCESSFUL tick must leave a line. Failure and skip already did; success did not, and that made
+    // the cadence unauditable: an operator could see that generations exist but not that the timer ran,
+    // and could not tell a timer that stopped firing from one whose writes were failing. Observed live —
+    // one daemon produced a generation on four consecutive cycles and none on the fifth, and the reason
+    // was unrecoverable because neither outcome left a trace.
+    ok(madeLog.some((l) => /board snapshot written:/.test(l) && l.includes(made ?? "\u0000")),
+      `LOOP-339: a successful tick logs the generation it wrote (${madeLog.join(" | ") || "<silent>"})`);
     const logged: string[] = [];
     const failed = boardSnapshotTick({ dbPath: join(tmp, "gone.db"), dir, keep: 5, log: (m) => logged.push(m) });
     ok(failed === null && logged.some((l) => /board snapshot FAILED/.test(l)),
       "LOOP-339: a failing cadence tick returns null and LOGS — best-effort, but never silent");
+
+    // Two daemons can share one hub.db — a workspace with a `_team` daemon and a project daemon has two,
+    // both holding <workspace>/.dev-loop/hub.db and both running this timer. Measured on the live
+    // workspace: they ticked a second apart and wrote BYTE-IDENTICAL generations (two pairs, same
+    // SHA-256). The wasted disk is bounded by `keep`; the retention WINDOW is not — every generation
+    // duplicated means `keep: 10` holds five distinct points in time, and the older generations are the
+    // whole reason the cadence exists. A second writer inside the same interval is refused.
+    {
+      // The guard compares against the timestamp EMBEDDED in the newest generation's filename, which is
+      // stamped from the real clock — so the test drives the real clock too, with a short interval,
+      // rather than threading a fake one through the writer just to observe it.
+      const dupDir = join(tmp, "dup-gens");
+      const INTERVAL = 2_000; // interval/2 = 1s, long enough that two back-to-back ticks fall inside it
+      const first = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10, intervalMs: INTERVAL });
+      ok(first !== null, `two-daemon: the first daemon's tick writes a generation (${first})`);
+      const dupLog: string[] = [];
+      const second = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10, intervalMs: INTERVAL, log: (m) => dupLog.push(m) });
+      ok(second === null, `two-daemon: a second daemon ticking inside the same interval is refused (${second})`);
+      ok(dupLog.some((l) => /already covers this interval/.test(l)),
+        `two-daemon: …and says why, naming the generation that covers it (${dupLog.join(" | ") || "<silent>"})`);
+      ok(listSnapshots(dupDir).filter((g) => g.reason === "cadence").length === 1,
+        `two-daemon: exactly ONE generation exists for that interval (${listSnapshots(dupDir).filter((g) => g.reason === "cadence").length})`);
+      // The NEXT interval must still be taken — the guard bounds duplicates, it does not stop the cadence.
+      spawnSync("sleep", ["2"]);
+      const next = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10, intervalMs: INTERVAL });
+      const gens = listSnapshots(dupDir).filter((g) => g.reason === "cadence").length;
+      ok(next !== null && gens === 2, `two-daemon: the next interval is still taken — the cadence is not stopped (${next}, ${gens} generations)`);
+      // A tick with no interval declared keeps the old unconditional behaviour (the manual verb path).
+      const unguarded = boardSnapshotTick({ dbPath: src, dir: dupDir, keep: 10 });
+      ok(unguarded !== null, "two-daemon: a tick with no interval declared is unguarded, as before");
+    }
 
     // everyHours: 0 ⇒ not started at all, the same posture every other daemon notifier has.
     ok(startBoardSnapshot({ dbPath: src, dir, keep: 5, intervalMs: 0 }) === null,
@@ -392,6 +432,44 @@ try {
     const dflt = resolveBackupConfig(undefined, join(tmp, "sr"));
     ok(dflt.intervalMs === 6 * 3_600_000 && dflt.keep === 10 && dflt.dir.endsWith("snapshots"),
       `LOOP-339: the shipped defaults are 6h / keep 10 / <state>/snapshots (got ${dflt.intervalMs}, ${dflt.keep})`);
+    // The 32-bit ceiling is enforced at the CHOKE POINT, not only on the config field. E18 refuses an
+    // out-of-range `everyHours` at load, but this function composes the value setInterval receives out of
+    // two inputs and the env override answers to no validator — so guarding the validator alone left one
+    // input still able to turn the cadence into a snapshot every millisecond. Out of range resolves to 0,
+    // the block's documented "disabled": a cadence that cannot be honoured must not become the fastest one.
+    const envOver = (() => {
+      const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+      process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "99999999999";
+      try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")).intervalMs; }
+      finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
+    })();
+    // The arm's INTENT — an out-of-range override must not become setInterval's 1ms — is unchanged. Its
+    // answer is: a value the timer cannot honour now falls back to the CONFIGURED cadence rather than
+    // resolving to 0. Disabling was the wrong answer to a typo: it turned the only thing standing between
+    // this board and a cascade delete off, silently, because someone mistyped an env var.
+    ok(envOver === 6 * 3_600_000, `DEVLOOP_BOARD_SNAPSHOT_MS past the 32-bit limit falls back to the configured cadence, never to 1ms (got ${envOver})`);
+    const envOk = (() => {
+      const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+      process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "250";
+      try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")).intervalMs; }
+      finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
+    })();
+    ok(envOk === 250, `…and an in-range override still passes through unchanged (got ${envOk})`);
+    // `0` is this block's documented OFF switch, and the env override honours it. It used to fall THROUGH
+    // to the config cadence, because `Number(env) || …` cannot tell 0 from absent — the same truthiness
+    // slip as c255fc2's, in the line 24e219c touched. Presence decides whether the override applies.
+    const envZero = (() => {
+      const prev = process.env.DEVLOOP_BOARD_SNAPSHOT_MS;
+      process.env.DEVLOOP_BOARD_SNAPSHOT_MS = "0";
+      try { return resolveBackupConfig({ backup: { everyHours: 6 } }, join(tmp, "sr")); }
+      finally { if (prev === undefined) delete process.env.DEVLOOP_BOARD_SNAPSHOT_MS; else process.env.DEVLOOP_BOARD_SNAPSHOT_MS = prev; }
+    })();
+    ok(envZero.intervalMs === 0, `DEVLOOP_BOARD_SNAPSHOT_MS=0 DISABLES, rather than falling through to everyHours (got ${envZero.intervalMs})`);
+    ok(envZero.source === "env", "…and the config reports which field produced the 0, so the daemon's DISABLED line names the right one");
+
+    ok(resolveBackupConfig({ backup: { everyHours: 600 } }, join(tmp, "sr")).intervalMs === 0,
+      "…and the same ceiling applies to the config path, which E18 has already refused by then");
+
     const tuned = resolveBackupConfig({ backup: { everyHours: 2, keep: 3, dir: "/custom" } }, join(tmp, "sr"));
     ok(tuned.intervalMs === 2 * 3_600_000 && tuned.keep === 3 && tuned.dir === "/custom",
       "LOOP-339: config overrides every field");

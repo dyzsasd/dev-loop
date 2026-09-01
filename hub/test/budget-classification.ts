@@ -308,5 +308,31 @@ ok(usdLabel(0) === "0", "PR#276: a genuine zero still reads as zero");
 ok(usdLabel(4.34) === "4.34" && usdLabel(20) === "20.00",
   "PR#276: cent-or-larger amounts keep the two-decimal money rendering operators read");
 
+// ── a usage object with NO costUsd key must not reach the rate samples ────────────────────────
+// The third copy of the slip c255fc2 fixed: `usage.costUsd !== null` passes for a MISSING key, so
+// `undefined / durationMs` — NaN — was pushed into `rates`. Here that is worse than a NaN total. median
+// sorts with `(a,b) => a-b`; a NaN makes the comparator return NaN, which the spec treats as equal, and
+// the broken transitivity lets the sort scramble the FINITE samples. Measured across every insertion
+// position in a 20-sample array: 10 of 21 yield a finite but WRONG median and only 1 yields NaN — so the
+// usual outcome is a wrong number carrying `measured: true`, which is the "model presented as a
+// measurement" failure LOOP-445 exists to prevent, and it feeds perFireDeadline on every launch.
+//
+// The rates must DIFFER for this to discriminate: with identical samples a scrambled order still returns
+// the same median, and the arm would pass on the unfixed code for the wrong reason.
+{
+  const varied = Array.from({ length: 20 }, (_, i) => row({ costUsd: (i + 1) * 0.5, durationMs: 600_000, exitCode: 0 }));
+  const clean = rate(varied);
+  const holed = [...varied.slice(0, 10),
+    { ts: new Date(NOW - 60_000).toISOString(), agent: "qa", project: "p", codingAgent: "claude", model: "claude-opus-5",
+      durationMs: 600_000, exitCode: 0, usage: { source: "provider", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, currency: "USD" } } as unknown as FireRow,
+    ...varied.slice(10)];
+  const withHole = rate(holed);
+  ok(Number.isFinite(withHole), `a row whose usage has no costUsd key does not make the rate non-finite (got ${withHole})`);
+  ok(withHole === clean,
+    `…and does not shift the median off the surviving samples either (clean ${clean}, with hole ${withHole})`);
+  ok(withHole !== FALLBACK,
+    "…so the profile is still measured from its real samples, not handed the conservative fallback");
+}
+
 console.log(fails ? `\n${fails} CHECK(S) FAILED` : "\nBUDGET_CLASSIFICATION_OK");
 process.exit(fails ? 1 : 0);

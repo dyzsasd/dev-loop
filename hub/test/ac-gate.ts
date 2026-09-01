@@ -8,15 +8,16 @@
 // reported-vs-true gap grew from 3.4 points to 6.7 with every operator restart, permanently, for
 // every consumer of that number. The unchecked box was sitting in the ticket body, in a
 // machine-readable format, at the moment of the transition.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts";
 import { parseAcBoxes, waiverReason, acCompletenessRejection } from "../src/ac-gate.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-acgate-")));
+const tmp = realpathSync(tmpRoot("dl-acgate-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

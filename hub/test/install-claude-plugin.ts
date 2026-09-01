@@ -1,15 +1,16 @@
 // install-claude-plugin: the marketplace it writes must PIN the plugin version to this CLI's own version
 // (default), so `/plugin install` never resolves the floating npm `latest` and silently installs an older
 // plugin than the CLI (the add-project-missing bug). --version overrides; --version latest opts out.
-import { mkdtempSync, readFileSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, realpathSync } from "node:fs";
+
 import { join } from "node:path";
 import { installClaudePlugin } from "../src/install-claude-plugin.ts";
 import { pkgVersion } from "../src/paths.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-icp-")));
+const tmp = realpathSync(tmpRoot("dl-icp-"));
 
 // Run installClaudePlugin quietly into a tmp dest and return the parsed marketplace plugin source.
 function sourceFor(args: string[]): Record<string, string> {

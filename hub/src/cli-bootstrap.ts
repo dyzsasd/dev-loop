@@ -54,16 +54,39 @@ function reportWorkspaceError(e: Error): never {
   process.exit(1);
 }
 
+// An escape that is NOT a workspace error still has to land inside the documented exit-code contract
+// (0 ok · 1 domain · 2 usage · 3 doc CAS · 4 identity · 5 hub unavailable — README, `--help`, and the
+// `op --help` table the cheat-sheet generator parses).
+//
+// Re-throwing from inside the handler did reproduce Node's fatal OUTPUT, which is what the original AC
+// asked for, and it silently changed the exit code: Node answers "a handler threw" with **7**, not with
+// the 1 an unhandled throw gives on its own. Measured — `node -e 'throw new RangeError()'` exits 1, the
+// same script under this module exits 7 — and setting process.exitCode first does not override it. Every
+// unconverged error path in the CLI therefore surfaced as a code outside the contract, which reads to a
+// caller branching on exit status as a distinct KIND of failure rather than as a bug. It has cost a fix
+// once already (the `conventions` verb, archived 2026-08).
+//
+// So the stack is printed here and the process exits 1. LOOP-283 AC4 requires that a non-workspace error
+// keep its stack AND the `Node.js v…` trailer — nothing swallowed — and that is not in tension with the
+// exit code: both are reproduced, so the reader loses nothing and the caller gets a code it can branch on.
+// (Treating this as a trade between the two was the wrong read; only the source-line echo, which repeats
+// what the stack's first frame already says, is gone.)
+function reportEscape(e: unknown): never {
+  console.error(e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e));
+  console.error(`\nNode.js ${process.version}`);
+  process.exit(1);
+}
+
 const onUncaught = (e: unknown): void => {
   if (isWorkspaceError(e)) reportWorkspaceError(e);
   process.removeListener("uncaughtException", onUncaught);
-  throw e; // no listener left ⇒ Node's default fatal handler, output unchanged (AC4)
+  reportEscape(e);
 };
 
 const onRejection = (reason: unknown): void => {
   if (isWorkspaceError(reason)) reportWorkspaceError(reason);
   process.removeListener("unhandledRejection", onRejection);
-  throw reason;
+  reportEscape(reason);
 };
 
 process.on("uncaughtException", onUncaught);

@@ -4,14 +4,15 @@
 // board; the operator's D1 override reaches real projects through a `_team`-booted daemon; home-only
 // verbs refuse with the home pointer; and a missing/wrong token maps to the clear exit-5 message.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { startTestDaemon } from "./daemon-harness.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -101,7 +102,7 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
   }
 }
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-attach-"));
+const ROOT = tmpRoot("dl-attach-");
 try {
   // ── the "remote home": a seeded hub + a token-gated daemon booted on _team, in its OWN process —
   // the CLI legs below use spawnSync, which blocks THIS event loop; an in-process daemon would starve.
@@ -116,6 +117,25 @@ try {
     DEVLOOP_HUB_DB: DB, DEVLOOP_PROJECT: "_team", DEVLOOP_ACTOR: "operator",
     DEVLOOP_DAEMON_PORT: "0", DEVLOOP_UI_TOKEN: "attach-tok-1",
   });
+
+  // ── /api/health is token-EXEMPT, so what it says is readable by anyone who can reach the port ──
+  // The rule three lines above the handler is explicit: "the raw DB path must never appear here". A later
+  // change put `entryPath` — an absolute install path — into that same response, so an unauthenticated
+  // caller learned where the tree lives. It is now included only for an authenticated request, or when no
+  // token is configured at all (the loopback-only posture where the whole surface is already local).
+  {
+    const healthUrl = new URL("api/health", HUB).href;
+    const health = async (headers: Record<string, string> = {}) =>
+      await (await fetch(healthUrl, { headers })).json() as Record<string, unknown>;
+    const anon = await health();
+    ok(anon.ok === true && anon.pid !== undefined, "health still answers without a token — the reaper depends on that");
+    ok(anon.entryPath === undefined, `…but a token-configured daemon does not hand an anonymous caller its install path (got ${JSON.stringify(anon.entryPath)})`);
+    ok(anon.buildCommit !== undefined,
+      "…while buildCommit stays: sameDaemonCode reads it over health to detect skew, and an absent value reads as 'same code'");
+    const authed = await health({ authorization: "Bearer attach-tok-1" });
+    ok(typeof authed.entryPath === "string" && authed.entryPath.length > 0,
+      `…and an authenticated caller still gets it (got ${JSON.stringify(authed.entryPath)})`);
+  }
 
   // ── the "laptop": an empty dir, no workspace, no local db lever ──
   const laptop = join(ROOT, "laptop"); mkdirSync(laptop);

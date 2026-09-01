@@ -1,13 +1,14 @@
 // doctor-daemon-version-skew.ts — LOOP-259 regression: daemon version skew (W28) flips DOCTOR_OK
 // to DOCTOR_FAILED. A matching version stays clean.
 import { createServer } from "node:http";
-import { readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { runDoctor } from "../src/doctor.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-doc-w259-")));
+const tmp = realpathSync(tmpRoot("dl-doc-w259-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

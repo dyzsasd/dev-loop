@@ -3,23 +3,30 @@
 // from the hub DB. Strict segment validation defeats path traversal before any fs access.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { devloopHome, workspaceDataDir } from "../paths.ts";
+import { workspaceDataDir } from "../paths.ts";
 import { esc, href, renderMarkdown } from "./ui.ts";
 
 // Resolve the reports root: DEVLOOP_REPORTS_DIR if set, else the FIRST EXISTING of a few candidates
 // (the on-disk layout varies — both <data>/<project>/reports and a flat <data>/reports exist in the
 // wild); falls back to the AC-formula path for the empty state. LOOP-388: Precedence is
-// DEVLOOP_REPORTS_DIR > DEVLOOP_DATA_DIR > workspace-derived (from DEVLOOP_HUB_DB) > machine-global.
+// DEVLOOP_REPORTS_DIR > DEVLOOP_DATA_DIR > workspace-derived (an explicit DEVLOOP_HUB_DB, else
+// workspace discovery) > the legacy plugin data dir.
+//
+// The machine-global ~/.dev-loop rung was removed: it is the retired location, and a daemon that
+// cannot name a workspace must say so rather than render some other board's reports. This resolver
+// serves the daemon's read-only views, where the request carries a project key and no workspace
+// handle; `dev-loop doctor` composes the same tree from its own `ws` (workspace.ts wsReportsRoot).
 const REPORT_DATED: Record<string, RegExp> = { daily: /^\d{4}-\d{2}-\d{2}$/, weekly: /^\d{4}-W\d{2}$/, monthly: /^\d{4}-\d{2}$/ };
 export function reportsRoot(projectKey: string): string {
   if (process.env.DEVLOOP_REPORTS_DIR) return process.env.DEVLOOP_REPORTS_DIR;
-  // Build bases with correct precedence: explicit DEVLOOP_DATA_DIR, workspace-derived, machine-global, legacy plugin.
   const bases: string[] = [];
   if (process.env.DEVLOOP_DATA_DIR) bases.push(process.env.DEVLOOP_DATA_DIR);
   const wsDir = workspaceDataDir();
   if (wsDir) bases.push(wsDir);
-  bases.push(devloopHome());
   if (process.env.CLAUDE_PLUGIN_DATA) bases.push(process.env.CLAUDE_PLUGIN_DATA);
+  if (!bases.length) {
+    throw new Error("no reports root resolved: DEVLOOP_REPORTS_DIR / DEVLOOP_DATA_DIR are unset and no workspace resolved (DEVLOOP_HUB_DB, DEVLOOP_WORKSPACE, DEVLOOP_TEAM, or the current directory).");
+  }
   const candidates = bases.flatMap((b) => [join(b, projectKey, "reports"), join(b, "reports")]);
   for (const c of candidates) { try { if (statSync(c).isDirectory()) return c; } catch { /* not here */ } }
   return candidates[0]; // AC-formula path; may not exist → empty state at read time

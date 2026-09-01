@@ -6,18 +6,19 @@
 // the scheduler cannot be imported (main() is unconditional, LOOP-58), so it is driven as a subprocess
 // the way team-scheduler.ts does.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { platform, tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { breaker, BREAKER_STATE_SCHEMA, breakerStateAlive, createBreakerPersistence, persistedKey, readBreakerState, writeBreakerState, type BreakerStateFile } from "../src/breaker.ts";
 import { breakerStatePath, teamDirOf } from "../src/scheduler-build.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-breaker-state-")));
+const tmp = realpathSync(tmpRoot("dl-breaker-state-"));
 const iso = (ms: number) => new Date(ms).toISOString();
 const T0 = Date.parse("2026-08-27T10:00:00.000Z");
 const reset = (threshold = 3, probeMs = 60_000) => { breaker.byAgent.clear(); breaker.byProvider.clear(); breaker._agentProvider.clear(); breaker.onEvent = undefined; breaker.onChange = undefined; breaker.threshold = threshold; breaker.probeMs = probeMs; };
@@ -252,11 +253,27 @@ try {
   const f5 = readBreakerState(file);
   ok(f5?.agents.pm?.state === "open" && f5.agents.pm.consecutiveFailures === 5 && f5.scheduler.stoppedAt !== null,
     `run 5: the interrupted probe (exit 0 — OUR signal) did NOT close the breaker; the final snapshot says OPEN ×5 with stoppedAt (${JSON.stringify(f5?.agents.pm)})`);
-  const rows = readFileSync(join(ws, ".dev-loop", "team", "fires.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { interrupted?: boolean; exitCode?: number });
+  const rows = readFileSync(join(ws, ".dev-loop", "team", "fires.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { interrupted?: boolean; exitCode?: number; watchdog?: string | null });
   const last = rows[rows.length - 1];
-  ok(last?.interrupted === true && last.exitCode === 0, `run 5: the TEAM scheduler ledgers the killed fire as interrupted — LOOP-155 was legacy-only before (${JSON.stringify(last)})`);
+  // The child's exit CODE is deliberately not asserted. It records who won the race between our forwarded
+  // signal and the child installing its trap — under load the child dies ON the signal and exits non-zero,
+  // which is still an operator stop. Pinning exitCode === 0 here asserted the child's cooperation, the very
+  // thing LOOP-155's own comment says must not be the discriminator, and it is why this suite failed only
+  // when the machine was busy. What the contract protects is the classification and its consequence: the
+  // fire is flagged interrupted, no watchdog claimed it, and the breaker (asserted just above) learned
+  // nothing from it.
+  ok(last?.interrupted === true && last.watchdog === null,
+    `run 5: the TEAM scheduler ledgers the killed fire as interrupted, whatever exit the child managed (${JSON.stringify(last)})`);
   const after = status(ws);
-  ok(after?.scheduler?.breakers?.source === "replay" && typeof after.scheduler.breakers.note === "string", "run 5: with the scheduler gone the file is stale ⇒ status falls back to the replay and says so");
+  // The scheduler stopped cleanly here (SIGTERM, drained, wrote stoppedAt), so its file is its FINAL
+  // recorded state, not a stale artefact: status serves it and says when it was recorded. A replay would
+  // be worse — it cannot see the half-open state or the probe timing this very suite just asserted, and
+  // it reaches back 24 h across scheduler generations. The one thing that would invalidate the file is a
+  // fire ledgered after the stop, which status.ts checks and test/status.ts covers.
+  ok(after?.scheduler?.breakers?.source === "final" && /stopped at/.test(after.scheduler.breakers.note ?? ""),
+    `run 5: a cleanly stopped scheduler's own final state is served, with the time it was recorded (source=${after?.scheduler?.breakers?.source}, note=${(after?.scheduler?.breakers?.note ?? "<none>").slice(0, 70)})`);
+  ok(after?.scheduler?.breakers?.agents?.[0]?.streak === 5,
+    `run 5: …carrying the resumed streak the replay could not reconstruct (${after?.scheduler?.breakers?.agents?.[0]?.streak})`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

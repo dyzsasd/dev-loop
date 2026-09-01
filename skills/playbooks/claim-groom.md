@@ -24,6 +24,14 @@ assignee stays your tier). Re-fetch — lost the race ⇒ pick the next. Apply t
 EVERY state move this run (the hand-off and any block included), and re-pass the FULL label set on any label
 change (labels are REPLACE-style).
 
+## Step 2a — Writing to a ticket someone ELSE holds
+A claimed (`In Progress`) ticket has no inbound channel (§7): the holding fire will not re-read your comment,
+it collects mail only at its §3 hand-off re-read. So address the **verifier**, not the holder — write what to
+check at `In Review` ("verify X was not touched; if it was, verify-fail and re-file"), never an instruction
+the holder is expected to obey mid-fire. Same reason you may leave a REPLACE-style field (`labels`, §10)
+alone on a held ticket rather than racing its writer: the holder will overwrite it, and the comment carries
+the intent to whoever verifies.
+
 ## Step 3 — Groom it
 Walk these gates in order; any hit resolves the ticket and you pick the next (a cheap grooming outcome
 consumes no cap):

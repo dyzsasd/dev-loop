@@ -4,12 +4,17 @@
 // re-exports them so the existing test imports (test/blocked.ts, no-progress.ts, wal-checkpoint.ts,
 // daemon.ts) keep resolving `.../daemon.ts`.
 import { DatabaseSync } from "node:sqlite";
+import { timerEnvMs } from "./timer-env.ts";
 import { statSync, readFileSync } from "node:fs";  // docs P3b: the repo-file strategy watch reads mtime + content hash (never the content into a message)
 import { createHash } from "node:crypto";
 import { openDb, logEvent } from "./db.ts";
 import { getEnabledChannel, resolveCreds, resolveNotifyWebhook, scrubErr, cleanLine, sendVia, CHANNEL_DRYRUN, CHANNEL_SEND_CAP, type Provider, type Creds, type Transport, type FetchImpl } from "./channel.ts";
 import { eventData } from "./views/activity.ts";
 import { fireMetrics, decisionQueue } from "./metrics.ts"; // LOOP-393: the approval arm of the queue, so the notifier shares its scope rule
+import { tryResolveWorkspace } from "./workspace.ts";
+import { effectiveProject } from "./team-config.ts";
+
+
 
 // ─── DL-59 send-target resolution, shared by every notifier tick ───────────────────────────────────
 // ONE send target: the DB `channels` row (getEnabledChannel) takes PRECEDENCE so a project with a
@@ -56,6 +61,19 @@ export function resolveBlockedReminderHours(settings: unknown, commsConfigured: 
 // the events ledger, so a daemon restart never double-sends and needs no counter. This is the daemon's
 // ONE write to the SoR (the human_blocked.notified event), done via the writable `writeDb`, NEVER the
 // query_only read connection. Absent a channel OR humanBlockedReminderHours≤0 ⇒ no timer (true no-op).
+/**
+ * Does this project run `humanBlocked:"off"`? Resolved from the workspace by project KEY, which the
+ * daemon carries. Unreadable config ⇒ false (reminders keep working): a notifier that goes silent
+ * because it could not read a file is the failure the reminder exists to prevent.
+ */
+function humanBlockedOffFor(projectKey: string): boolean {
+  try {
+    const ws = tryResolveWorkspace();
+    if (!ws || !ws.file.projects[projectKey]) return false;
+    return effectiveProject(ws, projectKey).humanBlocked === "off";
+  } catch { return false; }
+}
+
 export async function blockedNotifyTick(opts: {
   writeDb: DatabaseSync; projectId: string; projectKey: string; baseUrl: string;
   cadenceMs: number; nowMs: number; fetchImpl?: FetchImpl; notify?: unknown;
@@ -64,6 +82,11 @@ export async function blockedNotifyTick(opts: {
   // DL-59: ONE send target (DB channel wins over the §9 notify webhook — see resolveTarget) or a true no-op.
   const target = resolveTarget(writeDb, projectId, opts.notify);
   if (!target) return 0;
+  // `humanBlocked:"off"` (§9): this project has nobody to remind. Reminding anyway would page a human
+  // about a queue the configuration says PM owns, every cadence, forever — the shape that trains an
+  // operator to mute the channel. The In-Review-for-operator arm below is NOT affected: that is a
+  // human's own review, not a park.
+  if (humanBlockedOffFor(projectKey)) return 0;
   // P1-3: the operator's DECISION QUEUE is ONE set — Human-Blocked (the loop parked on a human) ∪
   // In Review assigned to the operator (§9a board-approval stops; the field's MP-211 sat 4 days with
   // no wire because only Human-Blocked was covered). Human-Blocked wording + markers stay byte-identical;
@@ -165,8 +188,9 @@ export function startBlockedNotifier(opts: {
   // DL-59: start if EITHER a registered DB channel OR the §9 `notify` webhook is configured — a notify-only
   // project must no longer be a no-op. `notify` flows through `...opts` into each blockedNotifyTick run.
   if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null; // neither ⇒ true no-op
+
   const cadenceMs = opts.cadenceHours * 3_600_000;
-  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_BLOCKED_TICK_MS) || 60_000);
+  const tickMs = opts.tickMs ?? timerEnvMs("DEVLOOP_BLOCKED_TICK_MS", 60_000);
   // .catch, not void: a throw from the tick's DB reads (transient SQLITE_BUSY, disk error) was an
   // unhandled rejection that killed the WHOLE daemon; a failed tick must just retry next interval.
   const run = () => { blockedNotifyTick({ ...opts, cadenceMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] blocked-notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
@@ -321,7 +345,7 @@ export function startFireHealthNotifier(opts: {
   const windowMs = opts.windowHours * 3_600_000;
   // Re-check every ~10min by default: fast enough to catch a spend-limit-style collapse within one
   // window, cheap enough that a tick is just one bounded JSONL read. Env-overridable for tests.
-  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_FIREHEALTH_TICK_MS) || 600_000);
+  const tickMs = opts.tickMs ?? timerEnvMs("DEVLOOP_FIREHEALTH_TICK_MS", 600_000);
   const run = () => { fireHealthNotifyTick({ ...opts, windowMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] fire-health tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();
@@ -339,7 +363,7 @@ export function startNoProgressNotifier(opts: {
   const windowMs = opts.windowHours * 3_600_000;
   // Re-check ≈ hourly by default (the stall window is measured in hours; a tighter poll just re-scans the
   // ledger for nothing, and the marker de-dup makes any extra tick harmless). Env-overridable for tests.
-  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_NOPROGRESS_TICK_MS) || 3_600_000);
+  const tickMs = opts.tickMs ?? timerEnvMs("DEVLOOP_NOPROGRESS_TICK_MS", 3_600_000);
   const run = () => { noProgressNotifyTick({ ...opts, windowMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] no-progress tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();  // never keep the process alive solely for this detector
@@ -412,7 +436,7 @@ export function startDocForeignEditNotifier(opts: {
   if (opts.intakeMode !== "passive") return null;
   if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null; // no send target ⇒ true no-op
   const settleMs = opts.settleMs ?? (Number(process.env.DEVLOOP_DOC_FOREIGN_SETTLE_MS) || 15 * 60_000);
-  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_DOC_NOTIFY_TICK_MS) || 10 * 60_000);
+  const tickMs = opts.tickMs ?? timerEnvMs("DEVLOOP_DOC_NOTIFY_TICK_MS", 10 * 60_000);
   const run = () => { docForeignEditNotifyTick({ ...opts, settleMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] doc-edit notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();
@@ -494,7 +518,7 @@ export function startStrategyFileEditNotifier(opts: {
   if (!resolveTarget(opts.writeDb, opts.projectId, opts.notify)) return null;  // no send target ⇒ true no-op
   const filePath = opts.filePath;
   const settleMs = opts.settleMs ?? (Number(process.env.DEVLOOP_STRATEGY_FILE_SETTLE_MS) || 15 * 60_000); // the hub-doc settle window's twin
-  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_STRATEGY_FILE_TICK_MS) || 10 * 60_000);
+  const tickMs = opts.tickMs ?? timerEnvMs("DEVLOOP_STRATEGY_FILE_TICK_MS", 10 * 60_000);
   const run = () => { strategyFileEditNotifyTick({ ...opts, filePath, settleMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] strategy-file notifier tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();
@@ -565,7 +589,7 @@ export function startDocDraftsPendingNotifier(opts: {
   const remindMs = opts.remindMs ?? 24 * 3_600_000;     // one DAILY line while pending
   // Re-check ≈ hourly by default: the thresholds are day-scale and the per-version dedupe makes any
   // extra tick harmless (the no-progress precedent). Env-overridable for tests.
-  const tickMs = opts.tickMs ?? (Number(process.env.DEVLOOP_DOC_DRAFTS_TICK_MS) || 3_600_000);
+  const tickMs = opts.tickMs ?? timerEnvMs("DEVLOOP_DOC_DRAFTS_TICK_MS", 3_600_000);
   const run = () => { docDraftsPendingNotifyTick({ ...opts, pendingMs, remindMs, nowMs: Date.now() }).catch((e) => console.error(`[daemon] drafts-pending tick failed (retrying next tick): ${scrubErr(String((e as Error)?.message ?? e))}`)); };
   const timer = setInterval(run, tickMs);
   timer.unref?.();
@@ -591,7 +615,7 @@ export function walCheckpointTick(ckDb: DatabaseSync): void {
 
 export function startWalCheckpoint(
   dbPath: string,
-  intervalMs = Number(process.env.DEVLOOP_WAL_CHECKPOINT_MS) || 300_000, // 5 min default; env-overridable for tests
+  intervalMs = timerEnvMs("DEVLOOP_WAL_CHECKPOINT_MS", 300_000), // 5 min default; env-overridable for tests
 ): ReturnType<typeof setInterval> {
   const ckDb = openDb(dbPath);
   try { ckDb.exec("PRAGMA busy_timeout=0"); } catch { /* if it can't be lowered, a BUSY still just throws → caught no-op */ }

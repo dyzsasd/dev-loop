@@ -11,17 +11,18 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolveProjectFromCwd } from "./resolve-project.ts";
 import { tryResolveWorkspace, wsStateRoot, wsHubDb, wsLockPath, wsFireLedger } from "./workspace.ts";
-import { toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
+import { resolveTodoDepthCap, laneScheduleBlock, toLegacyView, WsValidationError, primaryRepo, agentInterfaceFor, isTeamProject, TEAM_INTAKE_PROJECT, CADENCE_DUR_RE, effectiveProject, effectiveRepo, reposOfProject, type Workspace, type HubBlock, type AgentInterface, type ProviderEntry, type CodexSandbox } from "./team-config.ts";
 import { rotationCandidates, stewardProjects, smoothWRRStep, loadSchedulerState, saveSchedulerState, type SchedulerState, type CursorMap } from "./rotation.ts";
 import { notify } from "./comms.ts";
 import { secretsDeclaredKeys, scopeFireSecrets } from "./secrets.ts"; // Q9/LOOP-432: the per-fire secret-scoping strip set
 import { assembleBootCorpus, type ResolvedFireConfig } from "./boot-prefix.ts";
 import { findCompatibleNode, MIN_NODE_VERSION } from "./node-runtime.ts";
-import { devloopDataDir, devloopProjectsPath, hubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
+import { tryDevloopDataDir, devloopProjectsPath, tryHubDbPath, projectConfigCandidates, guardCliPath } from "./paths.ts";
 import { openDb, logEvent } from "./db.ts";
+import { readPause } from "./scheduler-pause.ts"; // the pause the operator writes — read here EVERY tick, not merely rendered by status
 import { findProject, AGENT_HANDLES, STEWARD_HANDLES } from "./seed.ts";
 import { LANE_ACTOR, LANE_JOBS, isLane, isQaLane, type Lane } from "./agent-handles.ts"; // job-scoped prompts: the pm/qa job-lanes (scheduler fire units that fire as their owning actor)
-import { servableBacklogDepth, pmMaintenanceSlice, qaMaintenanceSlice, seniorDevModePick } from "./servable.ts"; // lane-gate board reads: Backlog depth (groom), pm/qa In-Review+unblock counts (maintenance), the senior-dev Mode pick
+import { servableBacklogDepth, backlogFingerprint, servableTodoDepth, pmMaintenanceSlice, qaMaintenanceSlice, seniorDevModePick } from "./servable.ts"; // lane-gate board reads: Backlog depth (groom), pm/qa In-Review+unblock counts (maintenance), the senior-dev Mode pick
 import { AGENT_GROUPS } from "./agent-roster.ts"; // LOOP-184: group aliases shared with the bundle-load validator — a zod-free leaf (roster still sourced from seed.ts AGENT_HANDLES)
 import { writeSchedulerBuild, teamDirOf, breakerStatePath } from "./scheduler-build.ts"; // LOOP-253: which build is orchestrating this loop — a zod-free leaf, same LOOP-58 reason
 import { preflightTreeSnapshot } from "./tree-snapshot.ts"; // LOOP-312: pre-fire copy of the shared checkout — a zod-free leaf, for the same LOOP-58 reason as servable.ts below
@@ -30,8 +31,9 @@ import { updateTicketRow, insertComment } from "./ticketwrite.ts";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "./seen-lines.ts"; // retry-loop detector memory (bounded + rolling)
 import { breaker, formatBreakerMsg, providerOf, classifyFireError, producedNoWork, EXIT_NO_WORK, readBreakerState, createBreakerPersistence, type BreakerRestoreItem } from "./breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter, makeStdoutCapture, usageFromCapture } from "./fire-usage.ts";
-import { releaseClaimedTickets } from "./ticket-release.ts";
+import { releaseClaimedTickets, type KillClass } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
+import { formatDuration } from "./format-duration.ts";
 import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, watchdogKindOf, DEFAULT_PER_FIRE_USD, type FireUsage, type WatchdogKind } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -238,6 +240,7 @@ type Options = {
   intervals: Record<SchedKey, number>;
   once: boolean;
   dryRun: boolean;
+  noDaemon: boolean;   // skip the board-daemon ensure (tests/CI) — mirrors `dev-loop up --no-daemon`
   devSplit: boolean;
   plan: number;          // team mode: print the next N (agent, project) picks and exit (0 = off)
   intervalsExplicit: Set<SchedKey>; // agents/lanes whose cadence came from --interval (beats config cadence)
@@ -267,7 +270,7 @@ type Options = {
   changeGate: boolean;  // R1: skip spawning a gated inward agent when neither repo HEAD nor the board moved since its last fire (service backend only) — saves the full-turn cost of a fire that would just no-op
   assembleBoot: boolean | null; // boot-prefix: the §0a boot corpus (conventions slice + resolved config + backend contract + lessons) inlined into the prompt's CONSTANT segment. true/false = an explicit run flag (--assemble-boot / --no-assemble-boot, env DEVLOOP_ASSEMBLE_BOOT=1|0); null = config decides (team.bootCorpus, default ON). Every lane; the prompt then rides stdin (Linux MAX_ARG_STRLEN caps a single execve arg at 128 KiB)
   changeGateTtlMs: number; // R1a: quiet-board TTL for the pm/qa REVIEW tiers — after this long without a fire, a gated pm/qa fire runs even on an unchanged key (0 = never; the pure gate for them too)
-  fireTimeoutMs: number; // 0 = none; else SIGTERM (then SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
+  fireTimeoutMs: number; // 0 = none; else SIGINT (then a group SIGKILL) a fire that outlives this — a wedged CLI child must not disable its slot forever
   stallTimeoutMs?: number; // liveness watchdog: kill a fire whose combined output has been SILENT this long (errorClass "stalled" — feeds the breaker). undefined = per-lane default: 10m on opencode (it streams tool lines; silence = a hung provider call / silent retry loop — the 2026-07 quota-429 incident wedged every fire for the full hour), 0 (off) on claude/codex (claude -p buffers output until the end, so silence is normal there)
   staggerMs: number;    // boot stagger between the initial slot fires (0 = all at once)
   background: boolean;  // re-spawn detached (log → <workspace>/.dev-loop/run.log) and return the shell — the operator-console flow's "start the loop from my coding-CLI session" verb
@@ -324,8 +327,12 @@ const defaultRoot = () => {
   const candidates = [resolve(here, ".."), resolve(here, "..", "..")];
   return candidates.find(isPluginRoot) ?? resolve(here, "..", "..");
 };
-const defaultDataDir = () => devloopDataDir();
-const defaultHubDb = () => hubDbPath();
+// Both defaults are composed while ARGUMENTS are still being parsed — before `--help`, before
+// --data/--hub-db have been seen, and before the workspace is resolved for real. So they resolve
+// without throwing: an unresolvable path stays empty here and main() refuses with one message that
+// names every way to supply it. The retired ~/.dev-loop is not one of them.
+const defaultDataDir = () => tryDevloopDataDir() ?? "";
+const defaultHubDb = () => tryHubDbPath() ?? "";
 
 function usage(): void {
   console.log(`dev-loop run — schedule dev-loop agents with a headless CLI
@@ -352,9 +359,10 @@ Options:
   --interval <agent=dur>      override cadence, e.g. pm=2m, communication=24h; may repeat
   --once                      run each selected agent once, then exit
   --dry-run                   print resolved commands; do not launch Claude/Codex
+  --no-daemon                 skip the board-daemon ensure below (tests/CI); the scheduler itself is unaffected
   --root <path>               dev-loop checkout root (default: inferred, or DEVLOOP_PLUGIN_ROOT/CLAUDE_PLUGIN_ROOT)
-  --data <path>               dev-loop data dir (default: DEVLOOP_DATA_DIR or ~/.dev-loop)
-  --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB or ~/.dev-loop/hub.db)
+  --data <path>               dev-loop data dir (default: DEVLOOP_DATA_DIR, else the workspace's .dev-loop)
+  --hub-db <path>             hub db path (default: DEVLOOP_HUB_DB, else the workspace's .dev-loop/hub.db)
   --cwd <path>                working directory for CLI subprocesses (default: project repoPath)
   --mcp-config <path>         claude: MCP config to load + --strict-mcp-config (default: <cwd>/.mcp.json if present)
   --max-fires <n>             stop after N total agent fires, then drain + exit (cost guard; default 0 = unlimited)
@@ -375,7 +383,7 @@ Options:
                               fire they run once anyway (dev-tier + architect keep the pure gate)
   --change-gate-ttl <dur>     how long a quiet board may defer a gated pm/qa fire before it runs anyway
                               (default 4h; 0 = defer forever — the pure gate for pm/qa too)
-  --fire-timeout <dur>        kill a fire that outlives this (SIGTERM, then SIGKILL after 10s; default 1h; 0 = none)
+  --fire-timeout <dur>        kill a fire that outlives this (SIGINT to the child, then a group SIGKILL after 10s; default 1h; 0 = none)
   --stall-timeout <dur>       liveness watchdog: kill a fire whose output has been SILENT this long (errorClass
                               "stalled") OR whose output keeps arriving but introduces no NEW content for this long
                               (errorClass "retry-loop"), and record it — both feed the breaker. Default: 10m on
@@ -447,13 +455,6 @@ function parseDuration(input: string): number {
   return ms;
 }
 
-function formatDuration(ms: number): string {
-  if (ms % (24 * 60 * 60_000) === 0) return `${ms / (24 * 60 * 60_000)}d`;
-  if (ms % (60 * 60_000) === 0) return `${ms / (60 * 60_000)}h`;
-  if (ms % 60_000 === 0) return `${ms / 60_000}m`;
-  if (ms % 1_000 === 0) return `${ms / 1_000}s`;
-  return `${ms}ms`;
-}
 
 function expandAgentSpec(parts: string[]): SchedKey[] {
   const out: SchedKey[] = [];
@@ -484,6 +485,7 @@ function parseArgs(argv: string[]): Options {
     intervals,
     once: false,
     dryRun: false,
+    noDaemon: false,
     devSplit: false,
     plan: 0,
     intervalsExplicit: new Set<SchedKey>(),
@@ -531,6 +533,7 @@ function parseArgs(argv: string[]): Options {
     } else if (a === "--once") opts.once = true;
     else if (a === "--plan") { opts.plan = Number(next()); if (!Number.isInteger(opts.plan) || opts.plan <= 0) die("--plan must be a positive integer"); }
     else if (a === "--dry-run") opts.dryRun = true;
+    else if (a === "--no-daemon") opts.noDaemon = true;
     else if (a === "--root") opts.root = guardCliPath("--root", resolve(next()));
     else if (a === "--data") { opts.dataDir = guardCliPath("--data", resolve(next())); opts.dataDirExplicit = true; }
     else if (a === "--hub-db") { opts.hubDb = guardCliPath("--hub-db", resolve(next())); opts.hubDbExplicit = true; }
@@ -715,7 +718,6 @@ function readPrompt(opts: Options, agent: Agent, project: string, profile: Launc
   const body = stripFrontmatter(readFileSync(skill, "utf8"))
     .replaceAll("${CLAUDE_PLUGIN_ROOT}", opts.root)
     .replaceAll("${CLAUDE_PLUGIN_DATA}", opts.dataDir)
-    .replaceAll("${DEVLOOP_DATA_DIR:-~/.dev-loop}", opts.dataDir)
     .replaceAll("${DEVLOOP_DATA_DIR}", opts.dataDir)
     .replaceAll("${DEVLOOP_PROJECTS_JSON}", projectsPath(opts.dataDir));
   const commsLine = teamScope
@@ -795,6 +797,7 @@ function resolvedConfigFor(opts: Options, cfg: ProjectsConfig | null, project: s
     const eff = effectiveProject(ws, profileProject);
     return {
       projectKey: project, teamKey: t.key, backend, mode: eff.mode, autonomy: eff.autonomy, devSplit,
+      humanBlocked: eff.humanBlocked,
       intakeMode: eff.intake?.mode, docSystem: eff.docSystem, deployPolicy: t.deployPolicy,
       strategyDoc: strategyLabel(p.strategyDoc), repos: repoFacts(profileProject),
     };
@@ -951,6 +954,13 @@ function displayCommand(command: string, args: string[], prompt: string): string
 let fireDb: DatabaseSync | null | undefined;                         // undefined = not tried; null = unavailable
 let fireLedgerPath: string | null = null;                            // team mode: a backend-agnostic JSONL ledger
 let perFireCeilingUsd: number | null = null;                         // team mode: the resolved per-fire $ ceiling (LOOP-230); null ⇒ watchdog inert (legacy path, mirrors fireLedgerPath)
+// Kills the environment inflicted, as named by the taxonomy (breaker.ts classifyFireError). They share
+// the watchdogs' property that the agent's judgement did not end the fire, so a claim the fire was
+// holding must go back to Todo rather than stay In Progress with nothing owning it. "stalled",
+// "retry-loop" and the budget classes are absent on purpose: their own booleans already trigger the
+// release, and adding them here would double-fire it.
+const INFRA_KILL_CLASSES = new Set(["session-limit", "spend-limit", "rate-limit", "auth", "network"]);
+
 // LOOP-155: latched by the scheduler's SIGINT/SIGTERM forwarding path. Module scope, not a parameter,
 // because the classifier runs inside runAgent while the signal arrives in the scheduler loop — and it
 // is one-way on purpose: once the operator has asked to stop, every fire still in flight is being
@@ -1135,6 +1145,50 @@ function fireReasonFor(opts: Options, agent: SchedKey, project: string, gated: b
   return { kind: "cadence", text: `cadence due — this agent fires every ${every}${gated ? "; the change-gate passed (a repo HEAD or the board moved since your last fire, or the quiet-board TTL elapsed)" : ""}` };
 }
 
+/**
+ * A lane gate's verdict: the job to run, or nothing-eligible WITH the reason.
+ *
+ * The reason is the whole point of the type. A lane gate returning a bare null let the scheduler
+ * `continue` in silence, and a silent skip is indistinguishable from a crash — the same reasoning
+ * that made devTierQueueSkip return its REASON rather than a boolean (LOOP-144). `reason` is set
+ * exactly when `job` is null, and names the lane, the project and the board counts the decision was
+ * made from, so the printed line explains itself without the reader re-deriving the query.
+ */
+// What this lane last groomed, per project — the "have I already looked at exactly these rows?" half of
+// the pm-groom gate. In memory, not on disk, and that is deliberate: a restart re-reads the Backlog
+// once, which is the safe direction (one extra fire, never a suppressed one), and it keeps the gate
+// from needing state whose staleness would be a second thing to get wrong.
+const groomSeen = new Map<string, string>();
+const groomKey = (project: string): string => `pm-groom:${project}`;
+
+/**
+ * Is any dev tier under its Todo cap, i.e. could a promotion land? Returns the reason when none can.
+ *
+ * Reads the same cap resolver §5a uses (resolveTodoDepthCap, project override then team default) and
+ * the same servable depth the queue reports, so the gate and the board cannot disagree about "full".
+ * A tier with no promotable candidate in the Backlog is not capacity either — promoting into it is
+ * impossible regardless of its depth.
+ */
+function promotionCapacity(opts: Options, backlog: { "senior-dev": number; "junior-dev": number; dev: number }, project: string): { free: boolean; why: string } {
+  const ws = opts.ws;
+  if (!ws || !fireDb) return { free: true, why: "" }; // no workspace/board ⇒ fail open (groom)
+  const projectId = findProject(fireDb, project);
+  if (!projectId) return { free: true, why: "" };
+  const cap = resolveTodoDepthCap(ws, project);
+  const depth = servableTodoDepth(fireDb, projectId);
+  const tiers = (["senior-dev", "junior-dev", "dev"] as const)
+    .filter((t) => backlog[t] > 0)                       // a tier with no candidate cannot be promoted into
+    .map((t) => ({ tier: t, depth: depth[t], free: depth[t] < cap }));
+  if (!tiers.length) return { free: false, why: `no promotable Backlog candidate for any tier (${backlog["senior-dev"]} senior / ${backlog["junior-dev"]} junior / ${backlog.dev} dev)` };
+  if (tiers.some((t) => t.free)) return { free: true, why: "" };
+  return { free: false, why: `every tier with a candidate is at/over the Todo cap of ${cap} (${tiers.map((t) => `${t.tier} ${t.depth}/${cap}`).join(", ")})` };
+}
+
+interface LaneDecision { job: string | null; reason: string | null }
+const laneRuns = (job: string): LaneDecision => ({ job, reason: null });
+const laneIdle = (lane: string, project: string, counts: string): LaneDecision =>
+  ({ job: null, reason: `nothing eligible for the ${lane} lane in '${project}' (${counts})` });
+
 // ─── pm/qa job-lanes (job-scoped prompts, docs/design/job-scoped-prompts.md) ─────────────────────────────
 // The scheduler picks the JOB a lane runs from board-row predicates it already computes + the seeded
 // bail-shape labels — the same "$0 arm selection" the dev tiers prove (servableSlice + PICK_RANK). A sibling
@@ -1147,43 +1201,73 @@ function fireReasonFor(opts: Options, agent: SchedKey, project: string, gated: b
 //                    INSIDE the fire — a groom fire is valid at the cap), else null
 //   pm-review      ⇒ review if the change-gate tripped (a repo HEAD or the board moved / the quiet-board TTL
 //                    elapsed) — the same gate pm's review tier already rides — else null
-function pmLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): string | null {
+function pmLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): LaneDecision {
   const jobs = LANE_JOBS[lane as Lane];
   try {
     if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
     const projectId = fireDb ? findProject(fireDb, project) : null;
-    if (!fireDb || !projectId) return jobs[0]; // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
+    if (!fireDb || !projectId) return laneRuns(jobs[0]); // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
     if (lane === "pm-maintenance") {
       const { verify, unblock } = pmMaintenanceSlice(fireDb, projectId);
-      return verify > 0 ? "verify" : unblock > 0 ? "unblock" : null;
+      if (verify > 0) return laneRuns("verify");
+      if (unblock > 0) return laneRuns("unblock");
+      return laneIdle(lane, project, "0 In Review rows owned by pm to verify, 0 decision-needed / scope-design / needs-pm rows to unblock");
     }
-    if (lane === "pm-groom") return servableBacklogDepth(fireDb, projectId).total > 0 ? "groom" : null;
+    if (lane === "pm-groom") {
+      const backlog = servableBacklogDepth(fireDb, projectId);
+      if (backlog.total === 0) return laneIdle(lane, project, "0 non-blocked Backlog rows to groom");
+      // Job B2 has TWO outputs and only one of them needs capacity: it promotes Backlog→Todo while a
+      // tier is under its cap, and it shapes/dedupes/cancels whatever it cannot promote. The SKILL is
+      // explicit that "at/over the cap, groom only — still a valid fire", so capacity ALONE must not
+      // gate this lane; that would suppress work the job is defined to do.
+      //
+      // What it may not do is re-read the same Backlog forever. Measured: four consecutive fires
+      // reported `promoted 0`, the last of them reviewing all 34 Backlog rows and finishing
+      // `groomed 0, 0 board writes` — with junior-dev at 16/10 over its cap and senior-dev holding no
+      // promotable candidate. The pm lane spent $11.47 in an hour, ~27% of all spend, on scans that
+      // could not produce anything: nothing was promotable, and everything had already been shaped.
+      //
+      // So the predicate is "no capacity AND nothing has changed since this lane last looked", never
+      // capacity alone. The fingerprint covers the rows Job B2 reads and moves on any create/edit/
+      // promote/cancel — including the lane's OWN grooming, so a fire that shapes something is never
+      // read as one that changed nothing, and the next tick fires again to continue.
+      const capacity = promotionCapacity(opts, backlog, project);
+      if (capacity.free) return laneRuns("groom");
+      const fp = backlogFingerprint(fireDb, projectId);
+      const seen = groomSeen.get(groomKey(project));
+      if (seen === fp) return laneIdle(lane, project, `${capacity.why}, and the Backlog is unchanged since this lane last groomed it (${backlog.total} row(s), fingerprint ${fp})`);
+      return laneRuns("groom");
+    }
     // pm-review: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
-    return gateTripped ? "review" : null;
-  } catch { return jobs[0]; } // any read error ⇒ fail open (run the lane's primary job)
+    return gateTripped ? laneRuns("review")
+      : laneIdle(lane, project, "the change-gate did not trip — no repo HEAD or board movement since this lane's last fire, and the quiet-board TTL has not elapsed");
+  } catch { return laneRuns(jobs[0]); } // any read error ⇒ fail open (run the lane's primary job)
 }
 // qaLaneGate — the pm PoC applied to QA (mirror of pmLaneGate, same fail-open contract).
 //   qa-maintenance ⇒ verify if qa-owned In-Review rows exist, else unblock if needs-qa / blocked+info-needed
 //                    rows exist, else null
 //   qa-hunt        ⇒ bughunt if the change-gate tripped (a watched repo HEAD moved / the board moved / the
 //                    change-gate is off entirely), else null
-function qaLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): string | null {
+function qaLaneGate(opts: Options, lane: string, project: string, gateTripped: boolean): LaneDecision {
   const jobs = LANE_JOBS[lane as Lane];
   try {
     if (fireDb === undefined) { try { fireDb = openDb(opts.hubDb); } catch { fireDb = null; } }
     const projectId = fireDb ? findProject(fireDb, project) : null;
-    if (!fireDb || !projectId) return jobs[0]; // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
+    if (!fireDb || !projectId) return laneRuns(jobs[0]); // no hub cursor / unseeded ⇒ fail open (run the lane's primary job)
     if (lane === "qa-maintenance") {
       const { verify, unblock } = qaMaintenanceSlice(fireDb, projectId);
-      return verify > 0 ? "verify" : unblock > 0 ? "unblock" : null;
+      if (verify > 0) return laneRuns("verify");
+      if (unblock > 0) return laneRuns("unblock");
+      return laneIdle(lane, project, "0 In Review rows owned by qa to verify, 0 needs-qa / blocked+info-needed rows to unblock");
     }
     // qa-hunt: change-gated — fire on a moved HEAD / board, or when the change-gate is off entirely.
-    return gateTripped ? "bughunt" : null;
-  } catch { return jobs[0]; } // any read error ⇒ fail open (run the lane's primary job)
+    return gateTripped ? laneRuns("bughunt")
+      : laneIdle(lane, project, "the change-gate did not trip — no watched repo HEAD or board movement since this lane's last fire");
+  } catch { return laneRuns(jobs[0]); } // any read error ⇒ fail open (run the lane's primary job)
 }
 // The ONE lane-gate dispatcher every scheduler branch calls: routes a pm-* lane to pmLaneGate and a qa-* lane
 // to qaLaneGate, so the dispatch code stays lane-owner-agnostic (no pm-only vs qa-only branch that could drift).
-function laneGate(opts: Options, lane: Lane, project: string, gateTripped: boolean): string | null {
+function laneGate(opts: Options, lane: Lane, project: string, gateTripped: boolean): LaneDecision {
   return isQaLane(lane) ? qaLaneGate(opts, lane, project, gateTripped) : pmLaneGate(opts, lane, project, gateTripped);
 }
 // The launch reason for a lane, naming the chosen job so the fire explains itself in one line
@@ -1245,11 +1329,54 @@ const DAY_MS = 86_400_000; // rolling window for the dailyUsd ceiling (the 24h c
 //     every launch is a worse outage than the spend it prevents — never let a broken read deadlock the loop).
 //   • The total is Child 2's estimate-augmented rollingSpendUsd — a killed/unpriced fire is estimated, never
 //     read as $0 (INV-5) — so this number matches what `dev-loop metrics` and `doctor` show the operator.
+/**
+ * The PAUSE launch gate - read every tick, exactly like the budget gate below it.
+ *
+ * `dev-loop pause` writes `scheduler_pause` in the board and `dev-loop status` renders it. Nothing in
+ * this file read it: readPause had ONE consumer, status.ts. So the display said `DRAINING ... paused by
+ * operator` while this loop kept launching - measured 2026-08-29 as 14 launches in the 41 minutes after
+ * a pause, and `--drain` never completing because it polls for an empty in-flight set that the scheduler
+ * kept refilling. An earlier `--drain` that did report "drained" had simply observed a gap between
+ * launches; with no gate in this file, launching never stopped either time.
+ *
+ * The connection is opened LAZILY and kept, because the tick runs every second and the board is the
+ * scheduler's own file. `openDb` creates the schema, so an absent file is left alone: a linear-backend
+ * run has no board and must not have one conjured by a gate.
+ *
+ * Unreadable ⇒ no gate, said ONCE. Fail-open matches the budget gate beside it, and a scheduler that
+ * refuses to fire because it cannot read a table is a worse failure than one that fires while paused —
+ * but silence is what let the original defect hide, so it announces itself.
+ */
+let pauseConn: import("node:sqlite").DatabaseSync | null = null;
+let pauseGateWarned = false;
+function pauseGateReason(hubDbPath: string | null, nowMs: number): string | null {
+  if (!hubDbPath || !existsSync(hubDbPath)) return null;
+  try {
+    pauseConn ??= openDb(hubDbPath);
+    const p = readPause(pauseConn, nowMs);
+    return p ? `paused by ${p.actor}: ${p.reason}${p.until ? ` (until ${p.until})` : ""}` : null;
+  } catch (e) {
+    if (!pauseGateWarned) {
+      pauseGateWarned = true;
+      console.warn(`dev-loop run: WARNING the pause gate cannot read ${hubDbPath} (${(e as Error).message}) — 'dev-loop pause' will NOT stop launches in this run; stop the scheduler instead ('dev-loop stop').`);
+    }
+    return null;
+  }
+}
+
 function budgetGateReason(dailyUsd: number | null | undefined, ledgerPath: string | null, nowMs: number): string | null {
   if (dailyUsd == null) return null;                          // INV-1 short-circuit: unset ⇒ today's path, byte-identical
   if (!ledgerPath) return null;                               // no ledger to read (legacy fixed-project path) ⇒ fail open
   try {
     const rolling = rollingSpendUsd(readFireRows(ledgerPath), DAY_MS, nowMs);
+    // A non-finite total is NOT the same as the read error below. The ledger was read; the arithmetic
+    // produced a non-number, and every comparison against NaN is false — so the gate would have gone on
+    // launching while reporting nothing, which is the one failure a spend gate must not have quietly.
+    // The fail-open posture is kept (this file's stated rule: never deadlock the loop), but it says so.
+    if (!Number.isFinite(rolling)) {
+      console.error(`[budget] rolling 24h spend did not compute from ${ledgerPath} — the ceiling cannot be enforced this tick; check the ledger for rows with a malformed usage object`);
+      return null;
+    }
     return rolling > dailyUsd
       ? `budget dailyUsd $${dailyUsd.toFixed(2)} reached (rolling $${rolling.toFixed(2)}/$${dailyUsd.toFixed(2)})`
       : null;
@@ -1501,6 +1628,28 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
   const killGroup = (sig: NodeJS.Signals) => {
     if (child.pid) try { process.kill(-child.pid, sig); } catch { /* group already gone */ }
   };
+  // The group is also the fire's CONTAINMENT boundary, not just the watchdogs' kill target. When the
+  // leader exits, anything still in the group is a background process the agent started and never waited
+  // for: its parent is gone, so it is reparented to init and runs until the machine reboots. Only the
+  // watchdogs reaped it before — a fire that ended NORMALLY reaped nothing, and the leak was invisible to
+  // `status`, to `doctor`, and to the ledger, which recorded the fire as a clean success. Observed live in
+  // jinko-browser-use: a fire's `npm exec tsx src/api/server.ts` held 127.0.0.1:8899 for two days with the
+  // scheduler stopped, found only by reading `lsof`.
+  // Being in the group at exit is the definition of a leak, not of a daemon: a process that must outlive
+  // its fire has to LEAVE the group (spawn detached/setsid, or hand it to a supervisor), which also puts
+  // it out of reach of the watchdogs — the same boundary, read from the other side. The reap is announced
+  // because a lane that leaks every fire is a defect in that lane's prompt, and nothing else would show it.
+  const reapGroup = () => {
+    if (!child.pid) return;
+    try { process.kill(-child.pid, 0); } catch { return; } // group empty — the fire cleaned up after itself
+    console.log(`[${new Date().toISOString()}] ${agent}: reaping processes left in the fire's group (pgid ${child.pid})`);
+    killGroup("SIGTERM");
+    const pgid = child.pid;
+    pendingGroupReaps.add(pgid);
+    reapPendingGroupsAtExit();
+    const hard = setTimeout(() => { pendingGroupReaps.delete(pgid); killGroup("SIGKILL"); }, 2000);
+    hard.unref?.(); // never hold the event loop open for a corpse — the exit hook covers the short runs
+  };
   activeChildren.add(child);
   if (stdinPayload && child.stdin) {
     child.stdin.on("error", () => { /* EPIPE on an instantly-dead child must not crash the scheduler */ });
@@ -1552,21 +1701,35 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
 
   return await new Promise((resolveExit) => {
     // Fire timeout: without it a wedged CLI child holds its slot's non-reentrancy flag forever —
-    // the agent silently stops firing until the operator notices. SIGTERM first, SIGKILL after 10s
+    // the agent silently stops firing until the operator notices. SIGINT first, SIGKILL after 10s
     // (same escalation shape as the daemon lifecycle's lcStop).
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
     // Declared here (not at the budget watchdog below) so the two OTHER watchdogs can stand down once a budget
     // kill is in flight: AC4's "never confused with a wall-timeout" must hold by construction, not by timing —
-    // the stall interval ticks every 15s and would otherwise re-classify a SIGTERM'd-but-silent child mid-grace.
+    // the stall interval ticks every 15s and would otherwise re-classify a SIGINT'd-but-silent child mid-grace.
     let budgetKilled = false;
     // effectiveFireTimeoutMs / effectiveStallMs resolved above (before the dry-run branch) — same values here.
     const fireTimer = effectiveFireTimeoutMs > 0 ? setTimeout(() => {
       if (budgetKilled) return; // the budget watchdog already killed this fire — do not stamp timedOut on its row
       timedOut = true;
-      console.error(`[${agent}] fire exceeded ${formatDuration(effectiveFireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
-      log.write(`\n===== fire timeout after ${formatDuration(effectiveFireTimeoutMs)}: SIGTERM =====\n`);
-      killGroup("SIGTERM");
+      // All three watchdogs open with SIGINT to the DIRECT CHILD and escalate to a group SIGKILL on the
+      // unchanged 10s timer. Two separate reasons, both learned after these kills were written:
+      //   * the SIGNAL. claude's `--output-format json` buffers its terminal object until exit and flushes
+      //     it for SIGINT, not for SIGTERM, so a SIGTERM kill guarantees `usage: null` for the fire it just
+      //     stopped. A wall-timeout fire is the most expensive kind there is; losing its receipt is the
+      //     worst case, not the mildest.
+      //   * the TARGET. LOOP-23 (see the interrupt path below) established that a graceful signal to the
+      //     GROUP reaches the git/tsx/npm helpers the agent uses to check-point, turning a graceful
+      //     wind-down into a forced reap. A graceful signal delivered group-wide is the worst of both.
+      // LOOP-23 confined forced group reaping to these watchdogs on the reasoning that a wedged agent's
+      // cleanup is moot. That still holds for the ESCALATION, which is untouched: a child that ignores
+      // SIGINT dies on exactly the same deadline, group and all. What changes is that a child that can
+      // still respond gets the chance to flush — and e4ba69c's post-exit reapGroup sweeps whatever the
+      // narrower signal leaves in the group.
+      console.error(`[${agent}] fire exceeded ${formatDuration(effectiveFireTimeoutMs)} — SIGINT (SIGKILL in 10s)`);
+      log.write(`\n===== fire timeout after ${formatDuration(effectiveFireTimeoutMs)}: SIGINT =====\n`);
+      child.kill("SIGINT");
       killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
     }, effectiveFireTimeoutMs) : undefined;
@@ -1582,7 +1745,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
     let retryLoop = false;
     const stallMs = effectiveStallMs; // claude -p buffers until the end — silence is normal there
     const stallTimer = stallMs > 0 ? setInterval(() => {
-      if (stalled || timedOut || budgetKilled) return; // a budget kill in its SIGTERM→SIGKILL grace is not a stall
+      if (stalled || timedOut || budgetKilled) return; // a budget kill in its SIGINT→SIGKILL grace is not a stall
       const silent = Date.now() - lastOutputAt >= stallMs;
       const looping = !silent && Date.now() - lastNewContentAt >= stallMs;
       if (!silent && !looping) return;
@@ -1594,13 +1757,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       const ageOut = Date.now() - lastOutputAt, ageNew = Date.now() - lastNewContentAt;
       const ages = `[silent ${formatDuration(ageOut)} · no-new-content ${formatDuration(ageNew)} · window ${seenLines.size}/${RETRY_LOOP_LINE_WINDOW}]`;
       if (retryLoop) {
-        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} ${ages} — fire looks STUCK in a retry loop; SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== retry-loop: output arriving but no new content for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} ${ages} — fire looks STUCK in a retry loop; SIGINT (SIGKILL in 10s)`);
+        log.write(`\n===== retry-loop: output arriving but no new content for ${formatDuration(stallMs)}: SIGINT =====\n`);
       } else {
-        console.error(`[${agent}] no output for ${formatDuration(stallMs)} ${ages} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+        console.error(`[${agent}] no output for ${formatDuration(stallMs)} ${ages} — fire looks WEDGED (hung provider call / silent retry loop); SIGINT (SIGKILL in 10s)`);
+        log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGINT =====\n`);
       }
-      killGroup("SIGTERM");
+      child.kill("SIGINT");
       killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
     }, 15_000) : undefined;
@@ -1633,9 +1796,18 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
         // as "this fire spent nothing", the exact conflation between a measured zero and an unmeasured one
         // that this ticket exists to remove. One helper, so the two can never drift apart again.
         const spentLabel = spentNow === null ? "not yet observable on this lane" : `$${usdLabel(spentNow)}`;
-        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGTERM =====\n`);
-        killGroup("SIGTERM");
+        // SIGINT, not SIGTERM. The comment above explains the missing spend by claude's buffering — true, but
+        // the buffer is flushed on the way out for one of these signals and not the other. Measured on this
+        // machine: SIGTERM to the group leaves 0 bytes of stdout and no terminal JSON; SIGINT — to the group
+        // or to the child, the direction does not matter — leaves the full object with its usage intact. The
+        // production ledger says the same thing without a probe: every one of the 7 SIGTERM budget kills has
+        // `usage: null`, and every one of the 17 fires the operator's SIGINT stop ended carries a real
+        // provider-measured cost. A stop-loss that destroys the receipt for the spend it is stopping is the
+        // one kill that most needs to be accounted for. The 10s SIGKILL escalation is unchanged, so a child
+        // that ignores SIGINT still dies on schedule.
+        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGINT (SIGKILL in 10s)`);
+        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGINT =====\n`);
+        child.kill("SIGINT");
         killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
         killTimer.unref?.();
       }, budgetMs);
@@ -1697,7 +1869,15 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       // The discriminator is not in the output at all — it is that WE sent the signal. Classify on
       // that, so the heuristic keeps catching real cases and stops charging the operator's own
       // restarts to the agents (10 of 10 suspectErrors on the board that found this were kills).
-      const interrupted = schedulerInterrupted && exitCode === 0 && !timedOut;
+      // …but requiring exitCode === 0 handed the classification straight back to the child. A child that
+      // dies ON the forwarded signal never reaches its own exit: the CLI has no handler, or — the case
+      // that surfaces under load — the shell had not installed its trap yet when the signal arrived. Those
+      // kills were ledgered as genuine agent failures with an empty tail, which feeds the breaker a false
+      // streak and ranks a healthy lane as dead. The signal death is OUR signal by construction here
+      // (schedulerInterrupted is latched only by the SIGINT/SIGTERM forwarding path), and `watchdog === null`
+      // keeps a timeout/stall/budget kill — which also terminates by signal — out of the new arm.
+      const diedOnForwardedSignal = signal === "SIGINT" || signal === "SIGTERM";
+      const interrupted = schedulerInterrupted && !timedOut && (exitCode === 0 || (diedOnForwardedSignal && watchdog === null));
       // LOOP-543 — the same observable the empty-output arm below already reads, named once and shared
       // so the flag and the errorClass can never disagree about whether the fire produced anything.
       const noWork = producedNoWork({ exitCode, timedOut, interrupted, outputTail: outTail });
@@ -1768,7 +1948,22 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       // fire, never what `--once` reports to the shell that invoked it.
       recordFire(opts.hubDb, project, actor, profile, Date.now() - startedAt, noWork ? EXIT_NO_WORK : exitCode, timedOut, fireId,
         Object.keys(fireExtras).length ? fireExtras : undefined);
-      if (timedOut || stalled || budgetKilled) releaseClaimedTickets(fireDb, project, actor, fireId, budgetKilled ? "budget" : timedOut ? "timeout" : "stall"); // a budget kill must free its claim too (reclaimable next fire)
+      // A claim is released whenever INFRASTRUCTURE ended the fire, not only when one of the in-process
+      // watchdogs did. A provider-side kill (session-limit above all, plus spend-limit / rate-limit /
+      // auth / network) leaves the ticket In Progress forever: `pick` reads Todo, so no lane returns to
+      // it, and no doctor check reports a claim that nothing owns. `errorClass` is computed above, so the
+      // decision uses the taxonomy rather than re-deriving it from the exit code.
+      // …and the operator's own stop belongs in the same set. An interrupted fire carries no errorClass by
+      // construction (it is not a failure), so it reaches none of the arms above, and its claim outlived
+      // it exactly the way an infrastructure kill's did: In Progress, owned by nobody, invisible to `pick`.
+      // The ticket goes back to Todo with its tier assignee intact, so the same lane resumes it — the work
+      // the fire pushed is on its branch either way. Observed live: JBU-69 sat claimed for three hours
+      // after a stop, with 723 lines stranded on a branch no lane would return to.
+      const infraKill = errorClass !== null && INFRA_KILL_CLASSES.has(errorClass);
+      if (timedOut || stalled || budgetKilled || infraKill || interrupted) {
+        releaseClaimedTickets(fireDb, project, actor, fireId,
+          budgetKilled ? "budget" : timedOut ? "timeout" : stalled ? "stall" : infraKill ? (errorClass as KillClass) : "interrupt");
+      }
       endLog(() => resolveExit(exitCode)); // resolve after the flush — --once process.exit must not truncate the tail
     };
     child.on("exit", (code, signal) => {
@@ -1777,6 +1972,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       clearTimeout(killTimer);
       clearTimeout(budgetTimer);
       activeChildren.delete(child);
+      reapGroup(); // before finalize: the fire is over, and whatever is still in its group is a leak
       if (closed) { finalize(code, signal); return; }        // pipes already drained → finalize now
       const grace = setTimeout(() => finalize(code, signal), 150);
       grace.unref?.();
@@ -1786,7 +1982,47 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
   });
 }
 
-type Slot = { agent: SchedKey; nextAt: number; running: boolean };
+// Process groups still awaiting reapGroup's hard escalation, and the ONE exit hook that delivers it.
+//
+// reapGroup's 2 s SIGKILL timer is unref'd so it never holds the loop open for a corpse — which means on
+// every path that exits as soon as the fire resolves (`--once`, the last fire of `--max-fires`, an
+// operator stop) it is never reached at all, and a group member that IGNORES SIGTERM outlives the run.
+// The operator console's own SKILL tells operators to use `--once`.
+//
+// This was reverted once, on the strength of a test that passed against the unfixed code. It passed for a
+// reason that had nothing to do with the escalation: the stand-in was a `node -e` installing a SIGTERM
+// handler, which takes ~40 ms, while reapGroup's SIGTERM arrives the instant the fire exits — so the
+// stand-in died by DEFAULT action and the arm was measuring SIGTERM. With the stand-in made to signal
+// readiness first, the arm fails on the unfixed tree. "Measured, did not reproduce" was a measurement of
+// the wrong thing.
+//
+// Registering per fire would leak listeners on a long-running scheduler (one per fire, thousands over a
+// night), so the set is module-level and the hook is armed once.
+const pendingGroupReaps = new Set<number>();
+let groupReapExitArmed = false;
+function reapPendingGroupsAtExit(): void {
+  if (groupReapExitArmed) return;
+  groupReapExitArmed = true;
+  process.on("exit", () => {
+    for (const pgid of pendingGroupReaps) {
+      try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  });
+}
+
+// `bootLog` holds LOOP-273's seed line for a slot that was seeded to FIRE ON BOOT. It is an
+// announcement of a fire, so it is printed at the launch rather than at the seed: printing it at the
+// seed and then having a gate decline leaves an announcement with no start line, which reads as a
+// crash. A slot seeded DEFERRED carries no bootLog — that line is a scheduling statement about a fire
+// that is not being attempted, and it is printed immediately.
+// `running` is the scheduler's SETTLED predicate, and the exit gates below read it rather than
+// `activeChildren`. The two are not the same instant: a child is deleted from `activeChildren` on the OS
+// `exit` event, while its ledger row is written later, in finalize(), after up to a 150 ms grace for the
+// pipes to drain. With two fires in flight the first one's .finally() could see an empty `activeChildren`
+// and process.exit(0) out from under the second one's grace window, dropping that fire's ledger row and
+// log tail. `running` is cleared as the FIRST statement of the same .finally(), i.e. strictly after
+// finalize, so a slots-wide `!running` is exact and strictly stronger than an empty child set.
+type Slot = { agent: SchedKey; nextAt: number; running: boolean; bootLog: string | null };
 type RunnerChild = ChildProcessByStdio<Writable | null, Readable, Readable>; // stdio: [pipe|ignore,"pipe","pipe"] — stdin is a pipe only on boot-prefix fires
 const activeChildren = new Set<RunnerChild>();
 
@@ -1904,8 +2140,86 @@ function resolveWs(opts: Options): Workspace | null {
   return ws;
 }
 
+/**
+ * Run-lock holder as it is written to disk. `startedAt` (project/team lock) and `at` (break mutex) are
+ * both accepted so one reader serves both files.
+ */
+type RunLockHolder = { pid?: number; startedAt?: string; at?: string };
+
+function readRunLockHolder(lockPath: string): RunLockHolder | null {
+  try { return JSON.parse(readFileSync(lockPath, "utf8")) as RunLockHolder; } catch { return null; } // unreadable = stale
+}
+
+function runLockHolderAlive(h: RunLockHolder | null): boolean {
+  if (!h || typeof h.pid !== "number") return false;
+  try { process.kill(h.pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } // EPERM = exists, not ours
+}
+
+/**
+ * Acquire the run lock, breaking a stale one SAFELY.
+ *
+ * `wx` (O_CREAT|O_EXCL) makes exactly one creator win, and that is the entire guarantee the lock offers —
+ * but the takeover path used to throw it away: unlink-then-create, with nothing between the two steps.
+ * Two racers that both observed the dead holder both unlinked and both created, and the second unlink
+ * removed the lock the first had just won. Two schedulers then ran for one project — the double-fire (and
+ * two same-actor fires on one checkout) this lock exists to prevent.
+ *
+ * The break is serialized under a dedicated break-mutex, the same shape locks.ts:37-42 uses for the repo
+ * locks, and staleness is RE-CHECKED under it so a racer that already took over is never evicted. A
+ * break-mutex whose own owner died is cleared and the break retried, so a crashed racer costs one loop
+ * iteration rather than wedging every later start. The retry bound is small and finite: each pass either
+ * makes progress or hands back a definite answer, and a caller that is genuinely contended should be told
+ * so rather than spin.
+ */
+function claimRunLock(lockPath: string, stamp: () => string): { refusedBy: RunLockHolder | null; refusedReason: "live-holder" | "concurrent-takeover" | null; tookOver: RunLockHolder | null } {
+  const breakFile = `${lockPath}.break`;
+  let broke: RunLockHolder | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { writeFileSync(lockPath, stamp(), { flag: "wx" }); return { refusedBy: null, refusedReason: null, tookOver: broke }; }
+    catch { /* someone holds it — decide below */ }
+
+    const holder = readRunLockHolder(lockPath);
+    if (runLockHolderAlive(holder)) return { refusedBy: holder ?? {}, refusedReason: "live-holder", tookOver: null };
+
+    try {
+      writeFileSync(breakFile, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+      try {
+        // Re-read under the mutex: a racer may have taken over between our create and our break.
+        if (!runLockHolderAlive(readRunLockHolder(lockPath))) { try { unlinkSync(lockPath); } catch { /* already gone */ } broke = holder ?? {}; }
+      } finally {
+        try { if (readRunLockHolder(breakFile)?.pid === process.pid) unlinkSync(breakFile); } catch { /* released */ }
+      }
+      continue; // retry the create, now that the stale lock is gone
+    } catch (be) {
+      if ((be as { code?: string }).code !== "EEXIST") throw be;
+      const breaker = readRunLockHolder(breakFile);
+      if (!runLockHolderAlive(breaker)) { try { unlinkSync(breakFile); } catch { /* raced */ } continue; } // dead breaker: clear and retry
+      // A LIVE racer is mid-break. Do not break underneath it — that is the two-scheduler window. Report
+      // the racer, not the corpse in the lock file: naming the dead pid would send an operator hunting a
+      // process that does not exist.
+      return { refusedBy: breaker ?? {}, refusedReason: "concurrent-takeover", tookOver: null };
+    }
+  }
+  return { refusedBy: readRunLockHolder(lockPath) ?? {}, refusedReason: "live-holder", tookOver: null };
+}
+
+/**
+ * Release the run lock only if this process still HOLDS it. The exit hooks unlinked unconditionally, so a
+ * process that had lost the lock to a takeover deleted the winner's lock on its way out — re-opening the
+ * same two-scheduler window from the other end.
+ */
+function releaseRunLockIfOurs(lockPath: string): void {
+  try { if (readRunLockHolder(lockPath)?.pid === process.pid) unlinkSync(lockPath); } catch { /* already gone */ }
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  // Nothing named the state paths and no workspace answered: refuse here rather than composing every
+  // gate/log/db path under an empty string. ~/.dev-loop is no longer a fallback (state-locality I3).
+  if (!opts.dataDir || !opts.hubDb) {
+    die("no workspace resolved and no state paths named — pass --data/--hub-db, set DEVLOOP_DATA_DIR/DEVLOOP_HUB_DB, or run inside a workspace (`dev-loop team init` creates one).", 1);
+  }
   // --background (operator-console flow): re-spawn THIS entry detached with the same args and return the
   // shell. The child owns the run lock as usual (a second scheduler is still refused), output appends to
   // the workspace run log, and `dev-loop stop` is the matching off switch. Deliberately BEFORE workspace
@@ -1917,6 +2231,12 @@ async function main(): Promise<void> {
     // §16 (LOOP-93): run.log holds the FULL unredacted detached fire stream (every agent's stdout+stderr) in the
     // .dev-loop data home alongside secrets.env — owner-only on create, a pre-existing loose one warned once. openSync
     // is synchronous, so hardenLedgerPerms' chmod acts on a file that already exists (no createWriteStream race here).
+    // Rotate at 50MB (single .1 generation), the same ceiling and shape the per-agent runner logs use
+    // above. run.log is the UNION of every agent's stdout+stderr, so it is the fastest-growing log of the
+    // three and was the only one with no bound at all — an unattended loop appended to it forever.
+    // Rotation happens BEFORE the `existed` read for the same reason it does there: a freshly rotated log
+    // is a new file and must be re-hardened to owner-only rather than inherit the default umask.
+    try { if (statSync(logPath).size > 50 * 1024 * 1024) renameSync(logPath, `${logPath}.1`); } catch { /* no log yet */ }
     const runLogExisted = existsSync(logPath);
     const fd = openSync(logPath, "a");
     hardenLedgerPerms(logPath, runLogExisted, 0o600, "600");
@@ -1987,7 +2307,7 @@ async function main(): Promise<void> {
       if (isLane(a)) {
         const key = gateActive ? changeKey(opts, cfg, project) : null;
         const tripped = !(gateActive && gateSkips(opts, gateState, a, laneActor(a), key));
-        const job = laneGate(opts, a, project, tripped) ?? LANE_JOBS[a][0];
+        const job = laneGate(opts, a, project, tripped).job ?? LANE_JOBS[a][0];
         return runAgent(opts, cfg, a, project, cwd, undefined, laneReason(a, job), job);
       }
       return runAgent(opts, cfg, a, project, cwd, undefined, ONCE_REASON);
@@ -2001,17 +2321,14 @@ async function main(): Promise<void> {
   // a liveness-checked stale takeover — the same shape as the daemon lifecycle's cold-start lock.
   const lockPath = join(process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb), `run-${project}.lock`);
   if (!opts.dryRun) {
-    const takeLock = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), { flag: "wx" });
-    try { takeLock(); } catch {
-      let holder: { pid?: number } = {};
-      try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
-      const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
-      if (alive) die(`another \`dev-loop run\` for '${project}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
-      console.log(`dev-loop run: taking over stale run lock (pid ${holder.pid ?? "?"} is gone)`);
-      try { unlinkSync(lockPath); } catch { /* raced */ }
-      takeLock();
+    {
+      const { refusedBy, refusedReason, tookOver } = claimRunLock(lockPath, () => JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+      if (refusedBy) die(refusedReason === "concurrent-takeover"
+        ? `another \`dev-loop run\` for '${project}' is taking over the stale lock right now (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); let it finish, then retry`
+        : `another \`dev-loop run\` for '${project}' is already running (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+      if (tookOver) console.log(`dev-loop run: taking over stale run lock (pid ${tookOver.pid ?? "?"} is gone)`);
     }
-    process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
+    process.on("exit", () => releaseRunLockIfOurs(lockPath));
     wireBreakerPersistence(opts, join(process.env.DEVLOOP_RUN_DIR ?? dirname(opts.hubDb), `breaker-${project}.json`)); // WS-C review 4: no workspace ⇒ no team dir; beside the run lock, per project like it
   }
 
@@ -2033,11 +2350,11 @@ async function main(): Promise<void> {
   const lastFireAt = lastFirePerAgent(null);
   const slots: Slot[] = opts.agents.map((agent, i) => {
     const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
-    console.log(d.log);
+    if (!d.fireOnBoot) console.log(d.log); // a DEFERRAL announces no fire — print it now
     // LOOP-459: a dry-run preview must print the resolved agent set immediately without waiting for
     // the scheduler's cadence. Reset all slots to fire on the first tick so runAgent prints its dry-run output.
     const nextAt = opts.dryRun ? bootNow - 1 : d.nextAt;
-    return { agent, nextAt, running: false };
+    return { agent, nextAt, running: false, bootLog: d.fireOnBoot ? d.log : null };
   });
   let stopping = false;
   let fired = 0; // total fires started; --max-fires caps it (0 = unlimited)
@@ -2048,7 +2365,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     clearInterval(timer);
-    if (activeChildren.size === 0) process.exit(0);
+    if (slots.every((sl) => !sl.running)) process.exit(0); // settled, not merely exited — see the Slot type
   };
   // LOOP-23 decision — the scheduler interrupt path is deliberately NOT routed through the fire's
   // process-group kill. A forwarded SIGINT is the GRACEFUL stop (LOOP-10): it lets the agent CLI
@@ -2056,9 +2373,17 @@ async function main(): Promise<void> {
   // group (`-child.pid`) would deliver SIGINT to every grandchild at once — the git/tsx/npm helpers
   // the agent spawns to checkpoint — turning a graceful drain into a forced reap and defeating the
   // checkpoint intent LOOP-10 made an explicit non-goal for auto-release. Forced group reaping stays
-  // confined to the fire-timeout / stall watchdog (killGroup, per fire), which fire precisely when the
-  // agent is presumed wedged and its cleanup is moot. (A zombie descendant that outlives a graceful
-  // stop is LOOP-19's concern — runner-side ticket release — not a reason to make this signal forceful.)
+  // (A zombie descendant that outlives a graceful stop is LOOP-19's concern — runner-side ticket release —
+  // not a reason to make this signal forceful.)
+  //
+  // This paragraph used to end "forced group reaping stays confined to the fire-timeout / stall watchdog
+  // (killGroup, per fire)". That sentence is no longer true in either direction and is corrected rather
+  // than deleted, because the REASONING above still governs and only its scope statement moved:
+  //   * the watchdogs no longer open on the group either — all three now signal the direct child for this
+  //     same reason, and because SIGTERM to the group destroys the fire's usage receipt;
+  //   * group reaping is no longer confined to them — reapGroup (post-exit) sweeps EVERY fire's group,
+  //     including one this graceful path ended, so a leaked descendant is collected without the graceful
+  //     signal ever having been made forceful. The two ideas turned out to be separable.
   const interrupt = () => {
     const first = !stopping;
     schedulerInterrupted = true; // LOOP-155: from here on, an exit-0 fire is OUR kill, not its failure
@@ -2076,27 +2401,45 @@ async function main(): Promise<void> {
     // (INV-1: undefined dailyUsd ⇒ null, no side effect). It is wired here so BOTH schedulers route through the
     // one budgetGateReason predicate and cannot drift; on the live team path it enforces (teamMain below).
     const budgetReason = budgetGateReason(undefined, fireLedgerPath, now);
+    // The operator's stop, re-read every tick (pauseGateReason). Checked BEFORE the budget gate: a
+    // paused loop launches nothing, for any reason.
+    const pauseReason = pauseGateReason(opts.hubDb || null, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      // The slot is due, so its boot announcement is now resolved either way: it is printed at the
+      // launch below, or dropped in favour of whichever line explains why no launch happened.
+      const bootAnnounce = slot.bootLog;
+      slot.bootLog = null;
+      if (pauseReason !== null) {
+        console.log(`[${slot.agent}] launch refused: ${pauseReason}`);
+        // The slot's OWN cadence, never the breaker's probe cadence the budget arm below backs off to.
+        // A budget ceiling clears on its own schedule, so probing slowly is right there; a pause is
+        // cleared by an operator typing `resume`, and an hour-long probe backoff would leave the loop
+        // silent long after they did — the resume would look as broken as the pause just did.
+        slot.nextAt = now + opts.intervals[slot.agent];
+        continue;
+      }
       if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
         console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
         continue;
       }
       // Job-scoped prompts: a pm/qa lane owns its OWN gate — the scheduler picks the lane's job from board
-      // rows (+ the change-gate for review/hunt). null ⇒ nothing eligible this fire ⇒ skip (a dry-run still
-      // previews the lane's primary job). The generic change/queue gates below are for real agents only.
+      // rows (+ the change-gate for review/hunt). No job ⇒ nothing eligible this fire ⇒ skip, and SAY so in
+      // the same shape the dev-tier queue gate below uses (a dry-run still previews the lane's primary job).
+      // The generic change/queue gates below are for real agents only.
       let laneJob: string | undefined;
       if (isLane(slot.agent)) {
         const actor = laneActor(slot.agent);
         const key = gateActive ? changeKey(opts, cfg, project) : null;
         const tripped = !(gateActive && gateSkips(opts, gateState, slot.agent, actor, key));
         const picked = laneGate(opts, slot.agent, project, tripped);
-        if (picked === null && !opts.dryRun) {
+        if (picked.job === null && !opts.dryRun) {
+          console.log(`[${slot.agent}] skipped: ${picked.reason}`);
           slot.nextAt = now + breaker.intervalFor(actor, opts.intervals[slot.agent]);
           continue; // nothing eligible for this lane this fire (no-op avoided, no token burn)
         }
-        laneJob = picked ?? LANE_JOBS[slot.agent][0];
+        laneJob = picked.job ?? LANE_JOBS[slot.agent][0];
       } else if (gateActive && GATED_AGENTS.has(slot.agent)) {
         // R1: for a gated agent, if neither the code nor the board moved since its last fire, skip the spawn
         // entirely (the agent would just no-op) — except a pm/qa review fire past the quiet-board TTL (R1a).
@@ -2116,6 +2459,7 @@ async function main(): Promise<void> {
           continue;
         }
       }
+      if (bootAnnounce) console.log(bootAnnounce); // every gate passed — the fire it announces starts below
       slot.running = true;
       fired++;
       const fireReason = isLane(slot.agent)
@@ -2138,7 +2482,7 @@ async function main(): Promise<void> {
             const key = changeKey(opts, cfg, project);
             if (key !== null) { gateRecord(gateState, slot.agent, key); saveGateState(opts, project, gateState); }
           }
-          if (stopping && activeChildren.size === 0) process.exit(0);
+          if (stopping && slots.every((sl) => !sl.running)) process.exit(0); // settled, not merely exited
         });
       if (opts.maxFires && fired >= opts.maxFires) {
         console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining active fires then exiting`);
@@ -2196,23 +2540,43 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     if (moved && !opts.dryRun)
       die(`this workspace was MOVED (bundle '${moved.bundle ?? "?"}' at ${moved.movedAt ?? "?"}) — the home now runs elsewhere; use \`dev-loop up --attach <url>\` here, or delete .dev-loop/moved.json to un-retire`, 1);
   } catch (e) { if ((e as { code?: string }).code !== "ERR_MODULE_NOT_FOUND") throw e; }
-  const cfg = toLegacyView(ws) as unknown as ProjectsConfig;
-  (cfg as ProjectsConfig).repos = ws.file.repos as unknown as Record<string, unknown>;
+  // ── Everything a FIRE reads out of the workspace, applied in ONE place ────────────────────────────
+  // Boot and hot reload call the same function, so they cannot disagree about what an edit reaches.
+  // Before this they did: the reload refreshed `ws`, the rotation and the provider registry, and left
+  // `cfg` — the projection resolveLaunchProfile reads model/effort/codingAgent from — captured `const`
+  // at boot, along with the per-fire budget ceiling. An operator editing team.agents.<lane>.model
+  // watched the reload line print and the next fire launch the old model; a raised
+  // team.budget.perFireUsd never moved the in-flight watchdog. team.budget.dailyUsd, read through the
+  // reloaded `ws` at tick time, DID take effect — one file, two halves disagreeing about when an edit
+  // counts.
+  //
+  // Every knob here is a pure read with an absent ⇒ default reading, so REMOVING one reverts on the
+  // next reload. Cadence and the per-agent timeouts are deliberately NOT here: applyConfigCadence
+  // writes into opts.intervals and has no "unset" arm, so re-applying it would make an added cadence
+  // live and a deleted one permanent — a scheduling change that needs its own decision, not a
+  // side effect of this one.
+  let cfg!: ProjectsConfig;
+  const applyWorkspaceConfig = (w: Workspace): void => {
+    cfg = toLegacyView(w) as unknown as ProjectsConfig;
+    cfg.repos = w.file.repos as unknown as Record<string, unknown>;
+    // Providers/permission follow the reload: an operator adding a registry entry + key mid-run must
+    // not need a scheduler restart. The rest joined them when the projection did.
+    opts.providers = w.file.team.providers ?? {};
+    opts.opencodePermission = w.file.team.opencodePermission;
+    opts.wsRoot = w.root; // Q9: fire env strips this workspace's secrets.env-injected keys
+    // WS-A — the team-level knobs the legacy view carries no `team` for: the boot-corpus switch (A1),
+    // the codex sandbox posture + claude permission surface (C4), the workspace itself (A6).
+    opts.ws = w;
+    opts.teamBootCorpus = w.file.team.bootCorpus;
+    opts.teamCodexSandbox = w.file.team.codex?.sandbox;
+    opts.agentCodexSandbox = Object.fromEntries(Object.entries(w.file.team.agents ?? {}).flatMap(([a, c]) => c?.codexSandbox ? [[a, c.codexSandbox]] : [])) as Partial<Record<Agent, CodexSandbox>>;
+    opts.claudeAllowedTools = w.file.team.claude?.allowedTools;
+    opts.claudePermissionMode = w.file.team.claude?.permissionMode;
+    perFireCeilingUsd = w.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD; // LOOP-230 in-flight watchdog: default ON, config overrides (only teamMain sets it ⇒ legacy path stays inert)
+  };
+  applyWorkspaceConfig(ws);
   const backend = ws.file.team.backend;
   // Model-provider routing: the TEAM-level registry + permission override ride the run options into
-  // commandFor/runAgent (never the legacy per-project view — providers are team infrastructure).
-  opts.providers = ws.file.team.providers ?? {};
-  opts.opencodePermission = ws.file.team.opencodePermission;
-  opts.wsRoot = ws.root; // Q9: fire env strips this workspace's secrets.env-injected keys
-  // WS-A — the team-level knobs that never reached runAgent before (the legacy view carries no `team`):
-  // the boot-corpus switch (A1), the codex sandbox posture + claude permission surface (C4), and the
-  // workspace itself for the resolved-config block (A6). Read once at boot, like providers above.
-  opts.ws = ws;
-  opts.teamBootCorpus = ws.file.team.bootCorpus;
-  opts.teamCodexSandbox = ws.file.team.codex?.sandbox;
-  opts.agentCodexSandbox = Object.fromEntries(Object.entries(ws.file.team.agents ?? {}).flatMap(([a, c]) => c?.codexSandbox ? [[a, c.codexSandbox]] : [])) as Partial<Record<Agent, CodexSandbox>>;
-  opts.claudeAllowedTools = ws.file.team.claude?.allowedTools;
-  opts.claudePermissionMode = ws.file.team.claude?.permissionMode;
   // C4 review 1 — the notice used to resolve against the FIRST project only, so a codex lane routed by a
   // second project's config (or by a project-scope agents{} block) printed nothing. Every enabled project
   // is consulted; the line prints ONCE at boot, never per fire.
@@ -2239,6 +2603,12 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   }
 
   console.log(`dev-loop run: team '${ws.file.team.key}' @ ${ws.root} (backend:${backend}); projects=${candidates.map((c) => `${c.key}×${c.weight}`).join(", ")}`);
+  // Named at boot, so "why is this lane silent?" is answered by the first screen of the run log rather
+  // than by reading config. A lane parked only for SOME projects is not listed here — its skip line
+  // prints per candidate project, where the decision actually happens.
+  const parkedAtBoot = opts.agents.map((a) => [a, laneScheduleBlock(ws, a)] as const).filter(([, b]) => b);
+  if (parkedAtBoot.length)
+    console.log(`dev-loop run: ${parkedAtBoot.length} selected lane(s) PARKED in config and will not fire: ${parkedAtBoot.map(([a, b]) => `${a} (${b!.key})`).join(", ")}`);
   applyConfigCadence(opts, (agent) => ws.file.team.agents?.[agent]?.cadence, agentsWithCadence(ws.file.team.agents as Record<string, { cadence?: string }> | undefined));
   applyConfigTimeouts(opts, (agent) => ws.file.team.agents?.[agent]);
   preflightOpencodeModels(opts, cfg, ws.root, candidates.map((c) => c.key)); // zero-token: catch dead models/providers before the first fire
@@ -2285,14 +2655,18 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // Service backend: make sure the workspace hub daemon is up before the loop (operator needn't start it
   // by hand). Best-effort — a failed ensure logs but never blocks the scheduler.
-  if (backend === "service" && !opts.dryRun) {
+  //
+  // The daemon it starts is DETACHED and unref'd, so it outlives this process by design — that is what
+  // an operator wants and what a fixture does not. `up` already had --no-daemon "(tests/CI)" for the
+  // same reason; `run` had no such flag, so every suite firing a real scheduler tick against a service
+  // workspace left a daemon holding a production-band port after its fixture directory was deleted.
+  if (backend === "service" && !opts.dryRun && !opts.noDaemon) {
     try { const { ensureHub } = await import("./hub.ts"); const c = await ensureHub(ws); if (c !== 0) console.warn(`dev-loop run: hub ensure returned ${c} (continuing)`); }
     catch (e) { console.warn(`dev-loop run: hub ensure failed (${(e as Error).message}); continuing`); }
   }
 
   const fireLedger = wsFireLedger(ws);
   fireLedgerPath = fireLedger; // recordFire appends here (backend-agnostic soak metric)
-  perFireCeilingUsd = ws.file.team.budget?.perFireUsd ?? DEFAULT_PER_FIRE_USD; // LOOP-230 in-flight watchdog: default ON, config overrides (only teamMain sets it ⇒ legacy path stays inert)
   try { const { pruneFireLedger } = await import("./metrics.ts"); pruneFireLedger(fireLedger); } catch { /* best-effort */ }
 
   const cwdFor = (project: string): string | null => primaryRepo(ws, project);
@@ -2332,10 +2706,13 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
 
   // A single fire for one agent. Stewards (M4) fire at TEAM scope (no rotation). Delivery agents rotate:
   // pick a project (skipping gated-unchanged + unseeded ones up to one full rotation), resolve its cwd, and run.
-  const fireAgentOnce = async (agent: SchedKey, reason?: FireReason): Promise<void> => {
+  // `announce` is the slot's deferred boot line (LOOP-273): it is invoked immediately before the spawn,
+  // so a gate that declines every candidate leaves it unprinted and prints its own skip line instead.
+  const fireAgentOnce = async (agent: SchedKey, reason?: FireReason, announce?: () => void): Promise<void> => {
     const actor = laneActor(agent); // a pm lane executes as pm; steward/gate membership tests key on the actor
     if (STEWARD_AGENTS.has(actor)) {
       // teamComms reads through `ws` at fire time so a hot-reloaded comms block takes effect next fire.
+      announce?.();
       await runAgent(opts, cfg, agent, stewardProject, ws.root, { enabledProjects: stewardScope(), teamComms: ws.file.team.comms ?? null }, reason ?? fireReasonFor(opts, agent, stewardProject, false));
       return;
     }
@@ -2347,14 +2724,24 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
         warnUnseeded(agent, p);
         if (!opts.dryRun) continue; // skip the token burn; a dry-run previews on (same shape as the legacy preflight)
       }
+      // Project-scope park — checked before the lane/gate branches because it applies to every agent
+      // kind, and `continue` here tries the NEXT candidate project: a lane parked for one project keeps
+      // serving its siblings, which is the whole reason the switch resolves per project.
+      const projectPark = laneScheduleBlock(ws, agent, p);
+      if (projectPark) { console.log(`[${agent}] skipped: ${projectPark.reason}`); continue; }
       if (isLane(agent)) {
         // A pm/qa lane owns its own gate: the scheduler picks the lane's job from THIS project's board rows
         // (+ the change-gate for review/hunt). null ⇒ nothing eligible here ⇒ try the next candidate project.
         const key = gateActive ? changeKey(opts, cfg, p) : null;
         const tripped = !(gateActive && gateSkips(opts, gateState, gateKey(agent, p), actor, key));
         const picked = laneGate(opts, agent, p, tripped);
-        if (picked === null && !opts.dryRun) continue;
-        laneJob = picked ?? LANE_JOBS[agent][0];
+        if (picked.job === null && !opts.dryRun) {
+          // Say it, per candidate project — a silent `continue` here is the whole defect: a lane that
+          // declines every candidate produced no start line, no log and no skip line at all.
+          console.log(`[${agent}] skipped: ${picked.reason}`);
+          continue;
+        }
+        laneJob = picked.job ?? LANE_JOBS[agent][0];
       } else if (gateActive && GATED_AGENTS.has(agent)) {
         const key = changeKey(opts, cfg, p);
         if (gateSkips(opts, gateState, gateKey(agent, p), agent, key)) continue; // unchanged (and inside the pm/qa TTL) ⇒ skip, try next candidate
@@ -2369,10 +2756,19 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const cwd = cwdFor(project);
     if (!cwd || !existsSync(cwd)) { console.error(`[${agent}] project '${project}' has no usable repo cwd (${cwd ?? "none"}); skipping`); return; }
     const fr = isLane(agent) ? laneReason(agent, laneJob!) : (reason ?? fireReasonFor(opts, agent, project, gateActive && GATED_AGENTS.has(agent)));
+    announce?.(); // every gate passed and a project was picked — the fire it announces starts here
     await runAgent(opts, cfg, agent, project, cwd, undefined, fr, laneJob);
     // LOOP-459: a dry-run renders a preview and must not write any gate state that a later
     // real run would read as a phantom fire — the spawn itself is already dry-run-guarded at :1080.
     // A pm/qa lane records under its lane:project slot (pm-review/qa-hunt read it; the mechanical lanes never do).
+    // Record what pm-groom just looked at, UNCONDITIONALLY — its capacity gate is not the opt-in
+    // change-gate and must work without `--change-gate`. Written after the fire, so the value is the
+    // Backlog as the fire LEFT it: anything the fire groomed moves the fingerprint and the next tick
+    // fires again to continue, while a fire that changed nothing records the state that skips it.
+    if (agent === "pm-groom" && !opts.dryRun && fireDb) {
+      const pid = findProject(fireDb, project);
+      if (pid) groomSeen.set(groomKey(project), backlogFingerprint(fireDb, pid));
+    }
     const gateRec = isLane(agent) ? gateActive : (gateActive && GATED_AGENTS.has(agent));
     if (gateRec && !opts.dryRun) {
       const key = changeKey(opts, cfg, project);
@@ -2387,6 +2783,8 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, Date.now());
     for (const a of opts.agents) {
       if (budgetReason !== null) { console.log(`[${a}] launch refused: ${budgetReason}`); continue; } // refuse, loudly (AC3)
+      const parked = laneScheduleBlock(ws, a); // --once bypasses tick(), so the team-scope park is applied here too
+      if (parked) { console.log(`[${a}] skipped: ${parked.reason}`); continue; }
       await fireAgentOnce(a, ONCE_REASON);
     }
     process.exit(0);
@@ -2433,12 +2831,11 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       const fresh = tryResolveWorkspace(ws.root);
       if (fresh) {
         ws = fresh; const c = rotationCandidates(ws); candidates.length = 0; candidates.push(...(opts.project ? c.filter((x) => x.key === opts.project) : c)); schedState = pruneCursor(schedState, candidates.map((x) => x.key));
-        // Providers/permission follow the reload (the teamComms fire-time-read pattern): an operator adding
-        // a registry entry + key mid-run must not need a scheduler restart. (The cfg/launch-profile projection
-        // staying stale across reloads is a pre-existing class — see the 2026-07 review notes.)
-        opts.providers = ws.file.team.providers ?? {};
-        opts.opencodePermission = ws.file.team.opencodePermission;
-        console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}`);
+        applyWorkspaceConfig(ws); // the SAME derivation boot ran — see its comment for what an edit reaches
+        // The line names what the reload picked up, not just that one happened. An operator who edits a
+        // lane's model has no other way to tell a reload that refreshed the launch profiles from one
+        // that did not, which is exactly the state this used to be in.
+        console.log(`dev-loop run: reloaded dev-loop.json — projects=${candidates.map((x) => x.key).join(", ")}; launch profiles refreshed; per-fire ceiling $${usdLabel(perFireCeilingUsd as number)}`);
       }
     } catch (e) { console.error(`dev-loop run: dev-loop.json reload failed (${(e as Error).message}); keeping the last-good config`); }
   };
@@ -2456,15 +2853,15 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
   const lastFireAt = lastFirePerAgent(fireLedger);
   const slots: Slot[] = opts.agents.map((agent, i) => {
     const d = seedSlotNextAt(agent, i, lastFireAt, opts.intervals[agent] ?? 0, bootNow, opts.staggerMs);
-    console.log(d.log);
+    if (!d.fireOnBoot) console.log(d.log); // a DEFERRAL announces no fire — print it now
     // LOOP-459: a dry-run preview must print the resolved agent set immediately without waiting for
     // the scheduler's cadence. Reset all slots to fire on the first tick so runAgent prints its dry-run output.
     const nextAt = opts.dryRun ? bootNow - 1 : d.nextAt;
-    return { agent, nextAt, running: false };
+    return { agent, nextAt, running: false, bootLog: d.fireOnBoot ? d.log : null };
   });
   let stopping = false;
   let fired = 0;
-  const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (activeChildren.size === 0) process.exit(0); };
+  const drain = () => { if (stopping) return; stopping = true; clearInterval(timer); if (slots.every((sl) => !sl.running)) process.exit(0); }; // settled, not merely exited
   // Graceful stop: forward SIGINT to the DIRECT child only (not the process group) — see the LOOP-23
   // decision at the other scheduler entrypoint above for why the graceful path stays non-forceful.
   // LOOP-155 latch (WS-C review 4): the legacy scheduler set `schedulerInterrupted` here and this one never
@@ -2509,8 +2906,33 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
     // through the (hot-reloaded) ws so an operator raising the ceiling — or the costly rows aging out of the
     // 24h window — resumes launches on the next tick (AC6).
     const budgetReason = budgetGateReason(ws.file.team.budget?.dailyUsd, fireLedgerPath, now);
+    // The operator's stop, re-read every tick (pauseGateReason). Checked BEFORE the budget gate, and
+    // it is what lets `pause --drain` finish at all: drain polls for an empty in-flight set, which
+    // only empties once this stops refilling it.
+    const pauseReason = pauseGateReason(opts.hubDb || null, now);
     for (const slot of slots) {
       if (stopping || slot.running || slot.nextAt > now) continue;
+      // The slot is due, so its boot announcement is now resolved either way: fireAgentOnce prints it
+      // immediately before the spawn, or nothing prints it and the gate's own skip line stands instead.
+      const bootAnnounce = slot.bootLog;
+      slot.bootLog = null;
+      // Team-scope park (agents.<h>.enabled:false / manual:true). Read through `ws`, which the hot
+      // reload replaces, so parking a lane mid-run takes effect on its next due tick without a restart.
+      const parked = laneScheduleBlock(ws, slot.agent);
+      if (parked) {
+        console.log(`[${slot.agent}] skipped: ${parked.reason}`);
+        slot.nextAt = now + opts.intervals[slot.agent]; // its own cadence — un-parking is a config edit, not a probe
+        continue;
+      }
+      if (pauseReason !== null) {
+        console.log(`[${slot.agent}] launch refused: ${pauseReason}`);
+        // The slot's OWN cadence, never the breaker's probe cadence the budget arm below backs off to.
+        // A budget ceiling clears on its own schedule, so probing slowly is right there; a pause is
+        // cleared by an operator typing `resume`, and an hour-long probe backoff would leave the loop
+        // silent long after they did — the resume would look as broken as the pause just did.
+        slot.nextAt = now + opts.intervals[slot.agent];
+        continue;
+      }
       if (budgetReason !== null) {                               // over dailyUsd ⇒ refuse the launch, loudly (INV-3/AC3)
         console.log(`[${slot.agent}] launch refused: ${budgetReason}`);
         slot.nextAt = now + Math.max(opts.intervals[slot.agent], breaker.probeMs); // back off to probe cadence (INV-2)
@@ -2518,12 +2940,12 @@ async function teamMain(opts: Options, ws: Workspace): Promise<void> {
       }
       slot.running = true;
       fired++;
-      fireAgentOnce(slot.agent)
+      fireAgentOnce(slot.agent, undefined, bootAnnounce ? () => console.log(bootAnnounce) : undefined)
         .catch((e) => { console.error(`[${slot.agent}] ${e instanceof Error ? e.message : String(e)}`); })
         .finally(() => {
           slot.running = false;
           slot.nextAt = Date.now() + breaker.intervalFor(laneActor(slot.agent), opts.intervals[slot.agent]); // P0-1a: open ⇒ probe cadence
-          if (stopping && activeChildren.size === 0) process.exit(0);
+          if (stopping && slots.every((sl) => !sl.running)) process.exit(0); // settled, not merely exited
         });
       if (opts.maxFires && fired >= opts.maxFires) { console.log(`dev-loop run: reached --max-fires ${opts.maxFires}; draining then exiting`); drain(); break; }
     }
@@ -2541,17 +2963,12 @@ function pruneCursor(state: SchedulerState, keys: string[]): SchedulerState {
 // The team run lock (O_EXCL + liveness-checked stale takeover) — mirrors the fixed-project lock in main().
 function acquireRunLock(lockPath: string, teamKey: string): void {
   mkdirSync(dirname(lockPath), { recursive: true });
-  const take = () => writeFileSync(lockPath, JSON.stringify({ pid: process.pid, team: teamKey, startedAt: new Date().toISOString() }), { flag: "wx" });
-  try { take(); } catch {
-    let holder: { pid?: number } = {};
-    try { holder = JSON.parse(readFileSync(lockPath, "utf8")); } catch { /* unreadable = stale */ }
-    const alive = (() => { try { process.kill(holder.pid ?? -1, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; } })();
-    if (alive) die(`another \`dev-loop run\` for team '${teamKey}' is already running (pid ${holder.pid}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
-    console.log(`dev-loop run: taking over stale team run lock (pid ${holder.pid ?? "?"} is gone)`);
-    try { unlinkSync(lockPath); } catch { /* raced */ }
-    take();
-  }
-  process.on("exit", () => { try { unlinkSync(lockPath); } catch { /* already gone */ } });
+  const { refusedBy, refusedReason, tookOver } = claimRunLock(lockPath, () => JSON.stringify({ pid: process.pid, team: teamKey, startedAt: new Date().toISOString() }));
+  if (refusedBy) die(refusedReason === "concurrent-takeover"
+    ? `another \`dev-loop run\` for team '${teamKey}' is taking over the stale lock right now (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); let it finish, then retry`
+    : `another \`dev-loop run\` for team '${teamKey}' is already running (pid ${refusedBy.pid ?? "?"}, lock ${lockPath}); two schedulers double-fire every agent — stop it first`);
+  if (tookOver) console.log(`dev-loop run: taking over stale team run lock (pid ${tookOver.pid ?? "?"} is gone)`);
+  process.on("exit", () => releaseRunLockIfOurs(lockPath));
 }
 
 // main() runs unconditionally — this file is only ever the entry point (nothing imports it; recordFire

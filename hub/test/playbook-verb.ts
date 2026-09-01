@@ -7,13 +7,14 @@
 // (2) an unknown job / unknown agent is refused cleanly (exit 1); (3) missing args → usage (exit 2);
 // (4) process.exitCode (not process.exit) so a piped slice never truncates (LOOP-346); (5) --json shape.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assembleJobCorpus } from "../src/boot-prefix.ts";
 import { pluginRoot } from "../src/context-bill.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = pluginRoot(); // the plugin payload root: skills/ + references/ live here
@@ -78,7 +79,7 @@ for (const job of ["verify", "unblock", "groom", "review"]) {
     "the verb prints the agent's CLI cheat-sheet block even with no workspace resolved");
 
   // Build a fixture workspace with §14 lessons, point the verb at it via DEVLOOP_WORKSPACE + DEVLOOP_PROJECT.
-  const wsRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl-pv-lessons-")));
+  const wsRoot = realpathSync(tmpRoot("dl-pv-lessons-"));
   try {
     mkdirSync(join(wsRoot, "repo"), { recursive: true });
     mkdirSync(join(wsRoot, ".dev-loop", "lessons"), { recursive: true });
@@ -106,6 +107,20 @@ for (const job of ["verify", "unblock", "groom", "review"]) {
     ok(!!pushed && pushed.lessonsBytes > 0, `the pushed corpus's lessonsBytes is the real injected count (>0) (got ${pushed?.lessonsBytes})`);
   } finally { rmSync(wsRoot, { recursive: true, force: true }); }
 }
+
+// ── the span carries its own finish line ─────────────────────────────────────────────────────────────
+// A job span's Exit is what the agent checks to decide the fire is done, and job-scoped delivery
+// delivers ONLY the constitution, the span, and the playbooks the span pulls — every SKILL's `## REPORT`
+// section sits outside its span and is dropped. sweep's Exit asked only that the digest be "emitted", so
+// a fire that re-labelled tickets and printed a digest was complete by its own terms and left nothing
+// durable. Measured in jinko-browser-use: 45 board writes across 15 fires, 13 of them exit 0, and not one
+// report anywhere under reports/. The constitution states the §22 obligation generically; the span is
+// where a fire reads its finish line, so that is where it has to appear.
+const sweepCorpus = run(["sweep", "sweep", "--root", root]).out;
+ok(/§22 daily report/.test(sweepCorpus),
+  `sweep's job corpus states the §22 report at its Exit, not only in the constitution${/§22 daily report/.test(sweepCorpus) ? "" : " [regressed: the span's finish line is satisfiable without a durable trail]"}`);
+ok(/terse no-op \(no material work, so no report\)/.test(sweepCorpus),
+  "…and it keeps the material-work qualifier, so a clean-board no-op is still allowed to write nothing");
 
 console.log(fails === 0 ? "\nPLAYBOOK_VERB_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

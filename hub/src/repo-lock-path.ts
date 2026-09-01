@@ -77,10 +77,16 @@ export function repoRootsOf(dir: string): string[] {
 
 // The workspace ROOT that owns the repo `dir` belongs to, or null.
 //
-// `findWorkspaceRoot(dir)` alone is NOT this question, and the difference is not academic: §7 puts a
-// dev-tier worktree at `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project>/wt/<ticket>`, OUTSIDE the workspace
-// tree, so the upward walk from a worktree finds no `dev-loop.json` and answers "in no workspace" for
-// a repo that is plainly registered. Walking the repo's roots reaches the base clone, which is inside.
+// `findWorkspaceRoot(dir)` alone is NOT this question, and the difference is not academic: a linked
+// worktree placed OUTSIDE the workspace tree — `git worktree add /tmp/x` in a registered repo, or one an
+// agent put beside the checkout — has no `dev-loop.json` above it, so the upward walk answers "in no
+// workspace" for a repo that is plainly registered. `repoRootsOf` adds the git root and, through the
+// common dir, the BASE CLONE (:66-76), which is the checkout the registry names and is inside.
+//
+// The example that used to stand here — `${DEVLOOP_DATA_DIR:-~/.dev-loop}/<project>/wt/<ticket>` — has
+// not been produced since the 1.0 workspace model: `wsWorktree` (workspace.ts) puts a dev-tier worktree
+// at `<workspace>/.dev-loop/wt/<ticket>/<ref>`, INSIDE the tree, where the upward walk does resolve it.
+// The indirection is still load-bearing, for every worktree that is not under that path.
 //
 // Deliberately the bare root walk rather than `resolveWorkspace`: callers that document themselves as
 // read-only (push-guard) need the config WITHOUT hydrating secrets into `process.env` or upserting

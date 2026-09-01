@@ -1,20 +1,22 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, cpSync, realpathSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { openDb, logEvent } from "../src/db.ts";
+import { formatDuration } from "../src/format-duration.ts";
 // NB: run-agents.ts must NOT be imported here — its main() runs unconditionally (LOOP-58), so an import
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
 import { breaker, formatBreakerMsg, PROVIDER_SCOPED_CLASSES, type Agent } from "../src/breaker.ts";
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter } from "../src/fire-usage.ts";
 import { releaseClaimedTickets } from "../src/ticket-release.ts";
-import { insertTicket } from "../src/ticketwrite.ts";
+import { insertTicket, insertComment } from "../src/ticketwrite.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 // Job-scoped prompts: the zero-dep leaf predicates the pm/qa lane gates + the senior-dev Mode pick consume.
 import { qaMaintenanceSlice, seniorDevModePick } from "../src/servable.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(hubRoot, "..");
@@ -58,7 +60,7 @@ const run = (args: string[]) => {
 // assert the entry still prints its usage — this FAILS against the guarded form (0-byte stdout) and PASSES
 // with the unconditional main(). realpathSync isolates the defect to the space (not a /tmp symlink).
 {
-  const spaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl run agents ")));       // last segment holds spaces
+  const spaceRoot = realpathSync(tmpRoot("dl run agents "));       // last segment holds spaces
   cpSync(join(hubRoot, "src"), join(spaceRoot, "src"), { recursive: true });
   writeFileSync(join(spaceRoot, "package.json"), JSON.stringify({ type: "module" }));  // ESM for the copied .ts
   const spaced = spawnSync("node", [join(spaceRoot, "src", "run-agents.ts"), "--help"], { encoding: "utf8" });
@@ -68,7 +70,7 @@ const run = (args: string[]) => {
   rmSync(spaceRoot, { recursive: true, force: true });
 }
 
-const tmp = mkdtempSync(join(tmpdir(), "dl-run-agents-"));
+const tmp = tmpRoot("dl-run-agents-");
 try {
   const data = join(tmp, "data");
   const repo = join(tmp, "repo");
@@ -213,7 +215,7 @@ try {
     ok(/launch=pm-maintenance:claude:sonnet\//.test(m1.out) && /launch=pm-groom:claude:opus\//.test(gr.out),
       "per-lane model tier: pm-maintenance=sonnet (mechanical/cheaper), pm-groom=opus (judgment/stronger)");
     // the why-launched tail names the job (dump the prompt and read the scheduler context)
-    const dumpDir = mkdtempSync(join(tmpdir(), "dl-lane-"));
+    const dumpDir = tmpRoot("dl-lane-");
     run(["--cli", "claude", "--once", "--dry-run", "--agents", "pm-maintenance", "--dump-prompt", dumpDir, ...common]);
     const tail = readFileSync(join(dumpDir, "pm-maintenance.prompt.txt"), "utf8");
     ok(/\n- agent: pm\b/.test(tail) && /\n- job-lane job: verify\b/.test(tail),
@@ -240,7 +242,7 @@ try {
       "a qa lane fires as DEVLOOP_ACTOR=qa (same identity, not a new actor)");
     ok(/launch=qa-maintenance:claude:sonnet\//.test(qm.out) && /launch=qa-hunt:claude:opus\//.test(qh.out),
       "per-lane model tier: qa-maintenance=sonnet (mechanical/cheaper), qa-hunt=opus (judgment/stronger)");
-    const dumpDir = mkdtempSync(join(tmpdir(), "dl-qa-lane-"));
+    const dumpDir = tmpRoot("dl-qa-lane-");
     run(["--cli", "claude", "--once", "--dry-run", "--agents", "qa-maintenance", "--dump-prompt", dumpDir, ...common]);
     const mTail = readFileSync(join(dumpDir, "qa-maintenance.prompt.txt"), "utf8");
     ok(/\n- agent: qa\b/.test(mTail) && /\n- job-lane job: verify\b/.test(mTail),
@@ -257,7 +259,7 @@ try {
   // stewards resolve a fixed job (sweep→sweep, reflect→retro, ops→poll, architect→audit,
   // communication→article); dev→ship, junior-dev→implement; senior-dev→design (fail-open with no board).
   {
-    const dumpDir = mkdtempSync(join(tmpdir(), "dl-steward-"));
+    const dumpDir = tmpRoot("dl-steward-");
     const cases: Array<[string, string]> = [
       ["sweep", "sweep"], ["reflect", "retro"], ["ops", "poll"], ["architect", "audit"],
       ["communication", "article"], ["dev", "ship"], ["junior-dev", "implement"], ["senior-dev", "design"],
@@ -294,7 +296,12 @@ try {
     ensureSeed(db, "qaru", "QA Routing Unblock", "QARU");
     const pu = findProject(db, "qaru")!;
     insertTicket(db, pu, "dev", { title: "needs-qa info", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "needs-qa"], duplicateOf: null, relatedTo: [] }, { title: "needs-qa info", type: "Feature" });
-    insertTicket(db, pu, "dev", { title: "blocked info-needed", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "blocked", "info-needed"], duplicateOf: null, relatedTo: [] }, { title: "blocked info-needed", type: "Feature" });
+    const bi = insertTicket(db, pu, "dev", { title: "blocked info-needed", description: "", type: "Feature", state: "Todo", assignee: "dev", priority: 2, labels: ["dev-loop", "blocked"], duplicateOf: null, relatedTo: [] }, { title: "blocked info-needed", type: "Feature" });
+    // `info-needed` is DERIVED, so it arrives with the Bail-shape comment, not in the create's label
+    // set — the canonical block-then-comment order from blocked-protocol.md. Passing it to insertTicket
+    // used to write it straight through and it then vanished on the row's first update; the row this
+    // gate reads is the same either way, so the assertion below is unchanged.
+    insertComment(db, pu, "dev", bi, "Bail-shape: info-needed\nWhich currency does the fixture assume?");
     const su = qaMaintenanceSlice(db, pu);
     ok(su.verify === 0 && su.unblock === 2,
       `qaLaneGate input: needs-qa AND blocked+info-needed rows route to unblock (got verify ${su.verify}, unblock ${su.unblock})`);
@@ -315,14 +322,109 @@ try {
       "seniorDevModePick: `Mode: design` marker ⇒ design");
     ok(seniorDevModePick(db, mk("snd2", "Mode: direct-code\n\nship the escalation", [])) === "directcode",
       "seniorDevModePick: `Mode: direct-code` marker ⇒ directcode");
-    ok(seniorDevModePick(db, mk("snd3", "no marker here", [], ["SND-PRED"])) === "directcode",
-      "seniorDevModePick: no marker + a follow-up (relatedTo non-empty) ⇒ directcode");
+    // Where the templates actually put it: under `## Context`, never on the first line. The marker
+    // reader anchored at the head until 2026-08-29, so this placement matched nothing.
+    ok(seniorDevModePick(db, mk("snd1b", "## Context\nMode: design-and-delegate\n\nauthor the module", [], ["SND1B-X"])) === "design",
+      "seniorDevModePick: a `Mode: design-and-delegate` marker BELOW `## Context` still decides");
+    // The no-marker guess reads §21a's actual escalation signal — `relatedTo` a CANCELED
+    // `review failed:` predecessor — not "relatedTo is non-empty", which this arm used to assert.
+    // That older reading is what launched a design parent with the direct-code corpus every 5 minutes
+    // on a live board: `relatedTo` also carries §4 splits and §15 coverage siblings, so a live
+    // relation looked like an escalation. A predecessor that does not resolve is not a confirmed
+    // escalation either, and `design` is the safe direction — a wrong `directcode` is the idling.
+    {
+      const pid = mk("snd3", "no marker here", [], ["SND3-1"]);
+      ok(seniorDevModePick(db, pid) === "design",
+        "seniorDevModePick: no marker + an UNRESOLVABLE predecessor ⇒ design (not a confirmed escalation)");
+    }
+    {
+      // The predecessor is inserted FIRST so it takes SND3B-1; the follow-up then points at a real
+      // Canceled row rather than at itself (ids are assigned in insertion order).
+      ensureSeed(db, "snd3b", "snd3b", "SND3B");
+      const pid = findProject(db, "snd3b")!;
+      insertTicket(db, pid, "senior-dev", { title: "predecessor", description: "review failed: superseded", type: "Feature", state: "Canceled", assignee: "junior-dev", priority: 2, labels: ["dev-loop"], duplicateOf: null, relatedTo: [] }, { title: "predecessor", type: "Feature" });
+      insertTicket(db, pid, "senior-dev", { title: "t", description: "no marker here", type: "Feature", state: "Todo", assignee: "senior-dev", priority: 2, labels: ["dev-loop", "senior-dev"], duplicateOf: null, relatedTo: ["SND3B-1"] }, { title: "t", type: "Feature" });
+      ok(seniorDevModePick(db, pid) === "directcode",
+        "seniorDevModePick: no marker + a CANCELED predecessor ⇒ directcode (the §21a escalation shape)");
+    }
     ok(seniorDevModePick(db, mk("snd4", "no marker here", [])) === "design",
       "seniorDevModePick: no marker + not a follow-up ⇒ design (the normal complex path)");
     ensureSeed(db, "snd5", "snd5", "SND5");
     ok(seniorDevModePick(db, findProject(db, "snd5")!) === "design",
       "seniorDevModePick: nothing to pick ⇒ design (fail-open to the primary job)");
     db.close();
+  }
+
+  // ── D3: an ineligible lane skips OUT LOUD, and never announces a boot fire it does not make ──────
+  // Observed on a live workspace: qa-maintenance printed "no recorded fire — firing on boot" and then
+  // produced no start line, no log file and no skip line. The behaviour was correct (no In Review rows
+  // to verify) but unobservable — the lane branch's `continue` printed nothing, so a correct skip and a
+  // crashed slot look identical. The dev-tier branch immediately below it has printed
+  // `[agent] skipped: <reason>` since LOOP-144 for exactly this reason.
+  //
+  // Exercised through the REAL scheduler tick, not the gate predicate: the defect is the missing print
+  // at the skip point and the announcement's placement, and neither is visible from the predicate.
+  {
+    const laneData = join(tmp, "lane-skip-data");
+    const laneRepo = join(tmp, "lane-skip-repo");
+    mkdirSync(laneData, { recursive: true });
+    mkdirSync(laneRepo, { recursive: true });
+    const laneHubDb = join(laneData, "hub.db");
+    writeFileSync(join(laneData, "projects.json"), JSON.stringify({
+      defaultProject: "laneskip",
+      projects: { laneskip: { repoPath: laneRepo, backend: "service" } },
+    }));
+    const laneDb = openDb(laneHubDb);
+    ensureSeed(laneDb, "laneskip", "Lane Skip", "LSK");   // seeded, and EMPTY — the gate must decline
+    laneDb.close();
+
+    const laneBin = join(tmp, "lane-fake-claude.sh");
+    writeFileSync(laneBin, "#!/bin/sh\necho 'fire ok'\nexit 0\n");
+    chmodSync(laneBin, 0o755);
+
+    // The persistent scheduler (no --once, no --dry-run) — the path that carries both the boot
+    // announcement and the lane gate. Killed by the spawn timeout when nothing ever fires.
+    const scheduler = (extra: string[], timeoutMs: number) => {
+      const { DEVLOOP_WORKSPACE: _w, DEVLOOP_PROJECTS_JSON: _p, DEVLOOP_TEAM: _t, ...e } = process.env;
+      for (const k of ["DEVLOOP_PROJECT", "DEVLOOP_ACTOR", "DEVLOOP_HUB_DB", "DEVLOOP_DEV_SPLIT",
+        "DEVLOOP_DATA_DIR", "DEVLOOP_RUN_DIR", "DEVLOOP_PLUGIN_ROOT"]) delete (e as Record<string, string | undefined>)[k];
+      const r = spawnSync("node", ["src/run-agents.ts", "--cli", "claude", "--agents", "qa-maintenance",
+        "--root", repoRoot, "--data", laneData, "--hub-db", laneHubDb, "--project", "laneskip",
+        "--stagger", "0", ...extra], {
+        cwd: hubRoot, encoding: "utf8", timeout: timeoutMs,
+        env: { ...e, DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_CLAUDE_BIN: laneBin },
+      });
+      return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    };
+
+    const idle = scheduler([], 6000);
+    const idleLines = idle.split("\n").filter((l) => /qa-maintenance/.test(l));
+    const skipLine = idleLines.find((l) => /\[qa-maintenance\] skipped: /.test(l)) ?? "";
+    ok(skipLine !== "",
+      `D3: an ineligible lane prints '[qa-maintenance] skipped: <reason>' — the dev-tier shape (lines seen: ${JSON.stringify(idleLines)})`);
+    ok(/qa-maintenance/.test(skipLine.replace("[qa-maintenance] ", "")),
+      `D3: the skip reason names the LANE that declined (got ${JSON.stringify(skipLine)})`);
+    ok(/\b0 In Review\b/.test(skipLine) && /\b0 needs-qa\b/.test(skipLine),
+      `D3: the skip reason names the board counts that made the lane ineligible (got ${JSON.stringify(skipLine)})`);
+    ok(!/firing on boot/.test(idle),
+      `D3: the boot announcement is NOT printed when the gate then declines — an announcement with no start line reads as a crash (lines seen: ${JSON.stringify(idleLines)})`);
+    ok(!/qa-maintenance: start \(/.test(idle),
+      "D3 control: the declining lane really did not launch, so the skip line is the only thing that could have reported it");
+
+    // The CONTROL. Give the lane an eligible row and the SAME scheduler must announce the boot fire and
+    // start it — so the assertion above cannot be satisfied by deleting the announcement outright.
+    const liveDb = openDb(laneHubDb);
+    insertTicket(liveDb, findProject(liveDb, "laneskip")!, "qa",
+      { title: "in-review qa row", description: "", type: "Bug", state: "In Review", assignee: "qa", priority: 2, labels: ["dev-loop", "qa"], duplicateOf: null, relatedTo: [] },
+      { title: "in-review qa row", type: "Bug" });
+    liveDb.close();
+    const live = scheduler(["--max-fires", "1"], 30000);
+    ok(/\[qa-maintenance\] boot: no recorded fire — firing on boot/.test(live),
+      `D3 control: an ELIGIBLE lane still announces the boot fire (lines seen: ${JSON.stringify(live.split("\n").filter((l) => /qa-maintenance/.test(l)))})`);
+    ok(/qa-maintenance: start \(claude\)/.test(live),
+      "D3 control: …and the announcement is followed by the start line it announced");
+    ok(!/\[qa-maintenance\] skipped: /.test(live),
+      "D3 control: an eligible lane prints no skip line");
   }
 
   // ── LOOP-237 AC3: the PULL directive is per-agent and DEFAULT OFF ────────────────────────────
@@ -673,7 +775,7 @@ try {
   // use only team-scope config (AC6 pin: a per-project steward timeout would silently favour whichever
   // project happens to be profileProject on that fire).
   {
-    const wsDir = mkdtempSync(join(tmpdir(), "dl-ws-loop103-"));
+    const wsDir = tmpRoot("dl-ws-loop103-");
     const repoA = join(wsDir, "repo-a"); mkdirSync(repoA, { recursive: true });
     const repoB = join(wsDir, "repo-b"); mkdirSync(repoB, { recursive: true });
     spawnSync("git", ["init", "-b", "main"], { cwd: repoA, encoding: "utf8" });
@@ -732,7 +834,7 @@ try {
   // the JSON-config path; this pins the matching guard on the CLI-flag path). Over-ceiling values call
   // die() before workspace resolution — run() suffices; valid durations are covered by LOOP-9/LOOP-103.
   {
-    const wsDir260 = mkdtempSync(join(tmpdir(), "dl-ws-loop260-"));
+    const wsDir260 = tmpRoot("dl-ws-loop260-");
     const repo260 = join(wsDir260, "repo"); mkdirSync(repo260, { recursive: true });
     spawnSync("git", ["init", "-b", "main"], { cwd: repo260, encoding: "utf8" });
     writeFileSync(join(wsDir260, "dev-loop.json"), JSON.stringify({
@@ -1108,6 +1210,18 @@ try {
   ok(resolveAdapter("opencode") === opencodeAdapter, "LOOP-85: resolveAdapter('opencode') → opencodeAdapter (was null — now the structured lane, still keeps the tail-regex fallback)");
   ok(resolveAdapter("mystery") === null, "resolveAdapter(unknown lane) → null (text-mode, usage:null)");
 }
+
+// ── formatDuration: the derived-duration fall-through ─────────────────────────────────────────
+// Only reachable with a non-integer millisecond count. No configured cadence produces one; every
+// DERIVED duration can, and perFireDeadline does — the budget watchdog printed
+// `× 537322.2253925443ms` into the live run.log.
+ok(formatDuration(537_322.2253925443) === "9.0m",
+  `formatDuration: a derived deadline reads as a duration, not as 13 fractional digits (got ${formatDuration(537_322.2253925443)})`);
+ok(formatDuration(1_500.7) === "1.5s", `formatDuration: sub-minute non-integers read in seconds (got ${formatDuration(1_500.7)})`);
+ok(formatDuration(12.6) === "13ms", `formatDuration: sub-second non-integers round to whole ms (got ${formatDuration(12.6)})`);
+// The exact-unit branches are the common path and must be untouched by the above.
+ok(formatDuration(300_000) === "5m" && formatDuration(3_600_000) === "1h" && formatDuration(86_400_000) === "1d" && formatDuration(5_000) === "5s",
+  "formatDuration: clean divisors still render as exact whole units");
 
 console.log(fails === 0 ? "\nRUN_AGENTS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

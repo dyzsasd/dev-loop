@@ -8,8 +8,8 @@
 // The direction is the point: a caller that wants the full set asks for it. A default that is the
 // unsafe answer is what a new consumer gets for free, and that is how this ticket happened.
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { deliveryProjects, loadWorkspace } from "../src/team-config.ts";
 import { stewardProjects } from "../src/rotation.ts";
@@ -17,8 +17,9 @@ import { projectIndexPage } from "../src/views/projects.ts";
 import { openDb } from "../src/db.ts";
 import { ensureSeed } from "../src/seed.ts";
 import { NOT_SCRATCH_SQL } from "../src/sql-predicates.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-seam-")));
+const tmp = realpathSync(tmpRoot("dl-seam-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

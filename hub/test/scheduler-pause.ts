@@ -1,14 +1,15 @@
 // Regression test for LOOP-401 Child 1: scheduler-pause.ts module
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { openDb } from "../src/db.ts";
 import { readPause, writePause, clearPause, formatPause } from "../src/scheduler-pause.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 function createTestDb(): ReturnType<typeof openDb> {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "pause-test-")), "test.db");
+  const dbPath = join(tmpRoot("pause-test-"), "test.db");
   const db = openDb(dbPath);
   return db;
 }
@@ -174,7 +175,7 @@ test("scheduler-pause: C3 — --drain blocks on the in-flight fire, times out wi
   const { resolveWorkspace, wsHubDb, wsLockPath, wsStateRoot } = await import("../src/workspace.ts");
   const hubRoot = j(dirname(fileURLToPath(import.meta.url)), "..");
   const CLI = j(hubRoot, "src", "cli.ts");
-  const tmp = mkdtempSync(join(tmpdir(), "pause-drain-"));
+  const tmp = tmpRoot("pause-drain-");
   const HOME = j(tmp, "home");
   const cli = (args: string[], cwd: string, extra: Record<string, string> = {}) => {
     const r = spawnSync(process.execPath, [CLI, ...args], { cwd, env: { ...scrubFireEnv(), DEVLOOP_HOME: HOME, DEVLOOP_DRAIN_POLL_MS: "100", ...extra } as NodeJS.ProcessEnv, encoding: "utf8" });

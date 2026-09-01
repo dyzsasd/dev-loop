@@ -1,14 +1,15 @@
 // lessons.ts — library paths, per-fire load composition, and the W03 budget check.
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lessonsPaths, lessonsForFire, checkLessonsBudget, INDEX_MAX_LINES, SHARD_MAX_LINES } from "../src/lessons.ts";
 import type { Workspace, TeamFile } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-lessons-")));
+const tmp = realpathSync(tmpRoot("dl-lessons-"));
 
 function mkWs(projects: string[]): Workspace {
   const file: TeamFile = { schemaVersion: 2, team: { key: "t", backend: "linear", linearTeam: "L" }, repos: {}, projects: Object.fromEntries(projects.map((p) => [p, { repos: [] }])) };

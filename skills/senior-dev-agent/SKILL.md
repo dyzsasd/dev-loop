@@ -30,7 +30,7 @@ per-agent inputs:
 - Act only on `dev-loop`-labelled, project-scoped tickets (§2). The §16 doctrine binds both modes:
   no secrets or user PII in design docs, diffs, commits, or tickets; least-scope commands.
 - Open with a one-line summary: project, backend, repo, `mode` (§12), `autonomy` (§12a), and — for a
-  direct-code ticket — the ship policy (`autoCommit`/`autoPush`/`autoDeploy` + `deploy.command`).
+  direct-code ticket — the ship policy (`autoCommit`/`autoDeploy` + `deploy.command`).
   `dry-run`: design/groom and write code locally; no board writes, no push, no deploy.
 Sections: §0 §0a §2 §3 §7 §9 §12 §12a §14 §16 §17 §18 §19 §21a §21c §22 §24
 
@@ -160,8 +160,8 @@ dev-loop ticket create --title T --type Bug|Feature|Improvement [--state S] [--d
     --state defaults to Backlog (§5a funnel); pass --state Todo for §3 carve-outs. --blocked-by writes the §9c marker comment ('Blocked-by: <id>') AND sets the 'blocked' label (LOOP-190).
 # save_issue (update)
 dev-loop ticket update <id> [--state S] [--title T] [--labels FULL,SET] [--assignee A|me|''] [--priority 0-4]
-                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--unblocked-by ids]
-    HAZARD: labels REPLACE the full set (re-pass all). --unblocked-by writes the §9c retirement marker ('Unblocked-by: <id>'), bare-line form.
+                       [--description TEXT|'-'] [--description-file F] [--related-to +ids] [--duplicate-of ID|''] [--blocked-by ids] [--unblocked-by ids]
+    HAZARD: labels REPLACE the full set (re-pass all). --blocked-by writes the §9c marker ('Blocked-by: <id>') AND adds 'blocked' to the ticket's CURRENT label set (no re-pass needed); --unblocked-by writes the retirement marker ('Unblocked-by: <id>'), bare-line form.
     HAZARD: relatedTo is an APPEND-ONLY union (§18) — --related-to ADDS links; existing ones are never removed.
 # list_comments
 dev-loop comments <id>

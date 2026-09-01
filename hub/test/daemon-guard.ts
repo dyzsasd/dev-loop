@@ -74,5 +74,31 @@ ok(violations.length === 0,
     "LOOP-146: hub-lifecycle.ts (exempt from the spawn predicate) registers its daemons with the harness sweep");
 }
 
+// ── Every lifecycle `up` registers what it may have started ──────────────────────────────────────
+// The spawn predicate above covers DIRECT daemon spawns. It cannot see the other way a suite starts
+// one: asking the lifecycle CLI through daemon-harness's runDaemonCli/launchDaemonCli, which forks a
+// DETACHED daemon the CLI process then outlives. Those callers must registerDaemonPid whatever the
+// runfile names, or the ONE exit sweep does not cover it.
+//
+// Measured: test/daemon.ts's port-band block killed its daemon only when `up` exited 0 AND the
+// runfile parsed, so an `up` that spawned and then failed its own health probe left a live process —
+// found by run-all.ts's leaked-daemon gate as a daemon with cwd=hub/ outliving a full `npm test`,
+// after nine targeted re-runs failed to reproduce it in isolation. A conditional cleanup is not a
+// sweep; the registry is.
+//
+// "Expected to refuse" is not an exemption: a suite asserting that an `up` REFUSES is exactly the
+// one where a regression starts a daemon nobody is watching for.
+{
+  const LIFECYCLE_UP = /\b(runDaemonCli|launchDaemonCli)\s*\(\s*["'`](daemon|server)["'`]\s*,\s*["'`](up|up-all|ensure)["'`]/;
+  const unregistered: string[] = [];
+  for (const file of readdirSync(testDir).filter((f) => f.endsWith(".ts") && !EXEMPT.has(f))) {
+    const src = readFileSync(join(testDir, file), "utf8");
+    if (!LIFECYCLE_UP.test(src)) continue;
+    if (!/registerDaemonPid\s*\(/.test(src)) unregistered.push(file);
+  }
+  ok(unregistered.length === 0,
+    `every suite that asks the lifecycle CLI to start a daemon also registers it for the exit sweep${unregistered.length ? ` — missing: ${unregistered.join(", ")}` : ""}`);
+}
+
 console.log(fails ? `${fails} CHECK(S) FAILED` : "daemon-guard: all checks passed");
 process.exit(fails ? 1 : 0);

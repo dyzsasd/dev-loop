@@ -2,13 +2,14 @@
 // `--help` was bound to the positional `key` (no flag guard), creating a project literally keyed `--help`
 // + its actors + labels. Drives the REAL `node src/seed.ts` against ISOLATED temp DBs (never ~/.dev-loop).
 import { spawnSync } from "node:child_process";
-import { rmSync, mkdirSync, existsSync, mkdtempSync, cpSync, realpathSync, writeFileSync } from "node:fs";
+import { rmSync, mkdirSync, existsSync, cpSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { openDb } from "../src/db.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const ROOT = "/tmp/hub-seed-test";
+import { tmpRoot } from "./tmp-root.ts";
 rmSync(ROOT, { recursive: true, force: true });
 mkdirSync(ROOT, { recursive: true });
 
@@ -81,7 +82,7 @@ ok(bare.status === 0 && projectCount(bare.db) === 1, "bare `seed` still seeds th
 // so the space is the ONLY variable — not a /tmp symlink) and assert a real seed still writes + prints.
 // FAILS against the guarded form (0 B stdout, 0 projects); PASSES with the realpath isMainEntry() form.
 {
-  const spaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "dl seed 63 ")));         // last segment holds spaces
+  const spaceRoot = realpathSync(tmpRoot("dl seed 63 "));         // last segment holds spaces
   cpSync("src", join(spaceRoot, "src"), { recursive: true });                        // cwd is hub/ (as for `src/seed.ts` above)
   writeFileSync(join(spaceRoot, "package.json"), JSON.stringify({ type: "module" })); // ESM for the copied .ts
   const db = join(ROOT, "spaced.db");

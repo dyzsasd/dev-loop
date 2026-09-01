@@ -410,9 +410,12 @@ const MODE_MARKER_RE = /^[ \t]*Mode:[ \t]*(\S+)/im;
 
 function declaresNonDesignMode(description: string): boolean {
   // Deferring to isDesignModeBody first is what makes the two provably unable to contradict each
-  // other. They read the marker differently on purpose — one anchors at the top of the body, the
-  // other takes any bare line — and a body both called "a design" and "not a design" would decide
-  // an authorization question by which check ran first.
+  // other, and both now read ANY bare line — the positional difference this comment used to call
+  // deliberate was the defect: the anchored reader matched no real ticket, so a design parent read as
+  // "not a design" to one caller and "declares nothing else" to the other. What still differs is the
+  // VOCABULARY: modeMarkerOf knows the two documented modes, while this asks the open question "is a
+  // mode declared that is not design?", so `Mode: something-new` is a non-design declaration here and
+  // an absent marker there.
   if (isDesignModeBody(description)) return false;
   const m = MODE_MARKER_RE.exec(description ?? "");
   return !!m && !/^design/i.test(m[1]);
@@ -563,8 +566,32 @@ export function parseDocPointer(raw: string): DocPointerResult {
 // reads a description for a slug any more except the CHILD side's `Design:` pointer, which is a
 // marker the child writes about itself. Restoring a body scan here re-opens LOOP-420.
 
+// §21a's mode marker, as ONE rule with ONE reader.
+//
+// It used to anchor at the top of the body (`trimStart().startsWith("Mode: design")`), which no ticket
+// written to this project's own templates can satisfy: every body in references/ticket-templates.md
+// opens with `## Context`, so the marker always sits on a later line. Measured on a live board of 86
+// tickets — 9 carried a marker and ZERO had it first, so the anchored reader matched nothing, ever.
+// The convention it implements never asked for the first line: two-tier-dev.md calls it "a `Mode:
+// design` / `Mode: direct-code` description LINE". The code was stricter than the spec, and the strict
+// reading was unsatisfiable.
+//
+// Matched as a WHOLE line so prose cannot trip it: "the Mode: design decision was made earlier" is a
+// sentence about a marker, not a marker. `design-and-delegate` is the spelling tickets actually use,
+// so it is part of the rule rather than something a caller has to know to strip.
+const MODE_LINE_RE = /^[ \t]*Mode:[ \t]*(design(?:-and-delegate)?|direct-code)[ \t]*$/im;
+
+export type ModeMarker = "design" | "directcode";
+
+/** The ticket's declared mode, or null when it declares none. The ONE reader of the marker. */
+export function modeMarkerOf(description: string): ModeMarker | null {
+  const m = MODE_LINE_RE.exec(description ?? "");
+  if (!m) return null;
+  return m[1].toLowerCase().startsWith("design") ? "design" : "directcode";
+}
+
 export function isDesignModeBody(description: string): boolean {
-  return (description ?? "").trimStart().startsWith("Mode: design");
+  return modeMarkerOf(description) === "design";
 }
 
 /** The shared predicate. `parentIds` comes from designParentIds() for the same board. */

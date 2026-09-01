@@ -3,14 +3,16 @@
 // A workspace is a directory holding a `dev-loop.json` (schema v2). Discovery precedence:
 //   1. DEVLOOP_WORKSPACE (absolute path — a bad/missing value is a HARD error, no fall-through)
 //   2. DEVLOOP_HUB_DB → derive workspace root (<ws>/.dev-loop/hub.db)
-//   3. DEVLOOP_TEAM (key) → ~/.dev-loop/workspaces.json index → path
+//   3. DEVLOOP_TEAM (key) → the workspace index (paths.ts workspacesIndexPath) → path
 //   4. cwd realpath walked upward to the first dir that has a valid dev-loop.json
-// All run/state paths live UNDER the workspace (I4: copy the folder = migrate the machine); the only thing
-// in ~/.dev-loop is a NON-authoritative convenience index that any in-workspace run rebuilds.
+// All run/state paths live UNDER the workspace (I4: copy the folder = migrate the machine); the one file
+// outside it is a NON-authoritative convenience index that any in-workspace run rebuilds, and it no
+// longer sits under ~/.dev-loop.
 import { realpathSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, isAbsolute } from "node:path";
 import { loadWorkspace, normalizedRel, type Workspace } from "./team-config.ts";
-import { devloopHome, hubDbPath } from "./paths.ts";
+import { devloopHome, hubDbPath, tryHubDbPath, workspacesIndexPath } from "./paths.ts";
 import { loadWorkspaceSecrets } from "./secrets.ts";
 
 export class WsNotFound extends Error {
@@ -91,6 +93,11 @@ const canon = (p: string): string | null => { try { return realpathSync(p); } ca
 // ─── The .dev-loop/ path API (impl §3.2, R1) ─────────────────────────────────
 export function wsStateRoot(ws: Workspace): string { return join(ws.root, ".dev-loop"); }
 export function wsProjectDir(ws: Workspace, key: string): string { return join(wsStateRoot(ws), key); }
+// The §22 reports tree for one project key (`_team` for the team scope). It is the path a fire
+// composes itself: DEVLOOP_DATA_DIR is set to wsStateRoot(ws) at launch (run-agents.ts), and the
+// agent appends <project-key>/reports/<handle>/. A reader that resolves it from the environment
+// instead gets a different tree whenever the environment is unset, which is every CLI invocation.
+export function wsReportsRoot(ws: Workspace, projectKey: string): string { return join(wsProjectDir(ws, projectKey), "reports"); }
 export function wsTeamDir(ws: Workspace): string { return join(wsStateRoot(ws), "team"); }
 export function wsLessonsDir(ws: Workspace): string { return join(wsStateRoot(ws), "lessons"); }
 export function wsWorktree(ws: Workspace, ticket: string, ref: string): string { return join(wsStateRoot(ws), "wt", ticket, ref); }
@@ -108,6 +115,14 @@ export function resolveHubDbPath(startDir?: string): string {
   if (process.env.DEVLOOP_HUB_DB?.trim()) return hubDbPath();
   const ws = tryResolveWorkspace(startDir);
   return ws ? wsHubDb(ws) : hubDbPath();
+}
+// The same ladder for callers that DEGRADE on an unresolvable board rather than failing (the merge
+// guard's board axis reports skipReason "no-hub-db"). undefined is that answer; hubDbPath()'s throw
+// is for callers whose whole job is the board.
+export function tryResolveHubDbPath(startDir?: string): string | undefined {
+  if (process.env.DEVLOOP_HUB_DB?.trim()) return tryHubDbPath();
+  const ws = tryResolveWorkspace(startDir);
+  return ws ? wsHubDb(ws) : tryHubDbPath();
 }
 export function wsDaemonRunfile(ws: Workspace): string { return join(wsStateRoot(ws), "daemon.json"); }
 export function wsFireLedger(ws: Workspace): string { return join(wsTeamDir(ws), "fires.jsonl"); }
@@ -146,15 +161,44 @@ export function resolveRepoFromCwd(ws: Workspace, cwd: string): string | null {
   return best && !tie ? best.ref : null;
 }
 
-// ─── The convenience index (~/.dev-loop/workspaces.json) — NON-authoritative ──
-export function workspacesIndexPath(): string { return join(devloopHome(), "workspaces.json"); }
+// ─── The convenience index — NON-authoritative, defined in paths.ts ──────────
+// Re-exported here because this module owns its only readers/writers. It is the one file that
+// cannot live inside a workspace (it is what maps DEVLOOP_TEAM=<key> to a workspace root), and it
+// no longer lives under ~/.dev-loop — see paths.ts for where it went and why.
+export { workspacesIndexPath } from "./paths.ts";
 
 export function readWorkspaceIndex(): Record<string, string> {
   try { const j = JSON.parse(readFileSync(workspacesIndexPath(), "utf8")); return j && typeof j === "object" ? j : {}; }
   catch { return {}; }
 }
 
+// An index entry for a workspace under the OS temp dir can only go stale: the OS reclaims that path,
+// and every later `DEVLOOP_TEAM=<key>` lookup through it fails with "its path is gone". Test fixtures
+// build workspaces there by the hundred, and each one that resolved wrote itself into the machine's
+// index — measured as a real index holding entries for a dozen `/var/folders/.../dl-*` paths that had
+// not existed for weeks. So the MACHINE-DEFAULT index records durable roots only.
+//
+// An index the caller has explicitly relocated (DEVLOOP_HOME) is that caller's own file and records
+// everything, temp roots included: that is the isolation seam the suites use, and the one place a
+// temp-rooted entry is meaningful, because the file dies with the fixture that owns it.
+function indexRecordsEphemeralRoots(): boolean { return devloopHome() !== undefined; }
+// BOTH temp roots, because a machine has both: `os.tmpdir()` is the per-user one ($TMPDIR, e.g.
+// /var/folders/.../T on macOS) and `/tmp` is the POSIX one, and fixtures across this repo use each.
+// Checking only the first left entries for /private/tmp/... in the index. canon() resolves the
+// symlink hop (/tmp → /private/tmp) so a path under either spelling is recognized, and returns null
+// where the directory does not exist (Windows has no /tmp), which simply drops that root.
+function isEphemeralRoot(root: string): boolean {
+  const r = canon(root);
+  if (!r) return false;
+  // Each temp root in BOTH spellings — as written and realpath-resolved (/tmp → /private/tmp on
+  // macOS). canon() leaves a path that does not exist yet unresolved, so a root under the symlinked
+  // spelling would never match the resolved prefix, and vice versa.
+  const roots = [tmpdir(), "/tmp"].flatMap((t) => [t, canon(t)]).filter((t): t is string => !!t);
+  return roots.some((t) => r === t || r.startsWith(t + "/"));
+}
+
 export function upsertWorkspaceIndex(teamKey: string, root: string): void {
+  if (!indexRecordsEphemeralRoots() && isEphemeralRoot(root)) return;
   try {
     const idx = readWorkspaceIndex();
     if (idx[teamKey] === root) return;

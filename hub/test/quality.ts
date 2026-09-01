@@ -7,14 +7,29 @@
 // (1)-(5) drive the CLI (node quality.ts …); (6) imports stripGo directly — main() is now
 // guarded, so importing this module is side-effect-free.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripGo } from "../src/quality.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
+
+// The Go coverage profile used to go into a temp dir nothing removed — one per quality run, forever.
+// The runner is sequential, so a set difference taken across this suite attributes exactly: any
+// devloop-quality-go-* directory present at the end but not at the start was created here.
+// Matches ONLY what mkdtemp produces for the production prefix — the bare prefix plus its six random
+// characters. This suite's own fixtures are named devloop-quality-go-192-… / -fix-…, and they exist
+// legitimately while the suite runs (tmp-root.ts sweeps them at exit, after this arm has run), so a
+// startsWith filter would report the suite's own working directories as the leak.
+// BOTH producers. The first version matched only `devloop-quality-go-`, so the TS/JS coverage directory —
+// created a few lines from the Go one, in the same file, and leaked by three early exits — was invisible
+// to the arm that exists to catch exactly that. A leak guard that sees one of two producers reports "no
+// leak" while one leaks.
+const goDirs = () => new Set(readdirSync(tmpdir()).filter((f) => /^devloop-quality-(go-)?[A-Za-z0-9]{6}$/.test(f)));
+const goDirsAtStart = goDirs();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const QUALITY = join(here, "..", "src", "quality.ts");
@@ -24,7 +39,7 @@ interface Mutant { file: string; line: number; from: string; to: string; fn: str
 interface Out { maxCrap: number | null; rows: Row[]; mutants: Mutant[] }
 
 function fixtureRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), "devloop-quality-fix-"));
+  const dir = tmpRoot("devloop-quality-fix-");
   mkdirSync(join(dir, "src"));
   mkdirSync(join(dir, "tests"));
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "qfix", type: "module" }));
@@ -157,7 +172,7 @@ const goOk = spawnSync("go", ["version"], { encoding: "utf8" }).status === 0;
 if (!goOk) {
   console.log("⏭  go toolchain not found — Go backend checks skipped (CI runners carry go; local dev may not)");
 } else {
-  const gdir = mkdtempSync(join(tmpdir(), "devloop-quality-go-fix-"));
+  const gdir = tmpRoot("devloop-quality-go-fix-");
   writeFileSync(join(gdir, "go.mod"), "module qfixgo\n\ngo 1.21\n");
   // Grade: CC 4 (1 + 3 if) — fully tested incl. the n<0 boundary (the probe's < → <= flip must be
   // KILLED by TestGrade(0)). Dead: CC 3 (1 + if + &&) — untested ⇒ CRAP = 3²·1³+3 = 12 EXACTLY,
@@ -256,10 +271,10 @@ func TestGrade(t *testing.T) {
   const noSuchDir = join(tmpdir(), "devloop-q-no-such-dir-ever");
   ok(runQuality(repo, ["--coverage-dir", noSuchDir, "--threshold", "50"]).status === 1,
     "LOOP-158: nonexistent coverage dir + --threshold → exit 1 (gate cannot run)");
-  const emptyDir = mkdtempSync(join(tmpdir(), "devloop-q-empty-"));
+  const emptyDir = tmpRoot("devloop-q-empty-");
   ok(runQuality(repo, ["--coverage-dir", emptyDir, "--threshold", "50"]).status === 1,
     "LOOP-158: empty coverage dir + --threshold → exit 1");
-  const noMatchDir = mkdtempSync(join(tmpdir(), "devloop-q-nomatch-"));
+  const noMatchDir = tmpRoot("devloop-q-nomatch-");
   writeFileSync(join(noMatchDir, "coverage-nomatch.json"),
     JSON.stringify({ result: [{ url: "file:///no/such/analyzed/file.ts", functions: [] }] }));
   ok(runQuality(repo, ["--coverage-dir", noMatchDir, "--threshold", "50"]).status === 1,
@@ -274,7 +289,7 @@ func TestGrade(t *testing.T) {
 // Report-only mode (no --threshold) must remain unchanged: exit 0 with N/A rows.
 if (goOk) {
   // Build a minimal Go repo to drive the Go pipeline.
-  const gndir = mkdtempSync(join(tmpdir(), "devloop-quality-go-192-"));
+  const gndir = tmpRoot("devloop-quality-go-192-");
   writeFileSync(join(gndir, "go.mod"), "module example.com/gate192\n\ngo 1.22\n");
   writeFileSync(join(gndir, "main.go"), "package main\n\nfunc Risky(n int) string { if n < 0 { return \"a\" }\nreturn \"z\"\n}\n\nfunc main() {}\n");
   execFileSync("git", ["init", "-qb", "main"], { cwd: gndir });
@@ -290,7 +305,7 @@ if (goOk) {
     "LOOP-192: Go + no --threshold + no coverprofile → exit 0 (report-only unchanged)");
 
   // Case C: no go.mod at root → gate cannot run → exit 1 when threshold set
-  const nomodDir = mkdtempSync(join(tmpdir(), "devloop-quality-nomod-192-"));
+  const nomodDir = tmpRoot("devloop-quality-nomod-192-");
   writeFileSync(join(nomodDir, "main.go"), "package main\nfunc Risky() {}\n");
   execFileSync("git", ["init", "-qb", "main"], { cwd: nomodDir });
   execFileSync("git", ["add", "-A"], { cwd: nomodDir });
@@ -302,6 +317,9 @@ if (goOk) {
   ok(runQuality(nomodDir, ["."]).status === 0,
     "LOOP-192: Go + no --threshold + no go.mod → exit 0 (report-only unchanged)");
 }
+
+const goDirsLeaked = [...goDirs()].filter((d) => !goDirsAtStart.has(d));
+ok(goDirsLeaked.length === 0, `neither coverage path leaves a temp directory behind (leaked: ${goDirsLeaked.join(", ") || "none"})`);
 
 console.log(fails === 0 ? "\nQUALITY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);

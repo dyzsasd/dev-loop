@@ -7,9 +7,9 @@
 // `request`, which is the agent's only way to ask, and with it §1's "file it and move on". So every
 // gate here is asserted in BOTH directions, and each refusal additionally asserts that the STORE did
 // not change — an exit code alone cannot tell a refusal from a write that also printed one.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
@@ -18,10 +18,11 @@ import { listApprovals, type ApprovalListItem } from "../src/approvals.ts";
 import { TOKEN_PREFIX } from "../src/destructive-guard.ts";
 import { FIRE_REFUSED_VERBS, VERB_FLAGS, VERBS } from "../src/approvals-cli.ts";
 import { scrubFireEnv } from "./env-scrub.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(hubRoot, "src", "cli.ts");
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-approvals-cli-")));
+const tmp = realpathSync(tmpRoot("dl-approvals-cli-"));
 const DB = join(tmp, "hub.db");
 
 let fails = 0;

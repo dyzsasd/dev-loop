@@ -7,16 +7,17 @@
 //
 // LOOP-344 is the routing half (two of §21a's three pointer forms reached the wrong verifier);
 // LOOP-345 is the authorization half (R1 and R2, which must land together).
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync, rmSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, findProject } from "../src/seed.ts";
 import { agentOp, type OpResult } from "../src/agentops.ts";
 
 import { designParentIds, isDesignParent, designPointerOf, docSlugOf } from "../src/design-parent.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-designparent-")));
+const tmp = realpathSync(tmpRoot("dl-designparent-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 

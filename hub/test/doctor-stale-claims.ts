@@ -2,15 +2,16 @@
 // Predicate arms (staleClaimFindings): events-ledger age, blocked exclusion, custom window.
 // Rendered arms (doctorWorkspace): W16/W43 exclusivity in both directions, and the W43 line's
 // content — count, oldest ticket id, and the >=48h day/hour formatting (LOOP-566).
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { openDb } from "../src/db.ts";
 import { doctorWorkspace } from "../src/doctor.ts";
 import { staleClaimFindings } from "../src/metrics.ts";
 import { loadWorkspace } from "../src/team-config.ts";
+import { tmpRoot } from "./tmp-root.ts";
 
-const tmp = realpathSync(mkdtempSync(join(tmpdir(), "dl-w43-")));
+const tmp = realpathSync(tmpRoot("dl-w43-"));
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 const NOW = "2026-08-01T12:00:00.000Z";

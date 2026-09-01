@@ -1,19 +1,20 @@
 // P1-2 push-guard — regression tests for the ride-along class (MP-275: a Canceled ticket's commit rode a
 // batched push into a prod deploy). Real git repos (bare origin + clone), real hub rows.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+
 import { fileURLToPath } from "node:url";
 import { openDb } from "../src/db.ts";
 import { pushGuard } from "../src/push-guard.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { tmpRoot } from "./tmp-root.ts";
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); if (!c) fails++; };
 
-const ROOT = mkdtempSync(join(tmpdir(), "dl-push-guard-"));
+const ROOT = tmpRoot("dl-push-guard-");
 try {
   const origin = join(ROOT, "origin.git");
   const work = join(ROOT, "work");
@@ -286,7 +287,11 @@ try {
     // CLI: --strict must exit 1 (fails-before: today exits 0 because it silently skips)
     const pg4bStrict = cli(["--repo", work, "--branch", "dev-loop/CERT-41", "--default-branch", "nonexistent", "--strict"]);
     ok(pg4bStrict.status === 1, "AC4 CLI --strict: unresolvable defaultBranch ⇒ exit 1 (a safety gate must not pass silently)");
-    ok(/does not exist/.test(pg4bStrict.stdout), "AC4 CLI: output names the missing origin/<branch>");
+    // Names BOTH refs it looked for, not just `origin/<branch>`: a repo with no remote has no
+    // origin/<branch> to be missing, and the old wording sent an operator looking for a remote that
+    // was never configured (push-guard-no-remote.ts).
+    ok(/neither origin\/nonexistent nor a local nonexistent/.test(pg4bStrict.stdout),
+      `AC4 CLI: output names both refs it looked for (${pg4bStrict.stdout.split("\n").find((l) => l.includes("push-guard:")) ?? pg4bStrict.stdout.slice(0, 120)})`);
 
     git(work, ["checkout", "-q", "main"]);
   }
