@@ -467,6 +467,19 @@ if (opVerify.length > 0) {
   spawnSync("node", [join(srcDir, "cli.ts"), "seed", "p", "Proj", "PRJ"], { cwd: ws5, env: opEnv, encoding: "utf8" });
   ok(runOp5().status === 0, "fixture: the op verb answers 0 against a healthy board");
 
+  // The resolver ITSELF failing is the commonest way to reach that catch, and it was the one shape the
+  // exit-5 mapping never handled: the catch called resolveHubDbPath() again to name the path, so when the
+  // resolver was what threw it threw a second time, out of the catch, past process.exit(5). Exit 1 and a
+  // stack trace whose top frame is the catch — for every agent write verb. 5592825 created this shape by
+  // retiring the ~/.dev-loop fallback; an error handler that reuses the failing operation is not a handler.
+  const unresolvable = spawnSync("node", [join(srcDir, "cli.ts"), "op", "queue"], {
+    cwd: bad, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...scrubFireEnv(), DEVLOOP_PROJECT: "x" },   // project set, but no db, no home, no workspace
+  });
+  ok(unresolvable.status === 5, `an UNRESOLVABLE board is hub-unavailable (5), not a second throw out of the catch (got ${unresolvable.status})`);
+  ok(/no hub database resolved/.test(unresolvable.stderr ?? "") && !/\bat \w+ \(/.test(unresolvable.stderr ?? ""),
+    "…and the resolver's own guidance reaches the operator instead of a stack trace");
+
   writeFileSync(join(ws5, ".dev-loop", "hub.db"), "not a database at all");
   const corrupt = runOp5();
   ok(corrupt.status === 5, `a corrupt hub.db is hub-unavailable (5), not an escaped SQLITE_NOTADB (got ${corrupt.status})`);

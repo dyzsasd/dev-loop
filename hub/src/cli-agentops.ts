@@ -168,8 +168,16 @@ export function openHub(): Hub {
     process.exit(4);
   }
   let db: DatabaseSync;
+  // Resolved ONCE, inside the try, and reused by the catch. The catch used to call resolveHubDbPath()
+  // again to name the path — and when the resolver is what threw (no DEVLOOP_HUB_DB, no DEVLOOP_HOME, no
+  // workspace: the shape 5592825 created by retiring the ~/.dev-loop fallback) it threw a SECOND time,
+  // out of the catch, past process.exit(5). Measured: exit 1 and a stack trace whose top frame is this
+  // very line, for every agent write verb. The exit-5 mapping this catch exists to provide never ran on
+  // the most common way to reach it — an error handler that reuses the failing operation is not a handler.
+  let dbPath: string | null = null;
   try {
-    db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — a bare `dev-loop op` at the workspace root must hit ITS board, not the global default
+    dbPath = resolveHubDbPath(); // workspace-aware ladder (P2 #1) — a bare `dev-loop op` at the workspace root must hit ITS board, not the global default
+    db = openDb(dbPath);
     ensureActors(db); // idempotent (server.ts does the same) — the G1 guard below needs the roster present; INSERTs, so it belongs inside the busy mapping (codex #3)
   } catch (e) {
     // ANY failure to open the board is "hub unavailable" (exit 5). Busy was the only one mapped, so a
@@ -181,7 +189,8 @@ export function openHub(): Hub {
     // is not a database" is not, but both are 5 — the board is what is unavailable either way.
     const msg = (e as Error).message ?? String(e);
     if (isBusy(e)) console.error(`dev-loop: hub db is busy past the 5s busy_timeout: ${msg}`);
-    else console.error(`dev-loop: cannot open the board at ${resolveHubDbPath()} — ${msg}`);
+    // `dbPath` is null when the RESOLVER threw, in which case its own message already says what to do.
+    else console.error(dbPath === null ? `dev-loop: ${msg}` : `dev-loop: cannot open the board at ${dbPath} — ${msg}`);
     process.exit(5);
   }
   if (!actorExists(db, actor)) { // G1 phantom-actor guard — a typo'd DEVLOOP_ACTOR must never write unattributably
