@@ -259,6 +259,36 @@ try {
     ok(reap.status === 0, `D4 control: reap on a repo WITH a remote exits 0 (out: ${out.trim()})`);
     ok(!branchExists(rrepo, "dev-loop/RR-1"),
       `D4 control: merged into origin/main ⇒ still reaped (out: ${out.trim()})`);
+    // The registry's `remote` field is not the predicate. push-guard states why where it asks git for the
+    // same fact: the registry can be stale in either direction. Both worktree verbs read the field, so a
+    // workspace whose registry claims a remote the repo does not have measured every terminal branch
+    // against an `origin/<base>` that cannot resolve — isMergedIntoBase was always false and reap kept
+    // every branch it exists to remove. Here the field says `origin` and the repo has none.
+    {
+      const sws = tmpRoot("dl-wt-staleremote-");
+      const srepo = join(sws, "repo");
+      mkdirSync(srepo, { recursive: true });
+      execFileSync("git", ["init", "-q", "-b", "main", srepo]);
+      git(srepo, ["commit", "--allow-empty", "-qm", "baseline"]);
+      writeFileSync(join(sws, "dev-loop.json"), JSON.stringify({
+        schemaVersion: 2,
+        workspaceId: "stale-remote-ws",
+        team: { key: "staleremote", backend: "service", mode: "live", autonomy: "ask" },
+        repos: { repo: { path: "repo", remote: "origin", landing: "pr" } },   // …and the repo has no origin
+        projects: { staleremote: { repos: [{ ref: "repo" }] } },
+      }, null, 2));
+      mkdirSync(join(sws, ".dev-loop", "locks"), { recursive: true });
+      seedBoard(sws, "staleremote", "SR", [["SR-1", "Done"]]);
+      const wtS1 = run(["add", "SR-1", "--repo", "repo"], sws).stdout.trim();
+      git(wtS1, ["commit", "--allow-empty", "-qm", "work for SR-1"]);
+      git(srepo, ["merge", "--no-ff", "-q", "-m", "merge SR-1", "dev-loop/SR-1"]);
+      const sreap = run(["reap", "--repo", "repo"], sws);
+      const sout = `${sreap.stdout}${sreap.stderr}`;
+      ok(!branchExists(srepo, "dev-loop/SR-1"),
+        `a stale registry remote does not make a merged terminal branch UNRECOVERABLE — the repo is asked, not the field (out: ${sout.trim()})`);
+      ok(!/UNRECOVERABLE/.test(sout), `…and reap does not claim the only copy is local when it is merged into the local base (out: ${sout.trim()})`);
+    }
+
     ok(/kept branch 'dev-loop\/RR-2'/.test(out) && branchExists(rrepo, "dev-loop/RR-2"),
       `D4 control: neither merged nor pushed ⇒ still kept (out: ${out.trim()})`);
   }

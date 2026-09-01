@@ -46,7 +46,7 @@ async function worktreeAdd(argv: string[]): Promise<number> {
 
   await withRepoLockPath(lockPath, {}, async () => {
     let base: string;
-    if (repo.remote) {
+    if (repoHasRemote(repoDir, repo.remote)) {
       const fetch = git(repoDir, ["fetch", "origin", defaultBranch]);
       if (fetch.ok) {
         base = `origin/${defaultBranch}`;
@@ -142,6 +142,22 @@ function parsePorcelain(out: string): Array<{ path: string; branch: string | nul
  * `<defaultBranch>` when it does not. In a repository with no remote `origin/<defaultBranch>` does
  * not resolve at all, so a comparison against it can only ever fail.
  */
+// Does THIS REPOSITORY have the remote — not "does the registry declare one". push-guard states the
+// reason where it does the same thing: the registry can be stale in either direction. Both worktree
+// verbs read the registry field instead, and a workspace whose registry claimed a remote the repo does
+// not have measured every terminal branch against an `origin/<base>` that cannot resolve, so
+// isMergedIntoBase was always false and reap kept every branch it was written to remove. Measured on a
+// fixture: with the field present the branch is "UNRECOVERABLE — its only copy is local"; with the field
+// removed the same branch is deleted as merged.
+//
+// The registry remains the FALLBACK, for the case git cannot answer at all — a missing binary or an
+// unreadable repo should not silently turn a remote-backed repo into a local-only one.
+function repoHasRemote(repoDir: string, registryRemote: unknown): boolean {
+  const probe = spawnSync("git", ["-C", repoDir, "remote", "get-url", "origin"], { stdio: "ignore" });
+  if (probe.error) return !!registryRemote;   // git unavailable — the registry is all there is
+  return probe.status === 0;
+}
+
 function reapBaseRef(defaultBranch: string, hasRemote: boolean): string {
   return hasRemote ? `origin/${defaultBranch}` : defaultBranch;
 }
@@ -181,8 +197,9 @@ export async function worktreeReap(
   const resolvedReap = effectiveRepo(ws, repoRef);
   const repoDir = resolvedReap.absPath;
   const defaultBranch = resolvedReap.defaultBranch;
-  // The SAME `repo.remote` judgement `worktree add` uses — one registry field, one reading of it.
-  const hasRemote = !!resolvedReap.remote;
+  // The SAME judgement `worktree add` uses — one predicate, one reading of it. It asks the repository
+  // rather than the registry; see repoHasRemote.
+  const hasRemote = repoHasRemote(repoDir, resolvedReap.remote);
   const baseRef = reapBaseRef(defaultBranch, hasRemote);
   const lockPath = wsLockPath(ws, `repo-${repoRef}`);
 
