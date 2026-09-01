@@ -1702,9 +1702,23 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
     const fireTimer = effectiveFireTimeoutMs > 0 ? setTimeout(() => {
       if (budgetKilled) return; // the budget watchdog already killed this fire — do not stamp timedOut on its row
       timedOut = true;
-      console.error(`[${agent}] fire exceeded ${formatDuration(effectiveFireTimeoutMs)} — SIGTERM (SIGKILL in 10s)`);
-      log.write(`\n===== fire timeout after ${formatDuration(effectiveFireTimeoutMs)}: SIGTERM =====\n`);
-      killGroup("SIGTERM");
+      // All three watchdogs open with SIGINT to the DIRECT CHILD and escalate to a group SIGKILL on the
+      // unchanged 10s timer. Two separate reasons, both learned after these kills were written:
+      //   * the SIGNAL. claude's `--output-format json` buffers its terminal object until exit and flushes
+      //     it for SIGINT, not for SIGTERM, so a SIGTERM kill guarantees `usage: null` for the fire it just
+      //     stopped. A wall-timeout fire is the most expensive kind there is; losing its receipt is the
+      //     worst case, not the mildest.
+      //   * the TARGET. LOOP-23 (see the interrupt path below) established that a graceful signal to the
+      //     GROUP reaches the git/tsx/npm helpers the agent uses to check-point, turning a graceful
+      //     wind-down into a forced reap. A graceful signal delivered group-wide is the worst of both.
+      // LOOP-23 confined forced group reaping to these watchdogs on the reasoning that a wedged agent's
+      // cleanup is moot. That still holds for the ESCALATION, which is untouched: a child that ignores
+      // SIGINT dies on exactly the same deadline, group and all. What changes is that a child that can
+      // still respond gets the chance to flush — and e4ba69c's post-exit reapGroup sweeps whatever the
+      // narrower signal leaves in the group.
+      console.error(`[${agent}] fire exceeded ${formatDuration(effectiveFireTimeoutMs)} — SIGINT (SIGKILL in 10s)`);
+      log.write(`\n===== fire timeout after ${formatDuration(effectiveFireTimeoutMs)}: SIGINT =====\n`);
+      child.kill("SIGINT");
       killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
     }, effectiveFireTimeoutMs) : undefined;
@@ -1732,13 +1746,13 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
       const ageOut = Date.now() - lastOutputAt, ageNew = Date.now() - lastNewContentAt;
       const ages = `[silent ${formatDuration(ageOut)} · no-new-content ${formatDuration(ageNew)} · window ${seenLines.size}/${RETRY_LOOP_LINE_WINDOW}]`;
       if (retryLoop) {
-        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} ${ages} — fire looks STUCK in a retry loop; SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== retry-loop: output arriving but no new content for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+        console.error(`[${agent}] output arriving but no NEW content for ${formatDuration(stallMs)} ${ages} — fire looks STUCK in a retry loop; SIGINT (SIGKILL in 10s)`);
+        log.write(`\n===== retry-loop: output arriving but no new content for ${formatDuration(stallMs)}: SIGINT =====\n`);
       } else {
-        console.error(`[${agent}] no output for ${formatDuration(stallMs)} ${ages} — fire looks WEDGED (hung provider call / silent retry loop); SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGTERM =====\n`);
+        console.error(`[${agent}] no output for ${formatDuration(stallMs)} ${ages} — fire looks WEDGED (hung provider call / silent retry loop); SIGINT (SIGKILL in 10s)`);
+        log.write(`\n===== stalled: no output for ${formatDuration(stallMs)}: SIGINT =====\n`);
       }
-      killGroup("SIGTERM");
+      child.kill("SIGINT");
       killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
       killTimer.unref?.();
     }, 15_000) : undefined;
@@ -1782,7 +1796,7 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
         // that ignores SIGINT still dies on schedule.
         console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGINT (SIGKILL in 10s)`);
         log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGINT =====\n`);
-        killGroup("SIGINT");
+        child.kill("SIGINT");
         killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
         killTimer.unref?.();
       }, budgetMs);

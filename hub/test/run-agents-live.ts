@@ -74,11 +74,15 @@ exit 0
     "the in-flight fire ran to completion during drain (was: SIGINT'd milliseconds after launch)");
   clearRecs();
 
-  // ── 3. fire timeout: a wedged child is SIGTERM'd, the slot recovers, the loop exits by drain ──
+  // ── 3. fire timeout: a wedged child is SIGINT'd, the slot recovers, the loop exits by drain ──
+  // The signal changed from SIGTERM: claude's terminal usage object is flushed on the way out for SIGINT
+  // and not for SIGTERM, so a SIGTERM timeout guaranteed no receipt for the most expensive kind of fire
+  // there is. The 10s escalation to a group SIGKILL is unchanged, so a child that ignores SIGINT still
+  // dies on the same deadline — which is what arm 8 below reads.
   const t0 = Date.now();
   const timeoutRun = runLive(["--max-fires", "1", "--stagger", "0", "--fire-timeout", "1s", ...common], { STUB_SLEEP: "600" }, 60_000);
   const r3 = recs();
-  ok(/fire exceeded 1s — SIGTERM/.test(timeoutRun.out), "a wedged fire logs the timeout escalation");
+  ok(/fire exceeded 1s — SIGINT/.test(timeoutRun.out), "a wedged fire logs the timeout escalation");
   ok(r3.length === 1 && !/COMPLETED/.test(r3[0]), "the wedged child was actually killed (no completion marker)");
   ok(Date.now() - t0 < 30_000, "the timeout path completes promptly (slot is not held for the child's full sleep)");
   clearRecs();
@@ -184,8 +188,8 @@ sleep 600
   ok(gcAlive !== 0, `grandchild (pid ${gcPid}) was reaped by the process-group kill`);
 
   // ── 8. Scheduler survives the group kill (it is NOT in the child's process group) ──
-  // The fire-timeout run above proves it: if SIGTERM/SIGKILL had hit the scheduler, it would have
-  // exited with a signal (code null), not code 0.
+  // The fire-timeout run above proves it: if the fire's SIGINT/SIGKILL had hit the scheduler, it would
+  // have exited with a signal (code null), not code 0.
   ok(gcRun.code === 0, `scheduler survived the group kill of its fire (exit ${gcRun.code})`);
 
   // ── 9. Retry-loop detection: output keeps arriving but no NEW content → errorClass "retry-loop" ──

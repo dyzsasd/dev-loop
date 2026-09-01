@@ -221,11 +221,18 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   ok(/— SIGINT \(SIGKILL in 10s\)/.test(killed.out) && !/— SIGTERM/.test(killed.out),
     `AC4: the budget kill opens with SIGINT, the signal that leaves the receipt behind${/— SIGTERM/.test(killed.out) ? " [regressed: still SIGTERM]" : ""}`);
 
-  // Wording is not delivery. This stub traps INT and leaves a marker, so the arm fails if the signal that
-  // actually reaches the child is anything else.
+  // Wording is not delivery. This stub installs its own SIGINT handler and leaves a marker, so the arm
+  // fails if the signal that actually reaches the child is anything else.
+  //
+  // It is a node script rather than a shell wrapper on purpose. The watchdog signals the DIRECT CHILD
+  // (LOOP-23: a graceful signal to the group would also hit the agent's check-point helpers), and a
+  // `#!/bin/sh` stub waiting on a foreground `sleep` cannot run its trap until that sleep returns — so a
+  // shell stub would model the delivery as failing when the real child, the `claude` binary, handles
+  // SIGINT itself. The production ledger settles which model is right: the operator stop path has always
+  // signalled the direct child only, and all 17 fires it ended came back with their receipts.
   const marker = join(tmp, "sigint-received");
-  const trapBin = join(tmp, "trap-claude.sh");
-  writeFileSync(trapBin, `#!/bin/sh\ntrap 'echo caught > "${marker}"; exit 0' INT\necho 'fire started'\nsleep 60\n`);
+  const trapBin = join(tmp, "trap-claude.js");
+  writeFileSync(trapBin, `#!/usr/bin/env node\nconst fs = require("node:fs");\nprocess.on("SIGINT", () => { fs.writeFileSync(${JSON.stringify(marker)}, "caught"); process.exit(0); });\nconsole.log("fire started");\nsetTimeout(() => {}, 60_000);\n`);
   chmodSync(trapBin, 0o755);
   runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: trapBin });
   ok(existsSync(marker), "AC4: …and the child actually receives INT — the fire's own trap ran");
@@ -314,6 +321,23 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
       86_400_000, Date.now());
     ok(Math.abs(withRealZero - 6) < 0.01,
       `a measured $0 no watchdog killed still counts as $0 — not every zero is missing data (got $${withRealZero.toFixed(2)})`);
+
+    // A killed fire's receipt is a LOWER BOUND on ANY lane, not just when it reads $0. opencode SUMS its
+    // per-step events (LOOP-476), so a kill truncates the sum mid-run and hands back a real, short number —
+    // and opencode is the one lane where the stall watchdog is armed by default. Guarding only the $0 case
+    // would have let every partial sum through as a measurement.
+    const partial = rollingSpendUsd(
+      [priced, { ...base, ts: t(30), durationMs: 600_000, exitCode: 126, watchdog: "budget", usage: usage(2) } as FireRow],
+      86_400_000, Date.now());
+    ok(Math.abs(partial - 12) < 0.01,
+      `a killed fire's PARTIAL receipt ($2) does not undercut the $6 model for the same duration (got $${partial.toFixed(2)})`);
+
+    // …and the receipt wins when it is the larger of the two: it is evidence, not a number to discard.
+    const overspent = rollingSpendUsd(
+      [priced, { ...base, ts: t(30), durationMs: 600_000, exitCode: 126, watchdog: "budget", usage: usage(9) } as FireRow],
+      86_400_000, Date.now());
+    ok(Math.abs(overspent - 15) < 0.01,
+      `a killed fire that outspent the model is counted at its receipt ($9), not modelled down to $6 (got $${overspent.toFixed(2)})`);
   }
 
   process.exit(fails ? 1 : 0);

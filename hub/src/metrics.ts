@@ -386,21 +386,30 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
 
   let total = 0;
   for (const r of inWindow) {
-    // A watchdog-killed fire reporting $0 is MISSING DATA, not a $0 fire — it ran long enough to reach a
-    // deadline derived from a dollar ceiling, so it cannot have cost nothing. The receipt a killed fire
-    // returns covers only its COMPLETED turns, so a kill landing inside the first turn yields exactly this
-    // shape. Counting it as measured would make the total FALL below the estimate it replaced, which is the
-    // one way this change could make the accounting worse than the null it fixes. A genuine measured $0 —
-    // the CLI refusing at a session limit before billing, 17 rows on this board — is not watchdog-killed and
-    // still counts as the $0 it really was. (spendCurvePoints already names this shape for its own reason.)
-    const missingReceipt = wasWatchdogKilled(r) && r.usage?.costUsd === 0;
-    if (r.usage != null && r.usage.costUsd !== null && !missingReceipt) {
-      total += r.usage.costUsd;
-    } else {
-      // Unpriced or killed fire: estimate duration × ratePerMs, never $0
+    // Unpriced or killed fire: estimate duration × ratePerMs, never $0.
+    const modelled = () => {
       const rates = ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`];
       const ratePerMs = rates?.length ? (median(rates) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
-      total += (r.durationMs ?? 0) * ratePerMs;
+      return (r.durationMs ?? 0) * ratePerMs;
+    };
+    const measured = r.usage != null && r.usage.costUsd !== null ? r.usage.costUsd : null;
+    if (measured === null) {
+      total += modelled();
+    } else if (wasWatchdogKilled(r)) {
+      // A killed fire's receipt is a LOWER BOUND, never the whole cost — whatever the lane's shape. claude
+      // returns the terminal object for its COMPLETED turns and loses the one in flight; opencode's per-step
+      // events are SUMMED (LOOP-476), so a kill truncates the sum mid-run. Both hand back a number that is
+      // real and short, and recording it as measured undercounts silently — the more so on opencode, which is
+      // the one lane where the stall watchdog is armed by default.
+      // Take whichever is larger. The receipt wins when the fire outspent the model, the model wins when the
+      // kill landed early (a first-turn kill returns $0), and the total can never fall below the estimate
+      // this row would have contributed had the kill destroyed the receipt entirely — which is the one way
+      // recovering receipts could have made the books worse than the nulls it replaced.
+      total += Math.max(measured, modelled());
+    } else {
+      // A genuine measured $0 — the CLI refusing at a session limit before it billed anything, 17 rows on
+      // this board — is not watchdog-killed and counts as the $0 it really was. Not every zero is a gap.
+      total += measured;
     }
   }
   return total;
