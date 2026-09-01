@@ -40,7 +40,7 @@ const makeWs = (name: string, rows: Array<{ id: string; state: string; labels: s
   mkdirSync(repo, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "main", repo]);
   spawnSync("git", ["-C", repo, "commit", "--allow-empty", "-qm", "baseline"], {
-    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" },
+    env: { ...scrubFireEnv(), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" },
   });
   writeFileSync(join(ws, "dev-loop.json"), JSON.stringify({
     schemaVersion: 2,
