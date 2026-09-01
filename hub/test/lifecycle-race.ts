@@ -31,7 +31,7 @@
 // every run that passed. DEVLOOP_LIFECYCLE_TRIALS raises the count for a targeted hunt.
 //
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { registerDaemonPid, launchDaemonCli, runDaemonCli } from "./daemon-harness.ts";
 import { runningDaemonPids } from "./daemon-pids.ts";
 import { foreignListener } from "../src/daemon-lifecycle.ts"; // LOOP-317: the decision the fix turns on
@@ -65,6 +65,15 @@ const touchedPorts = new Set<number>();
 // Snapshot BEFORE any trial runs: the cleanup below kills the difference, so anything already running —
 // an operator's live workspace daemons above all — is out of scope by construction.
 const daemonsAtStart = runningDaemonPids();
+// Whether a pid is one of OURS — asked of every candidate before it is killed, by both the snapshot
+// difference and the port sweep. Defined here rather than inside the cleanup so it can be asserted.
+const isOurs = (pid: number): boolean => {
+  try {
+    const env = execFileSync("ps", ["eww", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return env.includes(ROOT);
+  } catch { return false; }   // gone, or not inspectable — either way not something to kill
+};
+const reap = (pid: number): void => { if (isOurs(pid)) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } } };
 
 // seed the isolated service project (ensureActors seeds the `operator` actor the daemon needs)
 execFileSync(NODE, ["src/seed.ts", PROJ, "Race Project", "RC", DB], { encoding: "utf8" });
@@ -121,6 +130,28 @@ try {
       ok(false, `${tag}: runfile missing after up — daemon failed to start; trial aborted`);
     }
   }
+  // The cleanup kills by SNAPSHOT DIFFERENCE and by PORT, and neither says "this suite started it".
+  // A daemon another checkout starts while these trials run lands in the difference; any listener that
+  // happens to hold a touched port — from the same 8787 band an operator's daemons use — lands in the
+  // sweep. Both now ask isOurs() first, so the kill set is the suite's own processes and nothing else.
+  {
+    const decoy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached: true });
+    decoy.unref();
+    await new Promise((r) => setTimeout(r, 300));
+    ok(decoy.pid !== undefined && !isOurs(decoy.pid), `a process that is not this suite's is NOT in the kill set (pid ${decoy.pid})`);
+    // The positive side, asserted against a process that IS ours rather than against readRun(): by this
+    // point `down` has removed the runfile, so `mine == null || …` would have short-circuited to a pass
+    // and asserted nothing. A predicate needs both answers demonstrated.
+    const ourDecoy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore", detached: true, env: { ...scrubFireEnv(), DEVLOOP_HUB_DB: DB } });
+    ourDecoy.unref();
+    await new Promise((r) => setTimeout(r, 300));
+    ok(ourDecoy.pid !== undefined && isOurs(ourDecoy.pid),
+      `…while a process carrying this suite's root IS — the scoping did not disarm the cleanup (pid ${ourDecoy.pid})`);
+    try { process.kill(ourDecoy.pid!, "SIGKILL"); } catch { /* already gone */ }
+    try { process.kill(decoy.pid!, "SIGKILL"); } catch { /* already gone */ }
+  }
+
   ok(fails === 0, `all ${TRIALS} concurrent-up trials race-free (single tracked live daemon, down-stoppable, 0 untracked)`);
 } finally {
   // best-effort cleanup: stop the tracked daemon, then sweep any untracked listener on ports this test recorded
@@ -136,12 +167,19 @@ try {
   // rather than by pattern is load-bearing — `runningDaemonPids()` lists every daemon on the machine, and
   // this suite must never touch an operator's live workspace daemons.
   await lcAsync("down").catch(() => {});
+  // …and a SECOND condition beside the snapshot: the process must be one of OURS. The snapshot alone
+  // says "appeared while this suite ran", which is not the same as "this suite started it" — a daemon
+  // another checkout starts during the run lands in the difference and was killed. The port sweep was
+  // wider still: it killed any listener on a touched port regardless of when it appeared or what it was,
+  // and these ports come from the same 8787 band an operator's daemons use.
+  // Both now ask the same question of a pid: does its environment name THIS suite's root? Nothing else
+  // is killed, whatever the snapshot or the port says.
   if (daemonsAtStart !== null) {
     const now = runningDaemonPids();
-    if (now !== null) for (const pid of now) if (!daemonsAtStart.has(pid)) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+    if (now !== null) for (const pid of now) if (!daemonsAtStart.has(pid)) reap(pid);
   }
   for (const p of touchedPorts) {
-    try { for (const pid of execFileSync("lsof", ["-ti", `tcp:${p}`, "-sTCP:LISTEN"], { encoding: "utf8" }).split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* gone */ } } } catch { /* lsof absent / nothing listening */ }
+    try { for (const pid of execFileSync("lsof", ["-ti", `tcp:${p}`, "-sTCP:LISTEN"], { encoding: "utf8" }).split("\n").filter(Boolean)) reap(Number(pid)); } catch { /* lsof absent / nothing listening */ }
   }
   rmSync(ROOT, { recursive: true, force: true });
 }
