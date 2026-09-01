@@ -77,5 +77,31 @@ ok(readdirSync(roDir).filter((f) => f.includes(".tmp-")).length === 0, "…with 
   ok(existsSync(fresh) && readFileSync(fresh, "utf8") === "{}", "a first write with no existing target still lands");
 }
 
+// ── the tmp really is a SIBLING of the target ────────────────────────────────────────────────
+// The existing same-directory arms cannot fail: the tmp exists only between the write and the rename,
+// and the failure path unlinks it, so `!existsSync(...)` is vacuously true either way. Moving the tmp to
+// os.tmpdir() — the implementation the module's comment exists to rule out — left all of them green.
+//
+// Same directory is load-bearing because renameSync is only atomic WITHIN one filesystem. The property is
+// observable at the one moment the tmp is created: make the target's directory read-only, and a
+// same-directory implementation fails trying to OPEN the tmp inside it, while an os.tmpdir()
+// implementation opens fine and fails later at the RENAME. The syscall names which one this is.
+{
+  const dir = join(tmpRoot("dl-atomicsib-"), "ro");
+  mkdirSync(dir, { recursive: true });
+  const target = join(dir, "f.json");
+  writeFileSync(target, '{"a":1}');
+  chmodSync(dir, 0o500);
+  let err: NodeJS.ErrnoException | null = null;
+  try { writeConfigAtomic(target, '{"a":2}'); } catch (e) { err = e as NodeJS.ErrnoException; }
+  chmodSync(dir, 0o700);   // restore before the sweep, or tmp-root cannot remove the tree
+  ok(err !== null, "a write into a read-only directory fails rather than reporting success");
+  ok(err?.syscall === "open",
+    `…and it fails at OPEN — the tmp is created beside the target, not in os.tmpdir() where the open would have succeeded (got ${err?.syscall})`);
+  ok(typeof err?.path === "string" && err.path.startsWith(dir),
+    `…with the tmp path inside the target's own directory (got ${err?.path})`);
+  ok(readFileSync(target, "utf8") === '{"a":1}', "…and the target is untouched — a failed replace replaces nothing");
+}
+
 console.log(fails === 0 ? "\nATOMIC_WRITE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
