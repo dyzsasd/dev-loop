@@ -428,6 +428,65 @@ function checkPushApprovals(
   return out;
 }
 
+type GitRun = (args: string[]) => string;
+type ParsedCommit = { sha: string; subject: string; msg: string };
+type ParseLog = (raw: string) => ParsedCommit[];
+
+// The merge-knot class, lifted out of pushGuard as its own unit. On `landing:"direct"` the branch is
+// landed by fast-forwarding the default branch onto it, so every merge commit in the range becomes a
+// merge commit on the default branch — which is what §7's "rebase onto the base, land --ff-only, never
+// create a merge knot on defaultBranch" exists to prevent. Measured on JBU-44: the fire merged
+// origin/main INTO its branch and then fast-forwarded main onto the result, and the knot landed. The
+// instruction was already in the conventions; push-guard is the only hard gate in front of a direct
+// landing, so it is where the rule can actually stop one. `pr` is exempt: the forge lands that branch
+// under its own merge setting, and the branch's shape is not the base's business.
+//
+// The range is subtracted the same way scanCommits is, for the reason stated above it: on a TRACKED
+// branch `range` is upstream-relative, so a rebase drags the base's own history through it. Without the
+// subtraction a branch that rebased onto a base CONTAINING a merge knot was refused for that knot — and
+// told to "rebase onto the base instead", which it had just done. Reproduced on real history:
+// dev-loop/JBU-52 reset to its origin ref passes, and fails the moment it is rebased onto origin/main,
+// naming f8398b0 — a commit that is already an ancestor of origin/main. The class still measures what
+// this push PUBLISHES; subtracting the base is what makes that true for a rebased branch, not only a
+// fresh one.
+function mergeKnotCommits(
+  git: GitRun, parseLog: ParseLog, range: string | null, landingMode: string | null,
+  baseRef: string | null, subtractPublished: boolean,
+): PushGuardMergeCommit[] {
+  if (!range || landingMode !== "direct") return [];
+  const args = ["log", "--merges", "-z", "--pretty=format:%H%n%B", range];
+  if (subtractPublished && baseRef) args.push("--not", baseRef);
+  try {
+    return parseLog(git(args)).map((c) => ({ sha: c.sha.slice(0, 7), subject: c.subject }));
+  } catch {
+    return []; // an unreadable range is already reported by `note`; this class adds nothing there
+  }
+}
+
+// The unpublished-landing class, lifted out of pushGuard as its own unit. Measured on jbu's main
+// reflog, 2026-08-29: `3e51a06 @15:50:00 merge dev-loop/JBU-11 FF` (landed, unpushed) followed by
+// `2011a1c @15:51:52 reset: moving to origin/main` — a second lane aligning the shared checkout to
+// origin the destructive way, which discarded the first lane's landing. It survived only because the
+// same fire re-merged the same branch seconds later; any other pairing loses the commit. `git pull
+// --ff-only` refuses on a diverged branch and the landing sequence never said what to do about that,
+// so the agent improvised the one remedy that destroys work.
+//
+// These commits are what such a reset would take. Listing them immediately before the push that
+// publishes them is the last point anything can say so, and the refusal line carries the rule.
+function unpublishedLandingCommits(
+  git: GitRun, parseLog: ParseLog, hasRemote: boolean, br: string,
+  defaultBranch: string, baseRef: string | null,
+): PushGuardMergeCommit[] {
+  if (!hasRemote || br !== defaultBranch || !baseRef) return [];
+  try {
+    return parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${baseRef}..${br}`]))
+      .map((c) => ({ sha: c.sha.slice(0, 7), subject: c.subject }));
+  } catch {
+    return []; // an unreadable range is already carried by `note`
+  }
+}
+
+
 export function pushGuard(repoDir: string, branch: string | undefined, dbPath: string | undefined, defaultBranch: string, opts: { enforcePush?: boolean; actor?: string; record?: boolean; remote?: string } = {}): PushGuardResult {
   // Every range below is measured against the remote the caller will actually PUSH TO. It was
   // hardcoded `origin`, which was correct while every caller pushed to origin — `dev-loop push`
@@ -661,49 +720,9 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const landingFacts = range ? readLandingFactsFor(repoDir) : null;
   const landingMode = landingFacts ? (landingFacts.landing ?? "direct") : null;
 
-  // The merge-knot class. On `landing:"direct"` the branch is landed by fast-forwarding the default
-  // branch onto it, so every merge commit in the range becomes a merge commit on the default branch —
-  // which is what §7's "rebase onto the base, land --ff-only, never create a merge knot on
-  // defaultBranch" exists to prevent. Measured on JBU-44: the fire merged origin/main INTO its branch
-  // and then fast-forwarded main onto the result, and the knot landed. The instruction was already in
-  // the conventions; push-guard is the only hard gate in front of a direct landing, so it is where
-  // the rule can actually stop one. `pr` is exempt: the forge lands that branch under its own merge
-  // setting, and the branch's shape is not the base's business.
-  const mergeCommits: PushGuardMergeCommit[] = [];
-  if (range && landingMode === "direct") {
-    try {
-      // …and subtracted the same way scanCommits is, for the reason stated above it: on a TRACKED branch
-      // `range` is upstream-relative, so a rebase drags the base's own history through it. Without the
-      // subtraction a branch that rebased onto a base CONTAINING a merge knot was refused for that knot —
-      // and told to "rebase onto the base instead", which it had just done. Reproduced on real history:
-      // dev-loop/JBU-52 reset to its origin ref passes, and fails the moment it is rebased onto
-      // origin/main, naming f8398b0 — a commit that is already an ancestor of origin/main.
-      // The class still measures what this push PUBLISHES; subtracting the base is what makes that true
-      // for a rebased branch rather than only for a fresh one.
-      for (const c of parseLog(git(subtractPublished
-        ? ["log", "--merges", "-z", "--pretty=format:%H%n%B", range, "--not", baseRef!]
-        : ["log", "--merges", "-z", "--pretty=format:%H%n%B", range])))
-        mergeCommits.push({ sha: c.sha.slice(0, 7), subject: c.subject });
-    } catch { /* an unreadable range is already reported by `note`; this class adds nothing there */ }
-  }
+  const mergeCommits = mergeKnotCommits(git, parseLog, range, landingMode, baseRef, subtractPublished);
 
-  // The unpublished-landing class. Measured on jbu's main reflog, 2026-08-29: `3e51a06 @15:50:00
-  // merge dev-loop/JBU-11 FF` (landed, unpushed) followed by `2011a1c @15:51:52 reset: moving to
-  // origin/main` — a second lane aligning the shared checkout to origin the destructive way, which
-  // discarded the first lane's landing. It survived only because the same fire re-merged the same
-  // branch seconds later; any other pairing loses the commit. `git pull --ff-only` refuses on a
-  // diverged branch and the landing sequence never said what to do about that, so the agent
-  // improvised the one remedy that destroys work.
-  //
-  // These commits are what such a reset would take. Listing them immediately before the push that
-  // publishes them is the last point anything can say so, and the refusal line carries the rule.
-  const unpushedOnDefault: PushGuardMergeCommit[] = [];
-  if (hasRemote && br === defaultBranch && baseRef) {
-    try {
-      for (const c of parseLog(git(["log", "-z", "--pretty=format:%H%n%B", `${baseRef}..${br}`])))
-        unpushedOnDefault.push({ sha: c.sha.slice(0, 7), subject: c.subject });
-    } catch { /* an unreadable range is already carried by `note` */ }
-  }
+  const unpushedOnDefault = unpublishedLandingCommits(git, parseLog, hasRemote, br, defaultBranch, baseRef);
 
   let landingVerdict: DefaultBranchPushVerdict | undefined;
   if (range && br === defaultBranch) {
