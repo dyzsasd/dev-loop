@@ -33,6 +33,7 @@ import { breaker, formatBreakerMsg, providerOf, classifyFireError, producedNoWor
 import { codexUsageAdapter, claudeAdapter, opencodeAdapter, resolveAdapter, makeStdoutCapture, usageFromCapture } from "./fire-usage.ts";
 import { releaseClaimedTickets, type KillClass } from "./ticket-release.ts";
 import { lastFirePerAgent, seedSlotNextAt } from "./run-agents-seed.ts"; // LOOP-273: a restart must not be a cadence reset
+import { formatDuration } from "./format-duration.ts";
 import { rollingSpendUsd, ratePerMsFor, readFireRows, perFireDeadline, usdLabel, watchdogKindOf, DEFAULT_PER_FIRE_USD, type FireUsage, type WatchdogKind } from "./metrics.ts";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -454,13 +455,6 @@ function parseDuration(input: string): number {
   return ms;
 }
 
-function formatDuration(ms: number): string {
-  if (ms % (24 * 60 * 60_000) === 0) return `${ms / (24 * 60 * 60_000)}d`;
-  if (ms % (60 * 60_000) === 0) return `${ms / (60 * 60_000)}h`;
-  if (ms % 60_000 === 0) return `${ms / 60_000}m`;
-  if (ms % 1_000 === 0) return `${ms / 1_000}s`;
-  return `${ms}ms`;
-}
 
 function expandAgentSpec(parts: string[]): SchedKey[] {
   const out: SchedKey[] = [];

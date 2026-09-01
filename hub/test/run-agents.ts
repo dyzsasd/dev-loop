@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeSeenLineWindow, RETRY_LOOP_LINE_WINDOW } from "../src/seen-lines.ts";
 import { openDb, logEvent } from "../src/db.ts";
+import { formatDuration } from "../src/format-duration.ts";
 // NB: run-agents.ts must NOT be imported here — its main() runs unconditionally (LOOP-58), so an import
 // would launch the scheduler. recordFire's ledger/event writes are asserted via real-fire subprocess
 // harnesses (test/team-scheduler.ts, test/run-agents-live.ts).
@@ -1209,6 +1210,18 @@ try {
   ok(resolveAdapter("opencode") === opencodeAdapter, "LOOP-85: resolveAdapter('opencode') → opencodeAdapter (was null — now the structured lane, still keeps the tail-regex fallback)");
   ok(resolveAdapter("mystery") === null, "resolveAdapter(unknown lane) → null (text-mode, usage:null)");
 }
+
+// ── formatDuration: the derived-duration fall-through ─────────────────────────────────────────
+// Only reachable with a non-integer millisecond count. No configured cadence produces one; every
+// DERIVED duration can, and perFireDeadline does — the budget watchdog printed
+// `× 537322.2253925443ms` into the live run.log.
+ok(formatDuration(537_322.2253925443) === "9.0m",
+  `formatDuration: a derived deadline reads as a duration, not as 13 fractional digits (got ${formatDuration(537_322.2253925443)})`);
+ok(formatDuration(1_500.7) === "1.5s", `formatDuration: sub-minute non-integers read in seconds (got ${formatDuration(1_500.7)})`);
+ok(formatDuration(12.6) === "13ms", `formatDuration: sub-second non-integers round to whole ms (got ${formatDuration(12.6)})`);
+// The exact-unit branches are the common path and must be untouched by the above.
+ok(formatDuration(300_000) === "5m" && formatDuration(3_600_000) === "1h" && formatDuration(86_400_000) === "1d" && formatDuration(5_000) === "5s",
+  "formatDuration: clean divisors still render as exact whole units");
 
 console.log(fails === 0 ? "\nRUN_AGENTS_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
