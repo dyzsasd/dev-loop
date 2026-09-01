@@ -24,7 +24,11 @@ const ok = (c: boolean, m: string) => { console.log((c ? "✅ " : "❌ ") + m); 
 // characters. This suite's own fixtures are named devloop-quality-go-192-… / -fix-…, and they exist
 // legitimately while the suite runs (tmp-root.ts sweeps them at exit, after this arm has run), so a
 // startsWith filter would report the suite's own working directories as the leak.
-const goDirs = () => new Set(readdirSync(tmpdir()).filter((f) => /^devloop-quality-go-[A-Za-z0-9]{6}$/.test(f)));
+// BOTH producers. The first version matched only `devloop-quality-go-`, so the TS/JS coverage directory —
+// created a few lines from the Go one, in the same file, and leaked by three early exits — was invisible
+// to the arm that exists to catch exactly that. A leak guard that sees one of two producers reports "no
+// leak" while one leaks.
+const goDirs = () => new Set(readdirSync(tmpdir()).filter((f) => /^devloop-quality-(go-)?[A-Za-z0-9]{6}$/.test(f)));
 const goDirsAtStart = goDirs();
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -315,7 +319,7 @@ if (goOk) {
 }
 
 const goDirsLeaked = [...goDirs()].filter((d) => !goDirsAtStart.has(d));
-ok(goDirsLeaked.length === 0, `the Go coverage runs leave no temp directory behind (leaked: ${goDirsLeaked.join(", ") || "none"})`);
+ok(goDirsLeaked.length === 0, `neither coverage path leaves a temp directory behind (leaked: ${goDirsLeaked.join(", ") || "none"})`);
 
 console.log(fails === 0 ? "\nQUALITY_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
