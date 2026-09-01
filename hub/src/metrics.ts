@@ -514,7 +514,15 @@ export function ratePerMsBasis(rows: FireRow[], codingAgent: string | null | und
     // ratchet: it needs only the killed rows to reach half the window to pin the whole profile at $0 and
     // hand every fire the conservative fallback.
     if (wasWatchdogKilled(r)) continue;
-    if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
+    // The THIRD copy of the slip c255fc2 fixed — that commit said "two expressions, one slip" and was
+    // wrong about the count. Here it is worse than a NaN total: `median` sorts with `(a,b) => a-b`, so a
+    // NaN makes the comparator return NaN, which the spec treats as 0 — equal to everything — breaking
+    // transitivity and letting the sort scramble the FINITE samples around it. Measured over every
+    // insertion position in a 20-sample array: 10 of 21 return a finite but WRONG median, and only 1
+    // returns NaN. A NaN would at least be caught downstream by `m != null && m > 0`; a wrong number is
+    // returned with `measured: true` on it, which is exactly the "a model presented as a measurement"
+    // failure LOOP-445 is written above to prevent. It feeds perFireDeadline on every launch.
+    if (typeof r.usage?.costUsd === "number" && typeof r.durationMs === "number" && r.durationMs > 0)
       rates.push(r.usage.costUsd / r.durationMs);
   }
   const m = median(rates);
@@ -565,6 +573,11 @@ export function checkBudget(ws: Workspace): WsWarning[] {
         message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured over ${spanLabel} of ledger) with no cap${idleNote}; its busiest 24h billed $${peak24h.toFixed(2)}, and THAT is what the ceiling is compared against; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
     }
     const rolling = rollingSpendUsd(rows, 86_400_000, now);
+    // The nag branch above and budgetGateReason both refuse a non-finite total; this one did not, and
+    // `NaN > dailyUsd` is false, so doctor would have reported "no breach" for a spend it could not
+    // compute. Unreachable now that the three producers are guarded — kept so the next NaN source, if
+    // there is one, cannot slip through the one path that was left asymmetric.
+    if (!Number.isFinite(rolling)) return [];
     if (rolling > dailyUsd)
       return [{ code: "W47", path: "team.budget.dailyUsd",
         message: `budget BREACH — rolling 24h spend $${rolling.toFixed(2)} is over dailyUsd $${dailyUsd.toFixed(2)}; the scheduler is refusing launches until it drops below (raise the ceiling, or let the 24h window roll over)` }];
