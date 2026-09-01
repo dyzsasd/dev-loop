@@ -72,9 +72,39 @@ ok(tracked.length > 50, `fixture: git ls-files resolved the tracked suites (${tr
 // fixture string that QUOTES the old pattern — this file's own header does — is not read as a call.
 // Matching raw source would make the guard unmaintainable: every suite that documents the leak would
 // have to be exempted, and an exemption list is what stops a guard from guarding.
+// Keyed on the CALL, not on the argument expression. The first version matched
+// `mkdtempSync(join(tmpdir()` literally, which a rewrite of the same call slips past six ways — a
+// namespace import (`fs.mkdtempSync`), `path.join(...)`, string concatenation, a variable holding the
+// prefix, the async `mkdtemp`, a template literal. A guard that reads one spelling of a call reports
+// "clean" for the other six, which is worse than no guard: it looks like coverage.
+// The rule a suite has to follow is simply "get temp roots from tmpRoot", so the guard is now the same
+// sentence: no tracked suite calls mkdtemp at all. `codeOnly` keeps prose and fixture strings out — this
+// file's own header quotes the old pattern, and its AC2 fixture builds the forbidden call on purpose.
+const MKDTEMP_CALL = /\bmkdtemp(Sync)?\s*\(/;
 const direct = tracked.filter((f) => f !== "tmp-root.ts"
-  && /mkdtempSync\(\s*join\(\s*tmpdir\(\)/.test(codeOnly(readFileSync(join(here, f), "utf8"))));
-ok(direct.length === 0, `AC4: no tracked suite creates a temp root outside the helper (offenders: ${direct.join(", ") || "none"})`);
+  && MKDTEMP_CALL.test(codeOnly(readFileSync(join(here, f), "utf8"))));
+ok(direct.length === 0, `AC4: no tracked suite calls mkdtemp at all — temp roots come from the helper (offenders: ${direct.join(", ") || "none"})`);
+
+// …and the detector itself is checked against the spellings the literal one missed. Without this, a
+// later "simplification" back to a single literal would leave AC4 green and blind again.
+const SPELLINGS: [string, string][] = [
+  ["namespace import", 'const d = fs.mkdtempSync(join(tmpdir(), "dl-x-"));'],
+  ["qualified join", 'const d = mkdtempSync(path.join(os.tmpdir(), "dl-x-"));'],
+  ["string concat", 'const d = mkdtempSync(tmpdir() + "/dl-x-");'],
+  ["prefix in a variable", 'const p = join(tmpdir(), "dl-x-"); const d = mkdtempSync(p);'],
+  ["async form", 'const d = await mkdtemp(join(tmpdir(), "dl-x-"));'],
+  ["template literal", 'const d = mkdtempSync(`${tmpdir()}/dl-x-`);'],
+];
+const missed = SPELLINGS.filter(([, code]) => !MKDTEMP_CALL.test(code)).map(([name]) => name);
+ok(missed.length === 0, `AC4: the detector catches every spelling of the call, not one (missed: ${missed.join(", ") || "none"})`);
+// The literal it replaced, kept as the control: an arm claiming the new detector is BETTER has to show
+// the old one failing. Measured at 5 of 6, not 6 — the namespace-import spelling still matched, because
+// the pattern was unanchored and `fs.` is just a prefix in front of it. The review that surfaced this
+// counted six; five is the number the code gives.
+const oldDetector = /mkdtempSync\(\s*join\(\s*tmpdir\(\)/;
+const oldMissed = SPELLINGS.filter(([, code]) => !oldDetector.test(code)).map(([name]) => name);
+ok(oldMissed.length === 5 && !oldMissed.includes("namespace import"),
+  `…and the literal it replaced missed ${oldMissed.length} of ${SPELLINGS.length} — all but the namespace import, which an unanchored match caught by accident (missed: ${oldMissed.join(", ")})`);
 
 // AC5 — the helper is registered as a non-suite, or the runner counts it as a phantom passing test.
 const listed = JSON.parse(spawnSync("node", [join(here, "run-all.ts"), "--list"], { encoding: "utf8" }).stdout || "{}");
