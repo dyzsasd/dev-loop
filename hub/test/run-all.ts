@@ -2,11 +2,12 @@
 // collects pass/fail/crash, and exits non-zero when any suite did not pass.
 // Adding a new test file is automatically picked up; no manifest to edit.
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runningDaemonPids, DAEMON_ENTRY_PATTERN } from "./daemon-pids.ts"; // the ONE daemon-pid listing
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
+import { tmpRoot } from "./tmp-root.ts"; // the runner takes its own temp root through the same helper it enforces
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -69,8 +70,16 @@ const results: { file: string; status: Status }[] = [];
 // prints that the gate did not run rather than passing silently.
 const daemonsBefore = runningDaemonPids();
 
+// Where a suite reports the temp roots it took, so this runner can remove them even when the suite is
+// killed before its own exit hook runs. tmp-root.ts deliberately installs no signal handler (several
+// suites assert on signal delivery), which leaves the SIGKILL path — this ceiling's own kill signal —
+// with no in-suite cleanup at all.
+const manifestDir = tmpRoot("dl-runner-manifest-");
+
 for (const file of suites) {
-  const env = { ...scrubFireEnv(), ...(SUITE_ENV[file] ?? {}) };
+  const manifest = join(manifestDir, `${file}.roots`);
+  writeFileSync(manifest, "");
+  const env = { ...scrubFireEnv(), DEVLOOP_TEST_TMP_MANIFEST: manifest, ...(SUITE_ENV[file] ?? {}) };
   const res = spawnSync("node", [join(here, file)], {
     env,
     // stdout: inherit so test output streams in real-time
@@ -107,8 +116,20 @@ for (const file of suites) {
     status = "fail";
   }
 
+  // Drain the manifest. After a normal exit the suite already swept, so every path is gone and this is a
+  // no-op; what survives is what the suite could not remove. Report it — the residue is the symptom, and
+  // silently accumulating it is how 3264 directories and 1.3 GB went unnoticed for four days.
+  const stranded = readFileSync(manifest, "utf8").split("\n").filter((d) => d && existsSync(d));
+  for (const dir of stranded) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort — cleanup never fails a run */ }
+  }
+  if (stranded.length > 0) {
+    process.stderr.write(`\n🧹 ${file} ended without sweeping ${stranded.length} temp root(s); the runner removed them.\n`);
+  }
+
   results.push({ file, status });
 }
+rmSync(manifestDir, { recursive: true, force: true }); // tmpRoot sweeps it at exit too; this keeps the run tidy meanwhile
 
 const passed = results.filter((r) => r.status === "pass").length;
 const failed = results.filter((r) => r.status === "fail").length;

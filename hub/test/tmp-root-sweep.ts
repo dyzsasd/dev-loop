@@ -5,12 +5,13 @@
 // 3264 directories and 1.3 GB over four days on the maintainer's machine, the oldest three days old.
 // Every suite passed the whole time. The runner has no view of what a suite leaves on disk — the same
 // class of blind spot as a fire's leaked background process (fire-group-reap.ts).
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpRoot } from "./tmp-root.ts";
 import { codeOnly } from "./code-only.ts";
+import { scrubFireEnv } from "./env-scrub.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let fails = 0;
@@ -115,6 +116,39 @@ ok(!(listed.discovered ?? []).includes("tmp-root.ts"), "AC5: …so the runner do
 // $TMPDIR with it; this pins the blast radius to the handed-out directories.
 const sibling = tmpRoot("dl-sweep-sibling-");
 ok(existsSync(sibling) && readdirSync(stage).length > 0, "AC6: a second tree and the staging tree coexist — the sweep is per-directory, not a parent wipe");
+
+
+// ── A killed suite cannot sweep, so the runner must ───────────────────────────────────────────────
+// tmp-root.ts installs no signal handler on purpose (several suites assert on signal delivery), which
+// leaves the one signal the runner itself sends — the hang ceiling's SIGKILL — with no in-suite cleanup.
+// Six trees from six different suites were found surviving a day of local runs. run-all now hands each
+// suite a manifest path and drains it afterwards. Measured end to end: a real run-all, over a real
+// hanging suite, killed by a real (shortened) ceiling.
+{
+  const dir = tmpRoot("dl-runner-drain-");
+  for (const f of ["run-all.ts", "tmp-root.ts", "env-scrub.ts", "daemon-pids.ts"]) {
+    copyFileSync(join(here, f), join(dir, f));
+  }
+  // Takes a temp root, announces it, then never returns — the shape the ceiling exists to kill.
+  writeFileSync(join(dir, "zz-hang.ts"), [
+    `import { tmpRoot } from "./tmp-root.ts";`,
+    `const t = tmpRoot("dl-drain-victim-");`,
+    `console.log("VICTIM_ROOT=" + t);`,
+    `setInterval(() => {}, 1000);`,
+  ].join("\n"));
+
+  const run = spawnSync("node", [join(dir, "run-all.ts")], {
+    env: { ...scrubFireEnv(), DEVLOOP_SUITE_TIMEOUT_MS: "4000" },
+    encoding: "utf8", timeout: 120_000,
+  });
+  const out = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+  const victim = /VICTIM_ROOT=(\S+)/.exec(out)?.[1] ?? "";
+
+  ok(victim !== "", `AC7 fixture: the hanging suite took a temp root and named it (${victim || "not announced"})`);
+  ok(/exceeded 4s and was killed/.test(out), `AC7 fixture: the ceiling actually SIGKILLed it, so no in-suite hook ran`);
+  ok(victim !== "" && !existsSync(victim), `AC7: the runner removed the tree the killed suite could not (${victim})`);
+  ok(/🧹 zz-hang\.ts ended without sweeping 1 temp root/.test(out), `AC7: …and said so, instead of accumulating it silently`);
+}
 
 console.log(fails === 0 ? "\ntmp-root-sweep: OK" : `\ntmp-root-sweep: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

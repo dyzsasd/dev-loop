@@ -6,7 +6,7 @@
 // and exit code; then (AC4) it asserts run-all.ts's REAL discovery is complete against
 // `git ls-files 'hub/test/*.ts'`, the check that replaces the deleted scanner.
 import { spawnSync, execFileSync } from "node:child_process";
-import { writeFileSync, copyFileSync, rmSync } from "node:fs";
+import { writeFileSync, copyFileSync, readFileSync, rmSync } from "node:fs";
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,16 +35,28 @@ const ok = (cond: boolean, m: string): void => { console.log((cond ? "✅ " : "�
 function runSynthetic(files: Record<string, string>): { status: number | null; stdout: string; stderr: string } {
   const dir = tmpRoot("run-all-runner-");
   try {
+    const runnerSrc = readFileSync(RUNNER, "utf8");
     copyFileSync(RUNNER, join(dir, "run-all.ts"));
-    // run-all.ts's imports, carried with the copy. env-scrub.ts (LOOP-193) is the ONE fire-marker
-    // union; daemon-pids.ts is the ONE daemon-process listing, which the runner's leaked-daemon gate
-    // reads. Both are leaves — copying them is what keeps run-all.ts free to import the single
-    // definition of a thing instead of restating it.
-    for (const leaf of ["env-scrub.ts", "daemon-pids.ts"]) copyFileSync(join(dirname(RUNNER), leaf), join(dir, leaf));
+    // run-all.ts's local imports, carried with the copy — DERIVED from the file, not restated here.
+    // They are leaves by design (env-scrub.ts is the ONE fire-marker union, daemon-pids.ts the ONE
+    // daemon-process listing), which is what keeps run-all.ts free to import the single definition of
+    // a thing instead of inlining it. The list used to be hardcoded, so adding one import to run-all.ts
+    // left the copy unable to resolve it: node exited before the first line of output and all twelve
+    // arms failed at once, none of them naming a missing module. Reading the imports keeps the fixture
+    // correct by construction; the ERR_MODULE_NOT_FOUND guard below names the cause if it ever is not.
+    for (const m of runnerSrc.matchAll(/\bfrom\s+"\.\/([\w.-]+\.ts)"/g)) {
+      copyFileSync(join(dirname(RUNNER), m[1]), join(dir, m[1]));
+    }
     for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
     const env = { ...scrubFireEnv() };
     delete env.DEVLOOP_CHANNEL_DRYRUN; delete env.DEVLOOP_CHANNEL_TOKEN; delete env.DEVLOOP_MIRROR_DRYRUN;
     const r = spawnSync(NODE, [join(dir, "run-all.ts")], { encoding: "utf8", timeout: 30_000, env });
+    const both = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    // A fixture that cannot even load is not a finding about the runner's behaviour. Say so once, here,
+    // instead of letting every downstream arm report its own assertion against empty output.
+    const unresolved = /Cannot find (?:module|package) '([^']+)'/.exec(both)?.[1]
+      ?? (/ERR_MODULE_NOT_FOUND/.test(both) ? "an import node did not name" : "");
+    ok(unresolved === "", `fixture: the copied run-all.ts resolves its imports${unresolved && ` — missing ${unresolved}`}`);
     return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   } finally {
     rmSync(dir, { recursive: true, force: true });
