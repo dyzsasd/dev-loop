@@ -1771,9 +1771,18 @@ async function runAgent(opts: Options, cfg: ProjectsConfig | null, agent: SchedK
         // as "this fire spent nothing", the exact conflation between a measured zero and an unmeasured one
         // that this ticket exists to remove. One helper, so the two can never drift apart again.
         const spentLabel = spentNow === null ? "not yet observable on this lane" : `$${usdLabel(spentNow)}`;
-        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGTERM (SIGKILL in 10s)`);
-        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGTERM =====\n`);
-        killGroup("SIGTERM");
+        // SIGINT, not SIGTERM. The comment above explains the missing spend by claude's buffering — true, but
+        // the buffer is flushed on the way out for one of these signals and not the other. Measured on this
+        // machine: SIGTERM to the group leaves 0 bytes of stdout and no terminal JSON; SIGINT — to the group
+        // or to the child, the direction does not matter — leaves the full object with its usage intact. The
+        // production ledger says the same thing without a probe: every one of the 7 SIGTERM budget kills has
+        // `usage: null`, and every one of the 17 fires the operator's SIGINT stop ended carries a real
+        // provider-measured cost. A stop-loss that destroys the receipt for the spend it is stopping is the
+        // one kill that most needs to be accounted for. The 10s SIGKILL escalation is unchanged, so a child
+        // that ignores SIGINT still dies on schedule.
+        console.error(`[${agent}] fire estimated over budget perFireUsd $${ceilingLabel} (~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}) — SIGINT (SIGKILL in 10s)`);
+        log.write(`\n===== budget perFireUsd $${ceilingLabel} reached (est ~$${estRatePerHr.toFixed(2)}/hr × ${formatDuration(budgetMs)}; spend at kill: ${spentLabel}): SIGINT =====\n`);
+        killGroup("SIGINT");
         killTimer = setTimeout(() => { if (activeChildren.has(child)) killGroup("SIGKILL"); }, 10_000);
         killTimer.unref?.();
       }, budgetMs);

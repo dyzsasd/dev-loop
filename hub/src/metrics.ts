@@ -373,16 +373,28 @@ export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number
   const cutoff = nowMs - windowMs;                                   // LOOP-314: closed era, both bounds
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
 
-  // Collect per-(codingAgent, model) rates from priced rows for median derivation
+  // Collect per-(codingAgent, model) rates from priced rows for median derivation. A watchdog-killed row is
+  // excluded for the reason ratePerMsBasis excludes it (LOOP-445): a truncated fire's $/ms is not the lane's
+  // rate. Today those rows carry no usage at all so the `usage != null` test already dropped them; stating it
+  // keeps that true once a killed fire starts reporting one, which is what the SIGINT change below arranges.
   const ratesByProfile: Record<string, number[]> = {};
   for (const r of inWindow) {
+    if (wasWatchdogKilled(r)) continue;
     if (r.usage != null && r.usage.costUsd !== null && typeof r.durationMs === "number" && r.durationMs > 0)
       (ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
   }
 
   let total = 0;
   for (const r of inWindow) {
-    if (r.usage != null && r.usage.costUsd !== null) {
+    // A watchdog-killed fire reporting $0 is MISSING DATA, not a $0 fire — it ran long enough to reach a
+    // deadline derived from a dollar ceiling, so it cannot have cost nothing. The receipt a killed fire
+    // returns covers only its COMPLETED turns, so a kill landing inside the first turn yields exactly this
+    // shape. Counting it as measured would make the total FALL below the estimate it replaced, which is the
+    // one way this change could make the accounting worse than the null it fixes. A genuine measured $0 —
+    // the CLI refusing at a session limit before billing, 17 rows on this board — is not watchdog-killed and
+    // still counts as the $0 it really was. (spendCurvePoints already names this shape for its own reason.)
+    const missingReceipt = wasWatchdogKilled(r) && r.usage?.costUsd === 0;
+    if (r.usage != null && r.usage.costUsd !== null && !missingReceipt) {
       total += r.usage.costUsd;
     } else {
       // Unpriced or killed fire: estimate duration × ratePerMs, never $0

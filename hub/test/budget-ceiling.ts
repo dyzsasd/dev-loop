@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, chmod
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { doctorWorkspace } from "../src/doctor.ts";
+import { rollingSpendUsd, type FireRow } from "../src/metrics.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -211,6 +212,23 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
     "AC4: the kill reason names the perFireUsd ceiling (a sub-cent ceiling is NOT printed as $0.00)");
   ok(!/fire exceeded/.test(killed.out) && !/looks WEDGED/.test(killed.out),
     "AC4: the reason is DISTINCT — neither the wall-timeout ('fire exceeded') nor the stall wording");
+
+  // The SIGNAL the budget watchdog opens with decides whether the spend it just stopped is ever accounted
+  // for. claude's `--output-format json` buffers its terminal object until exit and flushes it for SIGINT
+  // but not for SIGTERM: on the live board all 7 SIGTERM budget kills carry `usage: null`, while all 17
+  // fires the operator's SIGINT stop ended carry a real provider-measured cost. The 10s SIGKILL escalation
+  // is unchanged, so a child that ignores SIGINT still dies on schedule.
+  ok(/— SIGINT \(SIGKILL in 10s\)/.test(killed.out) && !/— SIGTERM/.test(killed.out),
+    `AC4: the budget kill opens with SIGINT, the signal that leaves the receipt behind${/— SIGTERM/.test(killed.out) ? " [regressed: still SIGTERM]" : ""}`);
+
+  // Wording is not delivery. This stub traps INT and leaves a marker, so the arm fails if the signal that
+  // actually reaches the child is anything else.
+  const marker = join(tmp, "sigint-received");
+  const trapBin = join(tmp, "trap-claude.sh");
+  writeFileSync(trapBin, `#!/bin/sh\ntrap 'echo caught > "${marker}"; exit 0' INT\necho 'fire started'\nsleep 60\n`);
+  chmodSync(trapBin, 0o755);
+  runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: trapBin });
+  ok(existsSync(marker), "AC4: …and the child actually receives INT — the fire's own trap ran");
   // LOOP-445 — this stub emits plain text, so no usage is parseable and the fire's spend is UNKNOWN. A kill
   // on an unknown spend is a MODELED kill: "budget-deadline". It used to read "budget-per-fire", which
   // asserted a breach the run never measured. The measured-breach path is asserted below and is what keeps
@@ -266,6 +284,37 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   const wedgedRow = lastRow();
   ok(wedgedRow.errorClass === "stalled",
     `AC2: a 0-token fire killed by the budget deadline is classified "stalled" (got ${JSON.stringify(wedgedRow.errorClass)})`);
+
+  // ── a killed fire's $0 receipt is missing data, not a $0 fire ───────────────────────────────
+  // The budget watchdog now sends SIGINT (run-agents.ts), which lets the CLI flush its terminal JSON on
+  // the way out, so a killed fire finally reports usage at all. That receipt covers only COMPLETED turns,
+  // so a kill landing inside the first turn returns costUsd 0 — and counting that as measured would drop
+  // the total BELOW the estimate it replaced. That is the one way this change could make the accounting
+  // worse than the null it fixes.
+  {
+    const t = (ageMin: number) => new Date(Date.now() - ageMin * 60_000).toISOString();
+    const usage = (costUsd: number) => ({ source: "provider" as const, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd, currency: "USD" });
+    const base = { agent: "qa", project: "alpha", codingAgent: "claude", model: "sonnet", exitCode: 0 };
+    const priced = { ...base, ts: t(50), durationMs: 600_000, usage: usage(6) } as FireRow;
+
+    const withKilled = rollingSpendUsd(
+      [priced, { ...base, ts: t(30), durationMs: 600_000, exitCode: 126, watchdog: "budget", usage: usage(0) } as FireRow],
+      86_400_000, Date.now());
+    ok(withKilled > 6.5,
+      `a watchdog-killed fire reporting $0 is ESTIMATED, not read as a $0 fire (total $${withKilled.toFixed(2)})`);
+    // …and estimated at the SURVIVING fires' rate: a truncated fire's own $/ms must not enter the median it
+    // is measured against (the reason ratePerMsBasis excludes killed rows, LOOP-445).
+    ok(Math.abs(withKilled - 12) < 0.01,
+      `…at the priced row's rate — $6 measured + $6 for an equal-duration kill (got $${withKilled.toFixed(2)})`);
+
+    // CONTROL: a genuine measured $0 — the CLI refusing at a session limit before billing, 17 such rows on
+    // the live board — is not watchdog-killed and still counts as the $0 it really was.
+    const withRealZero = rollingSpendUsd(
+      [priced, { ...base, ts: t(30), durationMs: 4_000, exitCode: 1, errorClass: "session-limit", usage: usage(0) } as FireRow],
+      86_400_000, Date.now());
+    ok(Math.abs(withRealZero - 6) < 0.01,
+      `a measured $0 no watchdog killed still counts as $0 — not every zero is missing data (got $${withRealZero.toFixed(2)})`);
+  }
 
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
