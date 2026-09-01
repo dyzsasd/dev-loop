@@ -32,8 +32,11 @@ an existing workspace changes behaviour with no config edit of its own.
   an empty board. Scripts that depended on exit 0 need updating.
 - **Worktree reap measures merged-ness against the local base** when a repo has no remote, so worktrees it
   previously kept are now cleaned.
-- **W28's daily burn rate is divided by the ledger's actual span**, not by a fixed 7 — the reported number
+- **The budget warning's daily burn rate is divided by the ledger's actual span**, not by a fixed 7 — the reported number
   changes for any workspace whose ledger is shorter or longer than a week.
+- **The budget warning moved from W28 to W47.** W28 is registered to doctor's "daemon running old code
+  (version skew)", a gating failure; the budget nag was a warning squatting on it from another file.
+  Anything grepping doctor output for a W28 budget line needs the new code.
 
 ### Job-scoped PoC — constitution + pm playbooks
 
@@ -389,6 +392,18 @@ an existing workspace changes behaviour with no config edit of its own.
 - **A config edit reaches the next fire** (`a60e746`) — hot reload now refreshes the launch profile and the
   per-fire ceiling, not just the cadence.
 
+- **The watchdogs no longer destroy the receipt for the spend they stop** (`ef7259f`, `6816695`). All three
+  — budget, wall-timeout, stall/retry-loop — opened with SIGTERM to the process group. claude's
+  `--output-format json` buffers its terminal object until exit and flushes it for SIGINT, not for SIGTERM,
+  so every watchdog kill guaranteed `usage: null` for the fire it had just stopped. On the live board all 7
+  SIGTERM budget kills carry no receipt while all 17 fires the operator's SIGINT stop ended carry a real
+  measured cost. They now signal the DIRECT CHILD with SIGINT — the group would also reach the git/tsx/npm
+  helpers the agent checkpoints through (LOOP-23) — and the 10s escalation to a group SIGKILL is unchanged,
+  so a child that ignores SIGINT dies on the same deadline. A killed fire's receipt is a lower bound, so the
+  spend accounting counts such a row as max(receipt, model).
+- **`daemon up` names the difference that made it restart** (`fed589d`). It printed `(v1.15.1 < v1.15.1)` —
+  false on its face — when the version matched and only the build commit differed.
+
 ### State locality, config writes, and logs
 
 - **A state path comes from a workspace, never from `~/.dev-loop`** (`5592825`, `880133d`, `11ac52f`,
@@ -404,6 +419,10 @@ an existing workspace changes behaviour with no config edit of its own.
 - **The fire ledger's rotation carries its file mode across the rename** (`ae4e032`).
 - **The Go coverage profile no longer leaks a temp directory per quality run** (`09e1726`). Removal hangs off
   process exit rather than a `finally`, because the threshold gate exits from inside the coverage path.
+
+- **A derived duration no longer prints 13 fractional digits of a millisecond** (`02b709c`). The budget
+  watchdog wrote `× 537322.2253925443ms` to run.log: only a non-integer count reaches that branch, which no
+  configured cadence produces and every derived deadline can.
 
 ### Landing, worktrees, and push safety
 
@@ -421,7 +440,7 @@ an existing workspace changes behaviour with no config edit of its own.
   lane's report counts wherever the runtime actually writes it (`4cc3ee5`) — ops keeps its state in the
   project dir and writes its report beside it.
 - **W46 treats a live `Blocked-by` edge as a routable signal** (`9d39eca`), not an unroutable block.
-- **W28 divides by the ledger's span** (`14b78f1`).
+- **The budget warning divides by the ledger's span** (`14b78f1`), and moved off W28 — see below.
 - **E20 judges a legacy `hub.db` by its row counts** (`e6f7a08`).
 - **"metered" means the same thing in `status` and `metrics`** (`e640404`): the two now report both a metered
   and a priced fire count instead of one number that meant different things in each place.
@@ -432,6 +451,13 @@ an existing workspace changes behaviour with no config edit of its own.
 - **One cadence snapshot generation per interval** (`ea9ba2d`), not one per daemon, and a successful cadence
   tick leaves a line (`f6e1c9b`) — previously neither success nor failure was logged, so a missed snapshot
   could not be diagnosed after the fact.
+
+- **The budget line prints what the gate compares, under a code that means it** (`fcb00f2`). The figure was
+  total spend ÷ how long the ledger has EXISTED, so with the loop stopped it fell every hour without any
+  change in spending — one frozen $345.91 printed $487/day, then $169, then $112 over three days. The
+  lifetime average is kept (dividing by the ledger's own age is deliberate for a young ledger) and the line
+  now also carries the peak 24h ROLLING total, which is the quantity `budgetGateReason` actually compares,
+  plus how long the loop has been idle when that dilutes the average.
 
 ### Board contracts and prompts
 
@@ -452,6 +478,12 @@ an existing workspace changes behaviour with no config edit of its own.
 - **pm-groom stops re-scanning a Backlog it cannot promote** (`030e7e4`).
 - **A claimed ticket has no inbound channel** (`303347f`) — re-read before the hand-off.
 
+- **`ticket update --blocked-by`** (`21f2674`) — a block discovered AFTER filing had no verb. `create` had
+  one and `update` could only retire an edge, so recording a new block meant a hand-typed marker comment
+  (silently dropped by the parser unless line-anchored) plus a `--labels` call that replaces the whole set.
+  Both failure modes were on the live board. The flag writes the marker and unions `blocked` onto the
+  ticket's CURRENT labels, refusing rather than writing a half-edge if that read fails.
+
 ### Test-suite hygiene
 
 - **One temp-root factory, swept at process exit** (`bd30c68`, `6dbeae1`). Suites created their workspaces
@@ -463,6 +495,13 @@ an existing workspace changes behaviour with no config edit of its own.
   different `Date.now()` calls an hour apart, so between 00:00 and 01:00 UTC they landed on different days.
 - **`run-lock-race` runs in 4 s instead of 303 s** (`9d19f12`), so the runner stops killing it as a hang.
 
+
+- **The lifecycle-race suite sweeps the loser of its own bind race** (`6161997`). It stopped the runfile
+  daemon and swept port listeners — between them the winner and an orphaned winner, never a loser, which is
+  neither. The runner's leaked-daemon gate then failed the run from outside while every trial reported green.
+- **`docs/RELEASING.md` documents the source-integrity gate** (`b4339ed`), which only the release workflow
+  runs, and how to invoke it the way CI does — a maintainer clone scans stale remote-tracking refs CI never
+  fetches and reports a red CI does not have.
 
 ## 1.15.1
 

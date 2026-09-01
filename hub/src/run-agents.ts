@@ -2334,9 +2334,17 @@ async function main(): Promise<void> {
   // group (`-child.pid`) would deliver SIGINT to every grandchild at once — the git/tsx/npm helpers
   // the agent spawns to checkpoint — turning a graceful drain into a forced reap and defeating the
   // checkpoint intent LOOP-10 made an explicit non-goal for auto-release. Forced group reaping stays
-  // confined to the fire-timeout / stall watchdog (killGroup, per fire), which fire precisely when the
-  // agent is presumed wedged and its cleanup is moot. (A zombie descendant that outlives a graceful
-  // stop is LOOP-19's concern — runner-side ticket release — not a reason to make this signal forceful.)
+  // (A zombie descendant that outlives a graceful stop is LOOP-19's concern — runner-side ticket release —
+  // not a reason to make this signal forceful.)
+  //
+  // This paragraph used to end "forced group reaping stays confined to the fire-timeout / stall watchdog
+  // (killGroup, per fire)". That sentence is no longer true in either direction and is corrected rather
+  // than deleted, because the REASONING above still governs and only its scope statement moved:
+  //   * the watchdogs no longer open on the group either — all three now signal the direct child for this
+  //     same reason, and because SIGTERM to the group destroys the fire's usage receipt;
+  //   * group reaping is no longer confined to them — reapGroup (post-exit) sweeps EVERY fire's group,
+  //     including one this graceful path ended, so a leaked descendant is collected without the graceful
+  //     signal ever having been made forceful. The two ideas turned out to be separable.
   const interrupt = () => {
     const first = !stopping;
     schedulerInterrupted = true; // LOOP-155: from here on, an exit-0 fire is OUR kill, not its failure

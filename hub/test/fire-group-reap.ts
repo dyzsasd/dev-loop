@@ -48,6 +48,7 @@ const settle = (pid: string, wantAlive: boolean, budgetMs = 5000) => {
 
 const leakFile = join(tmp, "leaked.pid");
 const daemonFile = join(tmp, "daemon.pid");
+const stubbornFile = join(tmp, "stubborn.pid");
 
 // The fire exits 0 — no watchdog, no signal, nothing that used to reap the group. It leaves two
 // background processes behind:
@@ -59,6 +60,8 @@ const bin = join(tmp, "leaky-fire.sh");
 writeFileSync(bin, `#!/bin/sh
 sh -c 'sleep 120 >/dev/null 2>&1 & echo $! > "${leakFile}"'
 node -e 'const c=require("child_process").spawn("sleep",["120"],{detached:true,stdio:"ignore"});require("fs").writeFileSync("${daemonFile}",String(c.pid));c.unref()'
+node -e 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000)' >/dev/null 2>&1 &
+echo $! > "${stubbornFile}"
 echo "fire body done"
 exit 0
 `);
@@ -80,6 +83,21 @@ ok(leaked !== "" && !settle(leaked, false), `AC1: a process left in the fire's g
 // is leaking, and which lane, or the leak is only ever found by reading `lsof` two days later.
 ok(/reaping processes left in the fire's group/.test(runOut) && /\bpm\b/.test(runOut),
   `AC2: the reap is announced on the run log, naming the lane${/reaping/.test(runOut) ? "" : `\n${runOut.slice(-600)}`}`);
+
+// GUARD (passes before and after any change here) — it covers the ESCALATION, which had no coverage at
+// all: the original stand-in was a plain `sleep`, which dies on reapGroup's first SIGTERM, so AC1 never
+// exercised the SIGKILL that follows. This stand-in installs a no-op SIGTERM handler, so only the
+// escalation can end it.
+//
+// It was written expecting to FAIL first. A review argued that the 2 s SIGKILL timer is unref'd and
+// `--once` calls process.exit() as soon as the fire resolves, so the escalation could never be reached in
+// that mode. Measured instead of assumed: this arm passes on the unmodified code, i.e. the scheduler does
+// outlive the timer here and the escalation does fire. The gap is real in the code path and did not
+// reproduce in behaviour, so nothing was changed for it — the arm stays as the coverage that would catch
+// it if a faster exit path ever did.
+const stubborn = existsSync(stubbornFile) ? readFileSync(stubbornFile, "utf8").trim() : "";
+ok(stubborn !== "", "fixture: the fire recorded the pid of a group member that IGNORES SIGTERM");
+ok(stubborn !== "" && !settle(stubborn, false), `AC6: the escalation ends a group member that IGNORES SIGTERM — only SIGKILL can (pid ${stubborn})`);
 
 // CONTRACT — passes before and after; it pins the escape hatch, so the fix cannot be "kill everything
 // the fire ever started". A supervised service must survive its fire.

@@ -3,7 +3,7 @@
 // A plain writeFileSync opens with O_TRUNC: the file is emptied first and refilled after, so a reader
 // that lands in that window sees a truncated or zero-length config. A half-written dev-loop.json is
 // unloadable, and run-agents' configParses() gate then pauses every fire until someone restores it from
-// git — from a verb (`dev-loop team set`) that doctor's own W28 remediation tells the operator to run.
+// git — from a verb (`dev-loop team set`) that doctor's own W47 remediation tells the operator to run.
 // destructive-guard.ts already had writeConfigAtomic for exactly this reason, with the reasoning in its
 // comment; the three writers of the file did not use it.
 //
