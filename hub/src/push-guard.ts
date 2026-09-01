@@ -27,7 +27,7 @@ import { openDb } from "./db.ts";
 import { tryResolveHubDbPath } from "./workspace.ts";
 import { approvalsEnforced, loadWorkspace, inferProjectForRepo } from "./team-config.ts";
 import { workspaceRootForRepoDir, workspaceForRepoDir, resolveDefaultBranchForRepoDir, registeredRepoRefFor } from "./repo-lock-path.ts";
-import { defaultBranchPushVerdict, defaultBranchPushRefusalLine, docLandAllowlist, strategyDocRelPath, type DefaultBranchPushVerdict } from "./default-branch-push.ts";
+import { defaultBranchPushVerdict, defaultBranchPushRefusalLine, mergeCommitRefusalLine, docLandAllowlist, strategyDocRelPath, type DefaultBranchPushVerdict } from "./default-branch-push.ts";
 import { listApprovals, consultApproval, actionClasses } from "./approvals.ts"; // LOOP-394 — the record this guard consults
 
 export interface PushGuardFinding { sha: string; subject: string; ticket: string; state: string }
@@ -672,7 +672,17 @@ export function pushGuard(repoDir: string, branch: string | undefined, dbPath: s
   const mergeCommits: PushGuardMergeCommit[] = [];
   if (range && landingMode === "direct") {
     try {
-      for (const c of parseLog(git(["log", "--merges", "-z", "--pretty=format:%H%n%B", range])))
+      // …and subtracted the same way scanCommits is, for the reason stated above it: on a TRACKED branch
+      // `range` is upstream-relative, so a rebase drags the base's own history through it. Without the
+      // subtraction a branch that rebased onto a base CONTAINING a merge knot was refused for that knot —
+      // and told to "rebase onto the base instead", which it had just done. Reproduced on real history:
+      // dev-loop/JBU-52 reset to its origin ref passes, and fails the moment it is rebased onto
+      // origin/main, naming f8398b0 — a commit that is already an ancestor of origin/main.
+      // The class still measures what this push PUBLISHES; subtracting the base is what makes that true
+      // for a rebased branch rather than only for a fresh one.
+      for (const c of parseLog(git(subtractPublished
+        ? ["log", "--merges", "-z", "--pretty=format:%H%n%B", range, "--not", baseRef!]
+        : ["log", "--merges", "-z", "--pretty=format:%H%n%B", range])))
         mergeCommits.push({ sha: c.sha.slice(0, 7), subject: c.subject });
     } catch { /* an unreadable range is already reported by `note`; this class adds nothing there */ }
   }
@@ -819,7 +829,7 @@ Usage: dev-loop push-guard [--repo <dir>] [--branch <b>] [--default-branch <b>] 
     if (r.unpushedOnDefault?.length)
       console.log(`•  ${r.unpushedOnDefault.length} landed commit(s) on ${defaultBranch} exist ONLY in this checkout (${r.unpushedOnDefault.map((c) => c.sha).join(", ")}) — publish them with this push. NEVER \`git reset --hard origin/${defaultBranch}\` or \`git checkout -B ${defaultBranch} origin/${defaultBranch}\` to align a shared checkout: that discards every unpushed landing, including another lane's. If \`git pull --ff-only\` refuses, the branch diverged — push what you have (\`dev-loop push\`), then retry the landing.`);
     for (const m of r.mergeCommits ?? [])
-      console.log(`⛔ merge commit: ${m.sha} "${m.subject}" — a direct landing fast-forwards ${defaultBranch} onto this branch, so this would put a merge commit on ${defaultBranch}. Rebase onto the base instead (§7: rebase, then land --ff-only), then re-run this guard.`);
+      console.log(`⛔ ${mergeCommitRefusalLine(m, defaultBranch)}`);
     // Names the ref that was actually missing. A repo with no remote has no `origin/main` to be
     // missing — saying so sent an operator looking for a remote that was never configured.
     if (r.unresolvedDefaultBranch) console.log(`⛔ push-guard: no base ref for '${r.unresolvedDefaultBranch}' (neither origin/${r.unresolvedDefaultBranch} nor a local ${r.unresolvedDefaultBranch}) — passenger detection did NOT run (a safety gate must not pass silently)`);

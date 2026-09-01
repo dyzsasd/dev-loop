@@ -124,5 +124,60 @@ try {
   rmSync(ROOT, { recursive: true, force: true });
 }
 
+// ── the merge class: enforced by push, and not raised for a knot already on the base ──────────
+// Two defects in the class LOOP-567 added, both measured on fixtures before the fix.
+//   * `dev-loop push` never enforced it. push-guard --strict exits 1 while push exited 0 and pushed the
+//     merge commit — jbu's own main carries one (f8398b0) that reached it through this gap. holdsFrom
+//     enumerated five classes and mergeCommits had no reader outside push-guard's own CLI.
+//   * The scan used the bare range, and on a TRACKED branch that range is upstream-relative, so a rebase
+//     drags the base's history through it. A branch rebased onto a base CONTAINING a knot was refused for
+//     that knot and told to "rebase onto the base instead" — which it had just done. scanCommits already
+//     subtracts the base for exactly this reason; the merge scan now does too.
+{
+  const g2 = (dir: string, args: string[]): string =>
+    execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const root = tmpRoot("dl-mergeclass-");
+  const bare = join(root, "remote.git");
+  const work = join(root, "work");
+  mkdirSync(bare, { recursive: true }); mkdirSync(work, { recursive: true });
+  execFileSync("git", ["init", "-q", "--bare", bare]);
+  execFileSync("git", ["init", "-q", work]);
+  writeFileSync(join(work, "f"), "base\n");
+  g2(work, ["add", "f"]); g2(work, ["commit", "-qm", "base"]);
+  g2(work, ["remote", "add", "origin", bare]); g2(work, ["push", "-q", "origin", "HEAD:main"]);
+
+  // (a) TRUE positive: the branch merges the base INTO itself, so a direct landing would carry the knot.
+  g2(work, ["checkout", "-qb", "dev-loop/EXP-1"]);
+  writeFileSync(join(work, "g"), "x\n"); g2(work, ["add", "g"]); g2(work, ["commit", "-qm", "EXP-1 work"]);
+  g2(work, ["checkout", "-q", "main"]);
+  writeFileSync(join(work, "h"), "y\n"); g2(work, ["add", "h"]); g2(work, ["commit", "-qm", "other"]);
+  g2(work, ["push", "-q", "origin", "main"]);
+  g2(work, ["checkout", "-q", "dev-loop/EXP-1"]);
+  g2(work, ["merge", "-q", "--no-ff", "main", "-m", "Merge branch 'main' into dev-loop/EXP-1"]);
+  const guarded = pushGuard(work, "dev-loop/EXP-1", undefined, "main", {});
+  ok((guarded.mergeCommits ?? []).length === 1,
+    `merge class: the guard still sees a knot the branch merged in (got ${(guarded.mergeCommits ?? []).length})`);
+  const pushRes = spawnSync("node", [join(hubRoot, "src", "push.ts"), "--repo", work, "--default-branch", "main", "--dry-run"],
+    { encoding: "utf8", env: scrubFireEnv(), stdio: ["ignore", "pipe", "pipe"] });
+  ok(pushRes.status !== 0 && /merge commit/.test(`${pushRes.stdout}${pushRes.stderr}`),
+    `merge class: \`dev-loop push\` HOLDS on it too — the verb enforces the class its help promises (exit ${pushRes.status})`);
+
+  // (b) FALSE positive: the base itself gains a knot, and the branch rebases onto it. Nothing this push
+  //     publishes is a merge, so the class must be silent — otherwise its remedy is unreachable.
+  g2(work, ["checkout", "-q", "main"]);
+  g2(work, ["merge", "-q", "--no-ff", "dev-loop/EXP-1", "-m", "Merge branch 'dev-loop/EXP-1'"]);
+  g2(work, ["push", "-q", "origin", "main"]);
+  g2(work, ["checkout", "-qb", "dev-loop/EXP-7", "main"]);
+  writeFileSync(join(work, "i"), "z\n"); g2(work, ["add", "i"]); g2(work, ["commit", "-qm", "EXP-7 work"]);
+  g2(work, ["push", "-q", "-u", "origin", "dev-loop/EXP-7"]);
+  g2(work, ["checkout", "-q", "main"]);
+  writeFileSync(join(work, "j"), "w\n"); g2(work, ["add", "j"]); g2(work, ["commit", "-qm", "later"]);
+  g2(work, ["push", "-q", "origin", "main"]);
+  g2(work, ["checkout", "-q", "dev-loop/EXP-7"]); g2(work, ["rebase", "-q", "origin/main"]);
+  const rebased = pushGuard(work, "dev-loop/EXP-7", undefined, "main", {});
+  ok((rebased.mergeCommits ?? []).length === 0,
+    `merge class: a branch rebased onto a base that CONTAINS a knot is not refused for it (got ${JSON.stringify(rebased.mergeCommits)})`);
+}
+
 console.log(fails ? `${fails} CHECK(S) FAILED` : "default-branch-push: all checks passed");
 process.exit(fails ? 1 : 0);

@@ -26,7 +26,7 @@ import { acquireRepoLock } from "./locks.ts";
 import { repoLandingLockPath, resolveDefaultBranchForRepoDir } from "./repo-lock-path.ts";
 import { resolveGhRepo } from "./merge-guard.ts";
 import { pushGuard, approvalRefusalLine, type PushGuardResult } from "./push-guard.ts";
-import { defaultBranchPushRefusalLine } from "./default-branch-push.ts";
+import { defaultBranchPushRefusalLine, mergeCommitRefusalLine } from "./default-branch-push.ts";
 
 // A refusal names its CLASS, never one collapsed "refused" — the remedies differ (drop the commit /
 // resolve the ticket / get the approval granted / configure the remote) and two classes can refuse
@@ -35,9 +35,9 @@ import { defaultBranchPushRefusalLine } from "./default-branch-push.ts";
 // gate into an action while dropping the caller's pre-filter is a REGRESSION. So it moves inside too,
 // and it is labelled honestly rather than dressed up as an axis.
 export interface PushHold {
-  class: "readiness" | "findings" | "passengers" | "governance" | "approvals" | "landing";
+  class: "readiness" | "findings" | "passengers" | "governance" | "approvals" | "landing" | "merge-commit";
   token: string;   // stable machine token: no-branch | no-remote | ride-along | passenger |
-                   // governance | ungranted-approval | landing-mode
+                   // governance | ungranted-approval | landing-mode | direct-landing
   detail: string;  // the human line — the guard's own objection text for this class
 }
 
@@ -206,7 +206,7 @@ export function setUpstreamArgvFor(remote: string, branch: string): string[] {
   return ["branch", `--set-upstream-to=${remote}/${branch}`, branch];
 }
 
-function holdsFrom(g: PushGuardResult): PushHold[] {
+function holdsFrom(g: PushGuardResult, defaultBranch: string): PushHold[] {
   const holds: PushHold[] = [];
   // §16.3 D3 — every class hard-stops. `doc-land` downgrades reference findings to WARN and EARNS
   // that with a step-1 assertion that its range is docs-only (a docs-only range cannot smuggle
@@ -243,6 +243,14 @@ function holdsFrom(g: PushGuardResult): PushHold[] {
     // LOOP-567 — the fifth class. `dev-loop push --branch main` in a `landing:"pr"` repo is the
     // same defect as the bare merge-back, reached through the verb instead of around it.
     holds.push({ class: "landing", token: "landing-mode", detail: defaultBranchPushRefusalLine(g.landing) });
+  }
+  // …and the merge-commit class, which this help text promises ("push-guard --strict AND git push as ONE
+  // operation … every guard class hard-stops") and did not enforce. `--strict` exits 1 on it while
+  // `dev-loop push` pushed the same branch: measured on a fixture, guard exit 1 / push exit 0, and the
+  // merge commit landed on the remote. jbu's own main carries exactly such a knot (f8398b0), put there
+  // through this gap. mergeCommits had no reader outside push-guard's own CLI.
+  for (const m of g.mergeCommits ?? []) {
+    holds.push({ class: "merge-commit", token: "direct-landing", detail: mergeCommitRefusalLine(m, defaultBranch) });
   }
   for (const a of g.approvals) {
     // The refusal names the approval path and NO bypass (design §9.4). There is no flag that turns
@@ -407,7 +415,7 @@ function pushUnlocked(repoDir: string, defaultBranch: string, opts: PushOpts): P
     // evaluation was not.
     return { ...base, branch, sha, forcePublish, gateUnevaluated: `push-guard failed: ${(e as Error).message.split("\n")[0]}` };
   }
-  const holds = holdsFrom(guard);
+  const holds = holdsFrom(guard, defaultBranch);
   const gateUnevaluated = guard.unresolvedDefaultBranch
     ? `${remote}/${guard.unresolvedDefaultBranch} does not exist — passenger detection did NOT run, so this gate has not checked what it could have`
     : null;
