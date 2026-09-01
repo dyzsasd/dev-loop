@@ -33,6 +33,7 @@
 // Runs against an ISOLATED temp DB + DEVLOOP_RUN_DIR (never the operator's ~/.dev-loop). cwd = hub/ (npm).
 import { execFileSync, spawnSync } from "node:child_process";
 import { registerDaemonPid, launchDaemonCli, runDaemonCli } from "./daemon-harness.ts";
+import { runningDaemonPids } from "./daemon-pids.ts";
 import { foreignListener } from "../src/daemon-lifecycle.ts"; // LOOP-317: the decision the fix turns on
 import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 
@@ -61,6 +62,9 @@ const readRun = (): { project: string; pid: number; port: number; host: string; 
 };
 const health = (url: string) => fetch(`${url}/api/health`).then((x) => x.ok).catch(() => false);
 const touchedPorts = new Set<number>();
+// Snapshot BEFORE any trial runs: the cleanup below kills the difference, so anything already running —
+// an operator's live workspace daemons above all — is out of scope by construction.
+const daemonsAtStart = runningDaemonPids();
 
 // seed the isolated service project (ensureActors seeds the `operator` actor the daemon needs)
 execFileSync(NODE, ["src/seed.ts", PROJ, "Race Project", "RC", DB], { encoding: "utf8" });
@@ -121,7 +125,21 @@ try {
 } finally {
   // best-effort cleanup: stop the tracked daemon, then sweep any untracked listener on ports this test recorded
   // (a PRE-fix run leaks orphaned winners `down` can't reach — keep the test a good citizen even on failure).
+  //
+  // Neither sweep reaches an orphaned LOSER. Each trial fires two concurrent `up`s; the one that loses the
+  // bind race can still be alive while being neither the runfile pid (`down` addresses only that one) nor a
+  // listener on the port (the lsof sweep sees only listeners). It then outlives the whole run and run-all.ts's
+  // leaked-daemon gate fails the suite from the outside, with the suite itself reporting every trial green.
+  //
+  // The fix is the pid-set diff daemon-pids.ts was written for: anything matching the daemon entry that was
+  // NOT running when this suite started, and is still running now, was started here. Scoping by SNAPSHOT
+  // rather than by pattern is load-bearing — `runningDaemonPids()` lists every daemon on the machine, and
+  // this suite must never touch an operator's live workspace daemons.
   await lcAsync("down").catch(() => {});
+  if (daemonsAtStart !== null) {
+    const now = runningDaemonPids();
+    if (now !== null) for (const pid of now) if (!daemonsAtStart.has(pid)) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+  }
   for (const p of touchedPorts) {
     try { for (const pid of execFileSync("lsof", ["-ti", `tcp:${p}`, "-sTCP:LISTEN"], { encoding: "utf8" }).split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* gone */ } } } catch { /* lsof absent / nothing listening */ }
   }
