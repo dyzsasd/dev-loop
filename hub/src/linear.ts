@@ -8,8 +8,10 @@
 // INTAKE (a human comment / a divergence flag becomes a needs-pm ticket), never a state import: no hub
 // ticket/doc field is ever written from what Linear returns, and a Linear-side body edit is only ever
 // FLAGGED (then overwritten by the next push) — Linear never becomes a second source of truth.
+import { timerEnvMs } from "./timer-env.ts";
+
 export type FetchImpl = typeof fetch;
-const timeoutMs = (): number => Number(process.env.DEVLOOP_MIRROR_TIMEOUT_MS) || 10_000;
+const timeoutMs = (): number => timerEnvMs("DEVLOOP_MIRROR_TIMEOUT_MS", 10_000);
 // The endpoint defaults to the real Linear; DEVLOOP_LINEAR_API_URL overrides it (an integration-test /
 // self-hosted seam). §16 is unaffected — the token is still a function arg, never placed in the URL —
 // and env is already the trust boundary for the token, so this adds no new exposure. Read at call time.
