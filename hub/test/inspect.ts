@@ -60,8 +60,19 @@ try {
       `doctor arrives as CODES with severities (${JSON.stringify((r.doctor ?? []).slice(0, 4).map((d) => `${d.severity}:${d.code}`))})`);
     ok(r.doctor !== null && !JSON.stringify(r.doctor).includes("dev-loop workspace —"),
       "…and not doctor's prose header — the codes are the point");
-    ok(r.lanes.length > 10 && r.lanes.every((l) => l.fires === 0 && l.lastFireAt === null),
+    // `fires === 0` used to be asserted for EVERY row here. That half encoded a false claim: the ledger
+    // files a fire under the lane's ACTOR (run-agents writes laneActor(agent)), so a job lane's activity
+    // is not derivable from it at all — 0 asserted a measurement where there is no measurement. On the
+    // live board that produced five dead-lane warnings against five lanes that were firing normally.
+    // The intent of the arm survives (every lane listed, last-fire honest); the count now reads null for
+    // the lanes the ledger cannot answer and 0 for the actors it can.
+    ok(r.lanes.length > 10 && r.lanes.every((l) => l.lastFireAt === null),
       `every lane is listed with an honest null last-fire (${r.lanes.length} lanes)`);
+    const jobLanes = r.lanes.filter((l) => l.lane.includes("-") && /^(pm|qa)-/.test(l.lane));
+    ok(jobLanes.length >= 5 && jobLanes.every((l) => l.fires === null),
+      `a job lane's fires read null — unknown, not zero (${JSON.stringify(jobLanes.map((l) => [l.lane, l.fires]))})`);
+    ok(r.lanes.some((l) => l.lane === "pm" && l.fires === 0),
+      "…while an ACTOR the ledger does index still reads 0 on an empty ledger");
   }
 
   // ── A dead lane and a repeated errorClass, off a real ledger ────────────────────────────────────

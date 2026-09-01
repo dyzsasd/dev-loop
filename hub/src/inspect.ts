@@ -69,7 +69,8 @@ export interface InspectLane {
   lane: string;
   lastFireAt: string | null;
   lastResult: "ok" | "failed" | null;
-  fires: number;
+  /** null = the ledger has no dimension for this lane, so its activity is UNKNOWN, not zero. */
+  fires: number | null;
 }
 
 export interface InspectFires {
@@ -223,7 +224,19 @@ function firesSection(rows: FireRow[], windowMs: number, nowMs: number): Inspect
 function laneSection(rows: FireRow[], windowMs: number, nowMs: number): InspectLane[] {
   const since = new Date(nowMs - windowMs).toISOString();
   const inWindow = rows.filter((r) => r.ts >= since);
+  // The ledger's `agent` field holds the ACTOR, not the lane: run-agents writes `laneActor(agent)`, so a
+  // pm-groom fire is ledgered as `pm`. Matching a LANE name against it therefore finds nothing, ever —
+  // and reporting that as `fires: 0` asserted something the ledger cannot answer. Measured on the live
+  // browser-use ledger: run.log records 82 pm-lane fires (groom 21 + maintenance 44 + review 17) and the
+  // ledger holds exactly `pm: 82`, with no lane name anywhere. Every `inspect` therefore raised five
+  // dead-lane warnings against five lanes that were firing normally — in the one verb this batch added
+  // FOR delegated inspection.
+  // A lane keeps its row, but its activity reads null: unknown, not zero. The actor handles below it are
+  // unaffected — those DO match, and their dead-lane check is the half that was ever true.
+  const ledgerHasLane = new Set(inWindow.map((r) => r.agent));
   return [...AGENT_HANDLES, ...LANES].map((lane) => {
+    const derivable = (AGENT_HANDLES as readonly string[]).includes(lane) || ledgerHasLane.has(lane);
+    if (!derivable) return { lane, lastFireAt: null, lastResult: null, fires: null };
     const mine = inWindow.filter((r) => r.agent === lane).sort((a, b) => a.ts.localeCompare(b.ts));
     const last = mine[mine.length - 1];
     return {
@@ -303,6 +316,9 @@ function warningsFrom(
 
   // A lane that never fired inside the window. Only meaningful once the ledger HAS fires: on an empty
   // ledger every lane is silent, and saying so fifteen times is noise rather than a finding.
+  // `=== 0`, so a lane whose activity is UNKNOWN (null — the ledger records the actor, not the lane) is
+  // skipped rather than reported as silent. Saying "it did not fire" about data that was never recorded
+  // is the same error as saying it fifteen times on an empty ledger, which the guard above already avoids.
   if (fires && fires.total > 0)
     for (const l of lanes)
       if (l.fires === 0)
@@ -391,9 +407,14 @@ export function renderInspect(r: InspectReport): string {
   }
 
   L.push("", "## lanes");
+  // Three states, not two: fired, silent, and NOT DERIVABLE. The last one is the five job lanes, whose
+  // fires the ledger files under their actor — printing them beside the genuinely silent ones would put
+  // a claim about missing data in the same sentence as a measurement.
   const silent = r.lanes.filter((l) => l.fires === 0).map((l) => l.lane);
-  for (const l of r.lanes.filter((l) => l.fires > 0)) L.push(`${l.lane}: ${l.fires} fire(s), last ${l.lastResult} at ${l.lastFireAt}`);
+  const unknown = r.lanes.filter((l) => l.fires === null).map((l) => l.lane);
+  for (const l of r.lanes.filter((l) => (l.fires ?? 0) > 0)) L.push(`${l.lane}: ${l.fires} fire(s), last ${l.lastResult} at ${l.lastFireAt}`);
   if (silent.length) L.push(`no fire in the window: ${silent.join(", ")}`);
+  if (unknown.length) L.push(`not derivable from the ledger (fires are recorded under the lane's actor): ${unknown.join(", ")}`);
 
   L.push("", "## doctor");
   L.push(r.doctor === null ? "unavailable" : r.doctor.length ? r.doctor.map((d) => `${d.severity === "error" ? "FAIL" : "warn"} ${d.code}`).join(" ") : "no codes");
