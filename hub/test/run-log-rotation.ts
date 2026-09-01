@@ -40,7 +40,7 @@ writeFileSync(fakeBin, "#!/bin/sh\necho ok\nexit 0\n");
 spawnSync("chmod", ["+x", fakeBin]);
 
 // --background is the path that opens run.log. It re-spawns detached and returns at once.
-const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--background", "--max-fires", "1"],
+const r = spawnSync("node", [join(hubRoot, "src", "run-agents.ts"), "--agents", "pm", "--background"],
   { cwd: ws, env: env({ DEVLOOP_CLAUDE_BIN: fakeBin }), encoding: "utf8", timeout: 60_000 });
 ok((r.status ?? 1) === 0, `the background scheduler starts (${r.status}) ${r.status === 0 ? "" : `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-200)}`);
 
@@ -54,28 +54,45 @@ ok(mode === 0, `the freshly rotated run.log is owner-only, not created at the de
 //
 // `stop` reads the run lock, and `--background` returns as soon as it has forked: the detached scheduler
 // had usually not written its lock yet, so `stop` found no holder, did nothing, and said nothing. The
-// scheduler then outlived the suite (`--max-fires 1` does not save it — its fire never fires, because the
-// lane cadence gate declines first), kept its workspace alive, and recreated the temp tree AFTER the
+// scheduler then outlived the suite, kept its workspace alive, and recreated the temp tree AFTER the
 // suite's own cleanup had removed it. Observed as a running `run-agents.ts --agents pm` with ppid 1 and a
 // 452 KB workspace under $TMPDIR, once per full-suite run. Waiting for the lock is what makes `stop`
 // meaningful here; asserting afterwards is what stops the leak from going quiet again.
+//
+// Two things this arm gets wrong if written the obvious way:
+//
+//   `--max-fires 1` is not a safety belt, it is the race. A lane with no recorded fire fires ON BOOT
+//   (run-agents-seed.ts: `fireOnBoot: true`), bypassing the cadence gate, and the fake claude returns at
+//   once — so the scheduler completed its one fire and exited in roughly 300 ms. This poll grid is 100 ms
+//   of `sleep` plus a process spawn per tick; macOS landed inside that window and Linux did not, which is
+//   what made the arm pass here and fail deterministically on both CI runners. The scheduler under test
+//   must outlive the poll, so it starts with no fire ceiling and `stop` is what ends it.
+//
+//   The post-stop assertion cannot read the lock. `holderPid()` answers 0 for a MISSING lock file, so a
+//   scheduler that released its lock and kept running — the exact ppid-1 leak this arm exists to catch —
+//   scored live=false and passed. It passed vacuously in the red CI run too, having never observed any
+//   process at all. The subject is therefore the pid the parent printed, probed directly.
 const lockPath = join(ws, ".dev-loop", "locks", "run.lock");
 const holderPid = (): number => {
   try { return (JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: number }).pid ?? 0; } catch { return 0; }
 };
-const settle = (want: boolean, budgetMs: number): number => {
-  const until = Date.now() + budgetMs;
-  for (;;) {
-    const pid = holderPid();
-    const live = pid > 0 && (() => { try { process.kill(pid, 0); return true; } catch { return false; } })();
-    if (live === want || Date.now() > until) return live ? pid : 0;
-    spawnSync("sleep", ["0.1"]);
-  }
-};
-const started = settle(true, 15_000);
+const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const childPid = Number(/scheduler started in background \(pid (\d+)\)/.exec(r.stdout ?? "")?.[1] ?? 0);
+ok(childPid > 0, `the background start names the detached pid, so the leak has a subject (${childPid || "no pid in stdout"})`);
+
+const until = Date.now() + 15_000;
+let started = 0;
+while (started === 0 && Date.now() < until) {
+  const pid = holderPid();
+  if (pid > 0 && alive(pid)) { started = pid; break; }
+  spawnSync("sleep", ["0.1"]);
+}
 ok(started > 0, `the detached scheduler took the run lock, so \`stop\` has something to address (pid ${started || "none — lock never appeared"})`);
 spawnSync("node", [join(hubRoot, "src", "cli.ts"), "stop"], { cwd: ws, env: env(), encoding: "utf8" });
-const stillUp = settle(false, 15_000);
+
+const gone = Date.now() + 15_000;
+while (childPid > 0 && alive(childPid) && Date.now() < gone) spawnSync("sleep", ["0.1"]);
+const stillUp = childPid > 0 && alive(childPid) ? childPid : 0;
 ok(stillUp === 0, `…and it is gone once \`stop\` returns — the suite leaks no scheduler (pid ${stillUp} still running)`);
 if (stillUp > 0) spawnSync("kill", ["-9", String(stillUp)]); // never leave one behind, even when asserting that we did
 
