@@ -172,8 +172,17 @@ export function openHub(): Hub {
     db = openDb(resolveHubDbPath()); // workspace-aware ladder (P2 #1) — a bare `dev-loop op` at the workspace root must hit ITS board, not the global default
     ensureActors(db); // idempotent (server.ts does the same) — the G1 guard below needs the roster present; INSERTs, so it belongs inside the busy mapping (codex #3)
   } catch (e) {
-    if (isBusy(e)) { console.error(`dev-loop: hub db is busy past the 5s busy_timeout: ${(e as Error).message}`); process.exit(5); }
-    throw e;
+    // ANY failure to open the board is "hub unavailable" (exit 5). Busy was the only one mapped, so a
+    // corrupt file (SQLITE_NOTADB), a permission denial (SQLITE_CANTOPEN) and a path that is a directory
+    // all re-threw — and an escape from a CLI verb is not a neutral event: it left the contract entirely
+    // and surfaced as a stack trace. Measured on the same workspace, same fault: `dev-loop tickets` gave
+    // a trace while `dev-loop approvals`, which catches broadly, gave 5 and a sentence. Two answers to one
+    // question, from one binary. Busy keeps its own message because "retry" is useful advice and "the file
+    // is not a database" is not, but both are 5 — the board is what is unavailable either way.
+    const msg = (e as Error).message ?? String(e);
+    if (isBusy(e)) console.error(`dev-loop: hub db is busy past the 5s busy_timeout: ${msg}`);
+    else console.error(`dev-loop: cannot open the board at ${resolveHubDbPath()} — ${msg}`);
+    process.exit(5);
   }
   if (!actorExists(db, actor)) { // G1 phantom-actor guard — a typo'd DEVLOOP_ACTOR must never write unattributably
     console.error(`dev-loop: DEVLOOP_ACTOR='${actor}' is not a known actor. Valid: ${listActorHandles(db).join(", ")}. Fix DEVLOOP_ACTOR in the launcher.`);

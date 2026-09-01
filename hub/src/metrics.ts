@@ -1094,10 +1094,23 @@ export function boardMetrics(db: any, projectId: string, windowMs: number, nowMs
 }
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
+// The shape check needed a MAGNITUDE check beside it. `--window` becomes `nowMs - windowMs`, which goes
+// through `new Date(...).toISOString()`; a duration can match this regex, be a safe integer, and still
+// land outside the ±8.64e15 ms a Date can represent, where toISOString answers with a bare RangeError.
+// `--window 999999999d` — the obvious way to write "everything" — therefore left this flag's own exit-2
+// path and crashed. Same boundary and same "effectively forever" spelling as `--expires` in approvals.ts.
+// The ceiling is 100 years: past the ledger's own span every larger window selects the same rows, so
+// refusing here removes nothing an operator can express, and the message names the spelling that works.
+const MAX_WINDOW_MS = 100 * 365 * 86_400_000;
 function parseWindow(s: string): number {
   const m = s.trim().match(/^(\d+)(d|h)$/);
   if (!m) { console.error(`metrics: invalid --window '${s}' (use e.g. 7d, 24h)`); process.exit(2); }
-  return Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000);
+  const ms = Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000);
+  if (!Number.isFinite(ms) || ms > MAX_WINDOW_MS) {
+    console.error(`metrics: --window '${s}' is longer than 100 years; any window past the ledger's own span selects the same rows — use a smaller one (the whole ledger is already the default for --since/--until)`);
+    process.exit(2);
+  }
+  return ms;
 }
 
 // P1-3: the operator's decision queue as ONE queryable set — Human-Blocked ∪ In Review assigned to the

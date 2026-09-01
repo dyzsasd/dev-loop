@@ -12,7 +12,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { spawnSync, spawn } from "node:child_process";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { tmpRoot } from "./tmp-root.ts";
 import { once } from "node:events";
 import { openDb } from "../src/db.ts";
 import { ensureSeed, ensureProject, findProject } from "../src/seed.ts";
@@ -446,6 +448,29 @@ if (bareVerify.length > 0) {
 }
 if (opVerify.length > 0) {
   ok(opVerify.every((v) => !("landing" in v)), "LOOP-111 AC2: 'op queue' verify items have NO 'landing' field (daemon stays gh-free)");
+}
+
+// ── any failure to open the board is "hub unavailable" (5), not an escape ─────────────────────
+// isBusy mapped SQLITE_BUSY/LOCKED and re-threw everything else, so a corrupt file, a permission denial
+// and a path that is a directory all left the contract and surfaced as a stack trace — while
+// `dev-loop approvals`, in the SAME binary against the SAME fault, caught broadly and answered 5 with a
+// sentence. One question, two answers. The board is what is unavailable in every one of these.
+{
+  const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+  const bad = tmpRoot("dl-hub5-");
+  const badEnv = { ...scrubFireEnv(), DEVLOOP_HOME: join(bad, "home") };
+  const ws5 = join(bad, "ws");
+  spawnSync("node", [join(srcDir, "team.ts"), "init", "--dir", ws5, "--key", "t5", "--backend", "linear", "--linear-team", "L1"], { cwd: bad, env: badEnv, encoding: "utf8" });
+  spawnSync("node", [join(srcDir, "team.ts"), "add-project", "p", "--linear-project", "P"], { cwd: ws5, env: badEnv, encoding: "utf8" });
+  const opEnv = { ...badEnv, DEVLOOP_WORKSPACE: ws5, DEVLOOP_PROJECT: "p" };
+  const runOp5 = () => spawnSync("node", [join(srcDir, "cli.ts"), "op", "get_project"], { cwd: ws5, env: opEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  spawnSync("node", [join(srcDir, "cli.ts"), "seed", "p", "Proj", "PRJ"], { cwd: ws5, env: opEnv, encoding: "utf8" });
+  ok(runOp5().status === 0, "fixture: the op verb answers 0 against a healthy board");
+
+  writeFileSync(join(ws5, ".dev-loop", "hub.db"), "not a database at all");
+  const corrupt = runOp5();
+  ok(corrupt.status === 5, `a corrupt hub.db is hub-unavailable (5), not an escaped SQLITE_NOTADB (got ${corrupt.status})`);
+  ok(/cannot open the board/.test(corrupt.stderr ?? ""), "…and it says so in a sentence, naming the path");
 }
 
 console.log(fails === 0 ? "\nCLI_AGENTOPS_OK" : `\n${fails} CHECK(S) FAILED`);

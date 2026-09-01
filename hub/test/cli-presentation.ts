@@ -150,5 +150,37 @@ const agentops = readFileSync(join(hubRoot, "src", "cli-agentops.ts"), "utf8");
 const bareHints = agentops.split("\n").filter((l) => /dev-loop daemon up/.test(l) && !/DEVLOOP_PROJECT=/.test(l));
 ok(bareHints.length === 0, `LOOP-248: every 'dev-loop daemon up' hint in cli-agentops.ts is qualified with DEVLOOP_PROJECT (${bareHints.length} bare)`);
 
+// ── an escaped error lands inside the exit-code contract ──────────────────────────────────────
+// The contract is 0 ok · 1 domain · 2 usage · 3 doc CAS · 4 identity · 5 hub unavailable (README,
+// `--help`, and the `op --help` table gen-cheatsheets parses). cli-bootstrap re-threw from inside its
+// uncaughtException handler to reproduce Node's fatal OUTPUT — and Node answers "a handler threw" with
+// **7**, outside the contract. Since cli.ts loads this module for every verb, ANY unconverged error path
+// surfaced as a seventh code, which a caller branching on exit status reads as a distinct kind of failure
+// rather than as a bug. Setting process.exitCode first does not override it; only not re-throwing does.
+{
+  const boot = join(hubRoot, "src", "cli-bootstrap.ts");
+  const thrown = spawnSync("node", ["--import", pathToFileURL(boot).href, "-e", 'throw new RangeError("boom")'],
+    { encoding: "utf8", env: scrubFireEnv() });
+  ok(thrown.status === 1, `an escaped throw exits 1, inside the contract, not 7 (got ${thrown.status})`);
+  ok(/RangeError: boom/.test(thrown.stderr ?? ""), "…and the stack still reaches stderr — the reading matters, the framing does not");
+  const rejected = spawnSync("node", ["--import", pathToFileURL(boot).href, "-e", 'Promise.reject(new RangeError("boom"))'],
+    { encoding: "utf8", env: scrubFireEnv() });
+  ok(rejected.status === 1, `an unhandled rejection takes the same path (got ${rejected.status})`);
+}
+
+// ── `metrics --window` refuses a magnitude its own arithmetic cannot carry ─────────────────────
+// The shape check had no magnitude check beside it: the value becomes `nowMs - windowMs` and goes
+// through toISOString(), which answers a duration outside Date's ±8.64e15 ms with a bare RangeError. So
+// `--window 999999999d` — the obvious spelling of "everything" — left this flag's own exit-2 path and
+// crashed. Same boundary as `--expires` in approvals.ts, found by sweeping for that bug's siblings.
+{
+  const m = (w: string) => spawnSync("node", [join(hubRoot, "src", "metrics.ts"), "--window", w],
+    { encoding: "utf8", env: scrubFireEnv(), stdio: ["ignore", "pipe", "pipe"] });
+  const huge = m("999999999d");
+  ok(huge.status === 2, `--window 999999999d is a usage error (2), not a crash (got ${huge.status})`);
+  ok(/longer than 100 years/.test(huge.stderr ?? ""), "…and the refusal says why, and what to write instead");
+  ok(m("nonsense").status === 2, "a malformed --window is still the same usage error");
+}
+
 console.log(fails ? `\n${fails} FAILED` : "\nCLI_PRESENTATION_OK");
 process.exit(fails ? 1 : 0);
