@@ -3,7 +3,7 @@
 // Moved out of destructive-guard.ts when three writers outside it needed the same guarantee. Its
 // contract used to be reachable only through commitBothHalves, which is why destructive-guard's coverage
 // map recorded that a direct unit test would become due the day it was exported. This is that test.
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeConfigAtomic } from "../src/atomic-write.ts";
@@ -50,6 +50,32 @@ chmodSync(roDir, 0o700);
 ok(threw, "a write that cannot create its tmp THROWS rather than reporting success");
 ok(readFileSync(roTarget, "utf8") === '{"original":true}\n', "…and the original file is byte-identical — a failed write is never worse than no write");
 ok(readdirSync(roDir).filter((f) => f.includes(".tmp-")).length === 0, "…with no tmp residue left behind");
+
+// ── the replaced file keeps its permissions ───────────────────────────────────────────────────
+// rename REPLACES the inode, so the target's mode goes with it and the new file carries whatever the
+// umask gave the tmp. An operator who had tightened dev-loop.json to 0600 got it back at 0644 from the
+// next `team set` — a silent widening, performed by the routine whose whole job is making that write
+// safe. Measured before the fix: -rw------- became -rw-r--r--.
+{
+  const dir = tmpRoot("dl-atomicmode-");
+  const tight = join(dir, "tight.json");
+  writeFileSync(tight, '{"a":1}'); chmodSync(tight, 0o600);
+  writeConfigAtomic(tight, '{"a":2}');
+  ok((statSync(tight).mode & 0o7777) === 0o600,
+    `a 0600 config keeps 0600 across the atomic replace (got 0${(statSync(tight).mode & 0o7777).toString(8)})`);
+  ok(readFileSync(tight, "utf8") === '{"a":2}', "…and the new content is what landed");
+
+  const loose = join(dir, "loose.json");
+  writeFileSync(loose, '{"b":1}'); chmodSync(loose, 0o644);
+  writeConfigAtomic(loose, '{"b":2}');
+  ok((statSync(loose).mode & 0o7777) === 0o644,
+    `a 0644 config keeps 0644 — the mode is PRESERVED, not forced to one value (got 0${(statSync(loose).mode & 0o7777).toString(8)})`);
+
+  // A target that does not exist yet (team init) has no mode to keep; it must still be written.
+  const fresh = join(dir, "fresh.json");
+  writeConfigAtomic(fresh, "{}");
+  ok(existsSync(fresh) && readFileSync(fresh, "utf8") === "{}", "a first write with no existing target still lands");
+}
 
 console.log(fails === 0 ? "\nATOMIC_WRITE_OK" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
