@@ -202,7 +202,12 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   seed(pricedProfileRow);
   ok((team(["set", "team.budget.perFireUsd", "0.002"], ws).status ?? 1) === 0, "AC1: team set team.budget.perFireUsd 0.002 (a fractional ceiling is valid config)");
   const sleeperBin = join(tmp, "sleeper-claude.sh");
-  writeFileSync(sleeperBin, "#!/bin/sh\necho 'fire started'\nsleep 60\necho 'fire finished'\n"); chmodSync(sleeperBin, 0o755);
+  // `exec`, not a plain `sleep`: the watchdogs signal the DIRECT CHILD, and a shell waiting on a
+  // foreground command cannot act on SIGINT until that command returns — so a plain `sleep 60` here sits
+  // out the full 10 s escalation on every kill arm. exec makes the sleep itself the child, which dies on
+  // the signal. Measured: 11.9 s → 1.9 s for this arm. (The unreachable `echo 'fire finished'` went with
+  // it; nothing asserted it, and a 60 s sleep never reached it.)
+  writeFileSync(sleeperBin, "#!/bin/sh\necho 'fire started'\nexec sleep 60\n"); chmodSync(sleeperBin, 0o755);
   const t0 = Date.now();
   const killed = runAgents(["--agents", "pm", "--once"], ws, { DEVLOOP_CLAUDE_BIN: sleeperBin });
   const elapsedMs = Date.now() - t0;
@@ -261,7 +266,8 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
       total_cost_usd: costUsd,
       usage: { input_tokens: tokens, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
     }).replace(/'/g, "'\\''");
-    writeFileSync(bin, `#!/bin/sh\nprintf '%s' '${payload}'\nsleep 60\n`); chmodSync(bin, 0o755);
+    // exec for the same reason as sleeperBin above — the payload is already printed by then.
+    writeFileSync(bin, `#!/bin/sh\nprintf '%s' '${payload}'\nexec sleep 60\n`); chmodSync(bin, 0o755);
     return bin;
   };
   seed(pricedProfileRow);

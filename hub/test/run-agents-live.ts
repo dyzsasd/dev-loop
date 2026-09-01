@@ -32,7 +32,7 @@ try {
   writeFileSync(stub, `#!/bin/sh
 rec="$STUB_OUT/rec-$$.txt"
 { echo "ACTOR=$DEVLOOP_ACTOR"; echo "PROJECT=$DEVLOOP_PROJECT"; echo "SPLIT=$DEVLOOP_DEV_SPLIT"; echo "NARGS=$#"; } > "$rec"
-[ -n "$STUB_SLEEP" ] && sleep "$STUB_SLEEP"
+[ -n "$STUB_SLEEP" ] && { trap 'exit 130' INT; sleep "$STUB_SLEEP" & wait $!; }
 echo "COMPLETED" >> "$rec"
 exit 0
 `);
@@ -278,7 +278,7 @@ done
   writeFileSync(stubSlow, `#!/bin/sh
 i=0
 while [ $i -lt 5 ]; do echo "healthy progress step $i (genuinely new content)"; i=$((i+1)); sleep 0.3; done
-sleep 600
+exec sleep 600
 `);
   chmodSync(stubSlow, 0o755);
   const slowCommon = ["--root", repoRoot, "--data", data, "--hub-db", slowDb, "--project", "slow", "--cwd", repo, "--cli", "claude", "--agents", "sweep", "--once"];

@@ -69,10 +69,16 @@ ok(rp.status === 0 && /intake\.mode.*passive/.test(pmMd) && /originate NOTHING/.
     backend: "linear", mode: "live", autonomy: "full", linearTeam: "T", linearProject: "P",
     git: { landing: "pr" }, testEnv: { baseUrl: "https://dev.example.com" },
   } } }));
+  // TMPDIR is redirected into this suite's own root. The branch under test is the one that CREATES a temp
+  // directory as its deliverable — correctly, and production keeps doing exactly that — but the directory
+  // is the operator's to collect, so nothing reaps it. Exercising it left one `dl-export-*` tree behind per
+  // full-suite run, 17 of them on this machine, which tmp-root.ts cannot see because the mkdtemp lives in
+  // hub/src. Pointing the CHILD's TMPDIR at a swept tree fixes the leak without touching the behaviour:
+  // the assertion below still reads the `dl-export-` prefix, because the prefix is what changed nothing.
   const noOut = spawnSync(process.execPath, [src, "qa", "--project", "demo"], {
     encoding: "utf8",
     cwd: gitCwd, // inside a git tree but no dev-loop.json → workspace lookup fails → falls back to DEVLOOP_PROJECTS_JSON
-    env: { ...scrubFireEnv(), DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
+    env: { ...scrubFireEnv(), TMPDIR: tmp, DEVLOOP_WORKSPACE: "/dev/null/no-workspace", DEVLOOP_PLUGIN_ROOT: repoRoot, DEVLOOP_PROJECTS_JSON: join(data, "projects.json") },
   });
   ok(noOut.status === 0, "no-out: exits 0 when cwd is git-tracked (LOOP-187)");
   ok((noOut.stdout + noOut.stderr).includes("dl-export-"), "no-out: message/path references the temp dir (LOOP-187)");
