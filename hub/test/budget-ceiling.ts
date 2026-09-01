@@ -89,6 +89,27 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   const rateOld = /~\$([0-9.]+)\/day/.exec(docOld.out)?.[1];
   ok(rateOld === "10.06", `doctor W47: a 6d23h-old $70 ledger reads ~$10.06/day (got ${rateOld ?? "no rate"})`);
 
+  // ── an un-computable spend is REPORTED, not swallowed ─────────────────────────────────────────
+  // Two silences were collapsed: `spend <= 0` is legitimately quiet (nothing measured yet), but a
+  // NON-FINITE total is not — the ledger was read and its arithmetic produced a non-number, which
+  // budgetGateReason already reports on stderr. Doctor stayed silent for the same event, and for Infinity
+  // that was a regression: before the guard, `Infinity > dailyUsd` was true and the breach DID warn. A
+  // ceiling that is configured and cannot be checked has to say so.
+  {
+    // Written as raw text on purpose: JSON.stringify turns Infinity into null, so building this row as an
+    // object would have seeded the legitimate "no price" case and the arm would have passed for the wrong
+    // reason. `1e400` only becomes Infinity when JSON.parse reads it back — which is exactly the path
+    // readFireRows takes, and exactly why readFireRows can hand this code a non-finite cost at all.
+    const poison = `{"ts":"${new Date().toISOString()}","agent":"qa","project":"alpha","codingAgent":"claude","model":"sonnet",`
+      + `"durationMs":600000,"exitCode":0,"usage":{"source":"provider","inputTokens":1,"outputTokens":1,`
+      + `"cacheReadTokens":0,"cacheWriteTokens":0,"costUsd":1e400,"currency":"USD"}}`;
+    seed(poison);
+    const docPoison = await doctorRun(ws);
+    ok(/W47/.test(docPoison.out) && /could not be computed/.test(docPoison.out),
+      `doctor W47: a ledger whose spend does not compute is reported, not passed over in silence${/W47/.test(docPoison.out) ? "" : `\n${docPoison.out.slice(-300)}`}`);
+    ok(!/~\$NaN|~\$Infinity/.test(docPoison.out), "…and it does not print a non-number as if it were a measurement");
+  }
+
   // ── the number the GATE compares, printed next to the average ─────────────────────────────────
   // The average divides spend by how long the ledger has EXISTED. For a young ledger that is right and
   // is what the arms above pin. For an IDLE one it decays: the numerator freezes while the divisor

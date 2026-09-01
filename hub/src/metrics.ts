@@ -537,7 +537,15 @@ export function checkBudget(ws: Workspace): WsWarning[] {
       const spend = rollingSpendUsd(rows, windowMs, now);
       // `!Number.isFinite` as well as `<= 0`: a poisoned sum used to reach the message and print
       // "~$NaN/day", which is worse than silence — it reads as a measurement.
-      if (!Number.isFinite(spend) || spend <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
+      // Two different silences were collapsed here. `spend <= 0` is a legitimate quiet: nothing has been
+      // measured yet, so there is nothing to size a ceiling from. A NON-FINITE total is not that — the
+      // ledger was read and its arithmetic produced a non-number, which budgetGateReason reports on stderr
+      // rather than passing over. Doctor stayed silent for the same event, and for Infinity that was a
+      // regression: before the guard, `Infinity > dailyUsd` was true and the breach DID warn.
+      if (!Number.isFinite(spend))
+        return [{ code: "W47", path: "team.budget.dailyUsd",
+          message: `the rolling spend could not be computed from ${wsFireLedger(ws)} — a row's usage is malformed (a non-numeric or non-finite costUsd). The ceiling cannot be sized or enforced until that row is fixed or removed.` }];
+      if (spend <= 0) return []; // no measured spend yet ⇒ nothing to size a ceiling from
       const spanMs = ledgerSpanMs(rows, windowMs, now);
       const burnPerDay = spend / (spanMs / 86_400_000);
       const spanLabel = spanMs >= 86_400_000 ? `${(spanMs / 86_400_000).toFixed(1)}d` : `${Math.round(spanMs / 3_600_000)}h`;
@@ -560,7 +568,9 @@ export function checkBudget(ws: Workspace): WsWarning[] {
     // `NaN > dailyUsd` is false, so doctor would have reported "no breach" for a spend it could not
     // compute. Unreachable now that the three producers are guarded — kept so the next NaN source, if
     // there is one, cannot slip through the one path that was left asymmetric.
-    if (!Number.isFinite(rolling)) return [];
+    if (!Number.isFinite(rolling))
+      return [{ code: "W47", path: "team.budget.dailyUsd",
+        message: `a daily ceiling is set ($${dailyUsd.toFixed(2)}) but the rolling 24h spend could not be computed from ${wsFireLedger(ws)} — a row's usage is malformed. The ceiling is configured and cannot be checked.` }];
     if (rolling > dailyUsd)
       return [{ code: "W47", path: "team.budget.dailyUsd",
         message: `budget BREACH — rolling 24h spend $${rolling.toFixed(2)} is over dailyUsd $${dailyUsd.toFixed(2)}; the scheduler is refusing launches until it drops below (raise the ceiling, or let the 24h window roll over)` }];
