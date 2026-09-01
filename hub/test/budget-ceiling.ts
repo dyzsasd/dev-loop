@@ -61,38 +61,67 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   const seed = (...rows: string[]) => { mkdirSync(dirname(ledger), { recursive: true }); writeFileSync(ledger, rows.map((r) => r + "\n").join("")); };
   const rowCount = () => (existsSync(ledger) ? readFileSync(ledger, "utf8").trim().split("\n").filter(Boolean).length : 0);
 
-  // ── doctor UNSET nag: no ceiling + measured spend ⇒ exactly ONE [W28] nag, and DOCTOR_OK still holds ──
+  // ── doctor UNSET nag: no ceiling + measured spend ⇒ exactly ONE [W47] nag, and DOCTOR_OK still holds ──
   seed(costRow(50)); // some measured spend so there IS a burn rate to name
   const docUnset = await doctorRun(ws);
-  const w28unset = (docUnset.out.match(/\[W28\]/g) ?? []).length;
-  ok(w28unset === 1, `doctor: exactly ONE [W28] line when the ceiling is unset (got ${w28unset})`);
+  const w47unset = (docUnset.out.match(/\[W47\]/g) ?? []).length;
+  ok(w47unset === 1, `doctor: exactly ONE [W47] line when the ceiling is unset (got ${w47unset})`);
   ok(/no daily budget ceiling/.test(docUnset.out), "doctor: the unset nag names the missing ceiling + the measured burn rate");
   ok(docUnset.ok === true, "doctor: DOCTOR_OK (ok===true) holds — the unset nag is warn-only (the AC)");
   ok(!docUnset.out.includes("❌"), "doctor: no ❌ failures from the budget nag");
   // metrics --cost is UNCHANGED when the ceiling is unset (no budget line) — the read-surface half of INV-1.
   ok(!/budget: rolling 24h/.test(metricsCost(ws)), "metrics --cost: no budget line when the ceiling is unset (byte-identical surface)");
 
-  // ── W28 rate: the divisor is the ledger's own span, not a fixed 7 (a young ledger is not seven days old) ──
+  // ── W47 rate: the divisor is the ledger's own span, not a fixed 7 (a young ledger is not seven days old) ──
   // $70 billed across one hour of ledger extrapolates to $1680/day. A fixed divisor of 7 reported $10.00/day
   // for the same ledger, and the operator sizes team.budget.dailyUsd from exactly this number.
   seed(costRow(70, 60 * 60_000));
   const docYoung = await doctorRun(ws);
   const rateYoung = /~\$([0-9.]+)\/day/.exec(docYoung.out)?.[1];
-  ok(rateYoung === "1680.00", `doctor W28: a 1h-old $70 ledger reads ~$1680.00/day, not the $10.00 a /7 divisor gave (got ${rateYoung ?? "no rate"})`);
-  ok(/measured over 1h of ledger/.test(docYoung.out), "doctor W28: the line names the span it measured over");
+  ok(rateYoung === "1680.00", `doctor W47: a 1h-old $70 ledger reads ~$1680.00/day, not the $10.00 a /7 divisor gave (got ${rateYoung ?? "no rate"})`);
+  ok(/measured over 1h of ledger/.test(docYoung.out), "doctor W47: the line names the span it measured over");
 
   // A ledger spanning nearly the whole window is divided by that span: $70 over 6d23h is $10.06/day, which is
   // where the old fixed /7 divisor happened to be right — it is right only for a ledger exactly 7 days long.
   seed(costRow(70, 6 * 86_400_000 + 23 * 3_600_000));
   const docOld = await doctorRun(ws);
   const rateOld = /~\$([0-9.]+)\/day/.exec(docOld.out)?.[1];
-  ok(rateOld === "10.06", `doctor W28: a 6d23h-old $70 ledger reads ~$10.06/day (got ${rateOld ?? "no rate"})`);
+  ok(rateOld === "10.06", `doctor W47: a 6d23h-old $70 ledger reads ~$10.06/day (got ${rateOld ?? "no rate"})`);
+
+  // ── the number the GATE compares, printed next to the average ─────────────────────────────────
+  // The average divides spend by how long the ledger has EXISTED. For a young ledger that is right and
+  // is what the arms above pin. For an IDLE one it decays: the numerator freezes while the divisor
+  // grows, so the same spend reads lower every hour the loop stays down — and the operator sizes the
+  // ceiling from it. Measured on the live jinko-browser-use ledger, one frozen $345.91 printed $487/day,
+  // then $169, then $112 over three days of downtime. `budgetGateReason` compares a 24h ROLLING total,
+  // so that is the figure that has to be on the line too.
+  //
+  // Fixture: $40 + $50 inside one day, three days back, then nothing. Busiest 24h = $90; the average is
+  // $90 / 3.1d ≈ $29 and keeps falling.
+  const DAY = 86_400_000;
+  seed(costRow(40, 3 * DAY), costRow(50, 3 * DAY - 2 * 3_600_000));
+  const docIdle = await doctorRun(ws);
+  ok(/busiest 24h billed \$90\.00/.test(docIdle.out),
+    `doctor W47: the line names the busiest 24h — the quantity the ceiling is compared against (got ${/busiest 24h billed \$[0-9.]+/.exec(docIdle.out)?.[0] ?? "no peak"})`);
+  const avgIdle = /~\$([0-9.]+)\/day/.exec(docIdle.out)?.[1];
+  ok(avgIdle !== undefined && Number(avgIdle) < 90,
+    `doctor W47: …and the lifetime average is BELOW it once the loop goes idle, which is the dilution (avg ${avgIdle ?? "none"} vs peak 90.00)`);
+  ok(/idle 2\.9d|idle 3\.0d|idle 7[0-9]h/.test(docIdle.out),
+    `doctor W47: the idle stretch is disclosed, so the average is not read as a current rate (got ${/idle [0-9.]+[dh]/.exec(docIdle.out)?.[0] ?? "no idle note"})`);
+
+  // A busy ledger with no idle tail says nothing about idleness — the note is a disclosure, not decoration.
+  seed(costRow(40, 3 * 3_600_000), costRow(50, 60_000));
+  const docFresh = await doctorRun(ws);
+  ok(!/dilutes that average/.test(docFresh.out),
+    "doctor W47: a ledger whose last fire is minutes old carries no idle note");
+  ok(/busiest 24h billed \$90\.00/.test(docFresh.out),
+    "doctor W47: …and the peak is the same $90.00 — it does not move with the clock, which is the point");
 
   // Below an hour the span is clamped to an hour, so a burst of fires cannot extrapolate to an absurd figure.
   seed(costRow(5, 60_000));
   const docBurst = await doctorRun(ws);
   const rateBurst = /~\$([0-9.]+)\/day/.exec(docBurst.out)?.[1];
-  ok(rateBurst === "120.00", `doctor W28: a 1-minute-old $5 ledger is clamped to the 1h span, ~$120.00/day (got ${rateBurst ?? "no rate"})`);
+  ok(rateBurst === "120.00", `doctor W47: a 1-minute-old $5 ledger is clamped to the 1h span, ~$120.00/day (got ${rateBurst ?? "no rate"})`);
 
   // ── AC5 (anti-deadlock, LOAD-BEARING): dailyUsd UNSET ⇒ byte-identical — even a huge spend never gates ──
   // The failure mode we design against is a silent-refuse deadlock, so prove that with NO ceiling set, a ledger
@@ -115,7 +144,7 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
   ok(!/fire ok/.test(over.out) && rowCount() === before2,
     "AC2: the fire was NOT spawned (no CLI output, no new ledger row) — a scheduler-skip that boots no corpus");
   const docOver = await doctorRun(ws);
-  ok(/\[W28\]/.test(docOver.out) && /budget BREACH/.test(docOver.out), "AC3 surface 2 (doctor): the [W28] budget BREACH line");
+  ok(/\[W47\]/.test(docOver.out) && /budget BREACH/.test(docOver.out), "AC3 surface 2 (doctor): the [W47] budget BREACH line");
   ok(docOver.ok === true, "AC3: doctor breach is warn-only — DOCTOR_OK still holds");
   const metOver = metricsCost(ws);
   ok(/budget: rolling 24h \$/.test(metOver) && /dailyUsd \$5\.00/.test(metOver) && /OVER ceiling/.test(metOver),

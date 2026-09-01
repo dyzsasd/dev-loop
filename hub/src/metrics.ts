@@ -336,6 +336,39 @@ export function ledgerSpanMs(rows: FireRow[], windowMs: number, nowMs: number): 
   return Math.min(windowMs, Math.max(3_600_000, nowMs - oldest));
 }
 
+// The LARGEST 24h rolling total the ledger has ever held — the quantity `budgetGateReason` compares
+// `team.budget.dailyUsd` against, so it is the one an operator can size a ceiling from directly.
+//
+// It is deliberately NOT the same number as the lifetime average below it. The average divides total
+// spend by how long the ledger has EXISTED, which is the right way to read a young ledger (that is what
+// ledgerSpanMs is for) and the wrong way to read an idle one: with the scheduler stopped the numerator
+// is frozen while the divisor grows, so the figure falls every hour without any change in spending. Read
+// as an average that is correct; read as "what this loop bills in a day" — which is how a line ending in
+// "/day" gets read, and how the ceiling gets sized — it understates by however long the loop has been
+// down. Measured on the jinko-browser-use ledger: the same $345.91 printed $487/day, then $169, then
+// $112 across three days of downtime, and the ceiling would have been sized from whichever number the
+// operator happened to look at.
+//
+// The peak is scanned at each row as a window END, which is where a maximum can occur.
+export function peakRolling24hUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
+  const cutoff = nowMs - windowMs;
+  const inWindow = rows
+    .map((r) => ({ t: Date.parse(r.ts), usd: r.usage?.costUsd }))
+    .filter((r) => Number.isFinite(r.t) && r.t >= cutoff && r.t <= nowMs)
+    .sort((a, b) => a.t - b.t);
+  let peak = 0;
+  for (let end = 0; end < inWindow.length; end++) {
+    const from = inWindow[end]!.t - 86_400_000;
+    let sum = 0;
+    for (let k = end; k >= 0 && inWindow[k]!.t >= from; k--) {
+      const c = inWindow[k]!.usd;
+      if (typeof c === "number" && c > 0) sum += c;
+    }
+    if (sum > peak) peak = sum;
+  }
+  return peak;
+}
+
 export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
   const cutoff = nowMs - windowMs;                                   // LOOP-314: closed era, both bounds
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
@@ -483,12 +516,23 @@ export function checkBudget(ws: Workspace): WsWarning[] {
       const spanMs = ledgerSpanMs(rows, windowMs, now);
       const burnPerDay = spend / (spanMs / 86_400_000);
       const spanLabel = spanMs >= 86_400_000 ? `${(spanMs / 86_400_000).toFixed(1)}d` : `${Math.round(spanMs / 3_600_000)}h`;
-      return [{ code: "W28", path: "team.budget.dailyUsd",
-        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured over ${spanLabel} of ledger) with no cap; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
+      // The average alone was sizing the ceiling, and it is diluted by idle time (see peakRolling24hUsd).
+      // Both numbers are printed: the average says what the ledger has cost per day of its life, the peak
+      // says what the GATE will see, and the idle note says how stale the average is. An operator reading
+      // only the first number during a long stop sizes the ceiling far under the loop's actual busiest day.
+      const peak24h = peakRolling24hUsd(rows, windowMs, now);
+      let newest = 0;
+      for (const r of rows) { const t = Date.parse(r.ts); if (Number.isFinite(t) && t <= now && t > newest) newest = t; }
+      const idleMs = newest ? now - newest : 0;
+      const idleNote = idleMs >= 2 * 3_600_000
+        ? `; the loop has been idle ${idleMs >= 86_400_000 ? `${(idleMs / 86_400_000).toFixed(1)}d` : `${Math.round(idleMs / 3_600_000)}h`}, which dilutes that average`
+        : "";
+      return [{ code: "W47", path: "team.budget.dailyUsd",
+        message: `no daily budget ceiling set — the unattended loop bills ~$${burnPerDay.toFixed(2)}/day (measured over ${spanLabel} of ledger) with no cap${idleNote}; its busiest 24h billed $${peak24h.toFixed(2)}, and THAT is what the ceiling is compared against; set one: dev-loop team set team.budget.dailyUsd <n> (unset = OFF)` }];
     }
     const rolling = rollingSpendUsd(rows, 86_400_000, now);
     if (rolling > dailyUsd)
-      return [{ code: "W28", path: "team.budget.dailyUsd",
+      return [{ code: "W47", path: "team.budget.dailyUsd",
         message: `budget BREACH — rolling 24h spend $${rolling.toFixed(2)} is over dailyUsd $${dailyUsd.toFixed(2)}; the scheduler is refusing launches until it drops below (raise the ceiling, or let the 24h window roll over)` }];
     return [];
   } catch { return []; }
