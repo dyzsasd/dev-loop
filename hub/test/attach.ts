@@ -118,6 +118,25 @@ try {
     DEVLOOP_DAEMON_PORT: "0", DEVLOOP_UI_TOKEN: "attach-tok-1",
   });
 
+  // ── /api/health is token-EXEMPT, so what it says is readable by anyone who can reach the port ──
+  // The rule three lines above the handler is explicit: "the raw DB path must never appear here". A later
+  // change put `entryPath` — an absolute install path — into that same response, so an unauthenticated
+  // caller learned where the tree lives. It is now included only for an authenticated request, or when no
+  // token is configured at all (the loopback-only posture where the whole surface is already local).
+  {
+    const healthUrl = new URL("api/health", HUB).href;
+    const health = async (headers: Record<string, string> = {}) =>
+      await (await fetch(healthUrl, { headers })).json() as Record<string, unknown>;
+    const anon = await health();
+    ok(anon.ok === true && anon.pid !== undefined, "health still answers without a token — the reaper depends on that");
+    ok(anon.entryPath === undefined, `…but a token-configured daemon does not hand an anonymous caller its install path (got ${JSON.stringify(anon.entryPath)})`);
+    ok(anon.buildCommit !== undefined,
+      "…while buildCommit stays: sameDaemonCode reads it over health to detect skew, and an absent value reads as 'same code'");
+    const authed = await health({ authorization: "Bearer attach-tok-1" });
+    ok(typeof authed.entryPath === "string" && authed.entryPath.length > 0,
+      `…and an authenticated caller still gets it (got ${JSON.stringify(authed.entryPath)})`);
+  }
+
   // ── the "laptop": an empty dir, no workspace, no local db lever ──
   const laptop = join(ROOT, "laptop"); mkdirSync(laptop);
   const cli = (args: string[], env: Record<string, string | undefined> = {}) =>
