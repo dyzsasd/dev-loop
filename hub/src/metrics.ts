@@ -349,80 +349,63 @@ export function ledgerSpanMs(rows: FireRow[], windowMs: number, nowMs: number): 
 // $112 across three days of downtime, and the ceiling would have been sized from whichever number the
 // operator happened to look at.
 //
+// What ONE fire cost, for spend arithmetic. Extracted because two callers computed it differently and
+// the difference was printed as if it were the same number: the W47 line named the peak as "what the
+// ceiling is compared against" while the gate compared a total that also ESTIMATES the rows the peak
+// silently skipped. On a ledger with two unpriced kills the gate saw $18.00 and the line printed $6.00,
+// so an operator sizing dailyUsd from the message was refused the moment the loop restarted.
+//   * a trustworthy receipt is the cost;
+//   * no receipt (or a watchdog kill, whose receipt covers only completed turns) is duration x rate;
+//   * for a kill, whichever is larger — the receipt is a lower bound, never the whole cost.
+function rowSpendUsd(r: FireRow, ratePerMs: number): number {
+  const measured = typeof r.usage?.costUsd === "number" ? r.usage.costUsd : null;
+  const modelled = (r.durationMs ?? 0) * ratePerMs;
+  if (measured === null) return modelled;
+  return wasWatchdogKilled(r) ? Math.max(measured, modelled) : measured;
+}
+
+// A per-profile median $/ms over the rows that can price one, killed rows excluded (LOOP-445: a truncated
+// fire's quotient is not the lane's rate). Shared by both figures for the same reason rowSpendUsd is.
+function ratesByProfileOf(rows: FireRow[]): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const r of rows) {
+    if (wasWatchdogKilled(r)) continue;
+    if (typeof r.usage?.costUsd === "number" && typeof r.durationMs === "number" && r.durationMs > 0)
+      (out[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
+  }
+  return out;
+}
+const rateFor = (rates: Record<string, number[]>, r: FireRow): number => {
+  const xs = rates[`${r.codingAgent ?? ""}/${r.model ?? ""}`];
+  return xs?.length ? (median(xs) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
+};
+
 // The peak is scanned at each row as a window END, which is where a maximum can occur.
 export function peakRolling24hUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
   const cutoff = nowMs - windowMs;
-  const inWindow = rows
-    .map((r) => ({ t: Date.parse(r.ts), usd: r.usage?.costUsd }))
-    .filter((r) => Number.isFinite(r.t) && r.t >= cutoff && r.t <= nowMs)
+  const eligible = rows.filter((r) => { const t = Date.parse(r.ts); return Number.isFinite(t) && t >= cutoff && t <= nowMs; });
+  const rates = ratesByProfileOf(eligible);
+  const inWindow = eligible
+    .map((r) => ({ t: Date.parse(r.ts), usd: rowSpendUsd(r, rateFor(rates, r)) }))
     .sort((a, b) => a.t - b.t);
   let peak = 0;
   for (let end = 0; end < inWindow.length; end++) {
     const from = inWindow[end]!.t - 86_400_000;
     let sum = 0;
-    for (let k = end; k >= 0 && inWindow[k]!.t >= from; k--) {
-      const c = inWindow[k]!.usd;
-      if (typeof c === "number" && c > 0) sum += c;
-    }
+    for (let k = end; k >= 0 && inWindow[k]!.t >= from; k--) sum += inWindow[k]!.usd;
     if (sum > peak) peak = sum;
   }
-  return peak;
+  return Number.isFinite(peak) ? peak : 0;
 }
 
 export function rollingSpendUsd(rows: FireRow[], windowMs: number, nowMs: number): number {
   const cutoff = nowMs - windowMs;                                   // LOOP-314: closed era, both bounds
   const inWindow = rows.filter((r) => { const t = Date.parse(r.ts); return t >= cutoff && t <= nowMs; });
-
-  // Collect per-(codingAgent, model) rates from priced rows for median derivation. A watchdog-killed row is
-  // excluded for the reason ratePerMsBasis excludes it (LOOP-445): a truncated fire's $/ms is not the lane's
-  // rate. Today those rows carry no usage at all so the `usage != null` test already dropped them; stating it
-  // keeps that true once a killed fire starts reporting one, which is what the SIGINT change below arranges.
-  const ratesByProfile: Record<string, number[]> = {};
-  for (const r of inWindow) {
-    if (wasWatchdogKilled(r)) continue;
-    // Same `typeof` guard as the total below, and for the same reason one line further along: a row with
-    // no costUsd key pushed `undefined / durationMs` — NaN — into the rate samples, so the MEDIAN went
-    // NaN and poisoned every estimate that profile fed. Fixing only the total left the sum NaN anyway,
-    // through the estimate. Two expressions, one slip.
-    if (typeof r.usage?.costUsd === "number" && typeof r.durationMs === "number" && r.durationMs > 0)
-      (ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`] ??= []).push(r.usage.costUsd / r.durationMs);
-  }
-
+  // Both spend figures value a row through rowSpendUsd and rate it through ratesByProfileOf. They used to
+  // carry separate copies of that logic, and the copies disagreed — see the note on rowSpendUsd.
+  const rates = ratesByProfileOf(inWindow);
   let total = 0;
-  for (const r of inWindow) {
-    // Unpriced or killed fire: estimate duration × ratePerMs, never $0.
-    const modelled = () => {
-      const rates = ratesByProfile[`${r.codingAgent ?? ""}/${r.model ?? ""}`];
-      const ratePerMs = rates?.length ? (median(rates) ?? FALLBACK_RATE_PER_MS) : FALLBACK_RATE_PER_MS;
-      return (r.durationMs ?? 0) * ratePerMs;
-    };
-    // `typeof … === "number"`, not `!== null`. A row whose usage object simply HAS NO costUsd key gave
-    // `undefined !== null` ⇒ true, so `measured` became undefined and `total += undefined` poisoned the
-    // whole sum to NaN — and NaN loses every comparison, so `rolling > dailyUsd` in budgetGateReason
-    // turned false and the spend gate stopped refusing launches while still looking armed. A fail-open on
-    // a money gate, from a truthiness slip. readFireRows JSON.parses without shape-checking (deliberately
-    // — it tolerates a half-written line from a crash), so any older row, hand edit, or future adapter
-    // that omits the key reaches here. status.ts:351 already used the safe form; this was the exception.
-    const measured = typeof r.usage?.costUsd === "number" ? r.usage.costUsd : null;
-    if (measured === null) {
-      total += modelled();
-    } else if (wasWatchdogKilled(r)) {
-      // A killed fire's receipt is a LOWER BOUND, never the whole cost — whatever the lane's shape. claude
-      // returns the terminal object for its COMPLETED turns and loses the one in flight; opencode's per-step
-      // events are SUMMED (LOOP-476), so a kill truncates the sum mid-run. Both hand back a number that is
-      // real and short, and recording it as measured undercounts silently — the more so on opencode, which is
-      // the one lane where the stall watchdog is armed by default.
-      // Take whichever is larger. The receipt wins when the fire outspent the model, the model wins when the
-      // kill landed early (a first-turn kill returns $0), and the total can never fall below the estimate
-      // this row would have contributed had the kill destroyed the receipt entirely — which is the one way
-      // recovering receipts could have made the books worse than the nulls it replaced.
-      total += Math.max(measured, modelled());
-    } else {
-      // A genuine measured $0 — the CLI refusing at a session limit before it billed anything, 17 rows on
-      // this board — is not watchdog-killed and counts as the $0 it really was. Not every zero is a gap.
-      total += measured;
-    }
-  }
+  for (const r of inWindow) total += rowSpendUsd(r, rateFor(rates, r));
   return total;
 }
 

@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, chmod
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { doctorWorkspace } from "../src/doctor.ts";
-import { rollingSpendUsd, type FireRow } from "../src/metrics.ts";
+import { rollingSpendUsd, peakRolling24hUsd, type FireRow } from "../src/metrics.ts";
 import { loadWorkspace } from "../src/team-config.ts";
 import { scrubFireEnv } from "./env-scrub.ts"; // LOOP-193: fire markers must never reach a spawned fixture
 
@@ -355,6 +355,20 @@ const doctorRun = async (wsRoot: string): Promise<{ out: string; ok: boolean }> 
     const overspent = rollingSpendUsd(
       [priced, { ...base, ts: t(30), durationMs: 600_000, exitCode: 126, watchdog: "budget", usage: usage(9) } as FireRow],
       86_400_000, Date.now());
+    // The W47 line names the peak as "what the ceiling is compared against". That was false: the peak
+    // summed only receipts > 0 while the gate's total also ESTIMATES the rows the peak skipped. On this
+    // fixture the gate saw $18 and the line printed $6, so an operator sizing dailyUsd from the message
+    // would have been refused the moment the loop restarted. Both now value a row through the same
+    // helper, and this arm is what stops them drifting apart again.
+    const killed2 = [priced,
+      { ...base, ts: t(30), durationMs: 600_000, exitCode: 126, watchdog: "budget" } as unknown as FireRow,
+      { ...base, ts: t(20), durationMs: 600_000, exitCode: 126, watchdog: "budget" } as unknown as FireRow];
+    const gateSees = rollingSpendUsd(killed2, 86_400_000, Date.now());
+    const linePrints = peakRolling24hUsd(killed2, 7 * 86_400_000, Date.now());
+    ok(Math.abs(gateSees - linePrints) < 0.01,
+      `the figure the W47 line prints IS the figure the gate compares (gate $${gateSees.toFixed(2)}, line $${linePrints.toFixed(2)})`);
+    ok(linePrints > 6.5, `…and it counts the unpriced kills rather than skipping them (got $${linePrints.toFixed(2)})`);
+
     ok(Math.abs(overspent - 15) < 0.01,
       `a killed fire that outspent the model is counted at its receipt ($9), not modelled down to $6 (got $${overspent.toFixed(2)})`);
   }
