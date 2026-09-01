@@ -7,6 +7,7 @@
 // spawnSync) for `daemon up` so the fake server can respond while daemon up is probing it.
 // Assert: daemon up exits non-zero, prints direction-aware message, and does NOT kill the server.
 import { spawn } from "node:child_process";
+import { daemonRestartReason, sameDaemonCode } from "../src/daemon-lifecycle.ts";
 import { once } from "node:events";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -138,6 +139,24 @@ ok(isAlive(serverPid), `AC1: fake daemon process still alive after refused up (p
 // Cleanup
 serverChild.kill("SIGKILL");
 rmSync(ROOT, { recursive: true, force: true });
+
+// ── the restart message names the difference that actually triggered it ────────────────────────
+// sameDaemonCode is false for EITHER a version difference or a build-commit difference at the same
+// version. The message rendered only the first, so a same-version restart printed `(v1.15.1 < v1.15.1)`
+// — false on its face, reading as a broken tool while hiding a restart that was correct. Three times in
+// the live run.log.
+ok(sameDaemonCode("1.15.1", "aaaaaaa", "1.15.1", "bbbbbbb") === false,
+  "fixture: equal versions with different build commits are NOT the same code (that is what triggers the restart)");
+const sameVer = daemonRestartReason("1.15.1", "bbbbbbbcccc", "1.15.1", "aaaaaaaddd");
+ok(!/1\.15\.1 < v?1\.15\.1/.test(sameVer),
+  `a same-version restart does not print a comparison that is false on its face (got "${sameVer}")`);
+ok(/different build aaaaaaa → bbbbbbb/.test(sameVer),
+  `…it names the build commits instead, short-sha'd (got "${sameVer}")`);
+const olderVer = daemonRestartReason("1.16.0", "bbbbbbb", "1.15.1", "aaaaaaa");
+ok(/v1\.15\.1 < v1\.16\.0/.test(olderVer),
+  `a genuine version difference still reads as the version comparison it is (got "${olderVer}")`);
+ok(/unknown/.test(daemonRestartReason("1.15.1", null, "1.15.1", undefined)),
+  "an absent build commit is named 'unknown' rather than rendered as an empty arrow");
 
 console.log(fails ? `${fails} CHECK(S) FAILED` : "daemon-version-guard: all checks passed");
 process.exit(fails ? 1 : 0);

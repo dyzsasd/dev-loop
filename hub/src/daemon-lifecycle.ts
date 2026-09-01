@@ -32,6 +32,25 @@ export function sameDaemonCode(installedVer: string, installedCommit: string | n
   if (installedCommit && runningCommit) return installedCommit === runningCommit;
   return true;
 }
+/**
+ * Why `up` is about to restart a daemon that is already alive — the difference sameDaemonCode found.
+ *
+ * sameDaemonCode is false for EITHER a version difference or a build-commit difference at the SAME
+ * version, and the message only ever rendered the first. A same-version restart therefore printed
+ * `(v1.15.1 < v1.15.1)`, a comparison false on its face: it reads as a broken tool and it hides the
+ * reason the restart was correct. Observed three times in the live run.log of the jinko-browser-use
+ * workspace, where the installed tree changed without the version being bumped.
+ */
+export function daemonRestartReason(
+  installedVer: string, installedCommit: string | null | undefined,
+  runningVer: string | undefined, runningCommit: string | null | undefined,
+): string {
+  const shortSha = (c: string | null | undefined) => (c ? c.slice(0, 7) : "unknown");
+  return (runningVer ?? "") === installedVer
+    ? `same version v${installedVer}, different build ${shortSha(runningCommit)} → ${shortSha(installedCommit)}`
+    : `v${runningVer || "?"} < v${installedVer}`;
+}
+
 // semver direction: returns true when a comes strictly before b (a < b). Unparseable strings → false (treat as equal).
 function semverBefore(a: string, b: string): boolean {
   const pa = a.match(/^(\d+)\.(\d+)\.(\d+)/), pb = b.match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -284,7 +303,7 @@ export async function daemonUpForKey(key: string): Promise<number> {
       process.stderr.write(`[daemon] up: '${key}' daemon is NEWER than this CLI (v${info.version} > v${pkgVersion()}) — this CLI is stale; refusing to downgrade\n  running daemon: ${runningFrom}\n  this caller:    ${lcDaemonEntry()}\n`);
       return 1;
     }
-    if (info) console.log(`[daemon] up: '${key}' is running old code (v${info.version || "?"} < v${pkgVersion()}) — restarting to pick up the upgrade`);
+    if (info) console.log(`[daemon] up: '${key}' is running old code (${daemonRestartReason(pkgVersion(), pkgBuildCommit(), info.version, info.buildCommit)}) — restarting to pick up the upgrade`);
     // else: bound but unhealthy — fall through to the locked cold-start path, which stops + respawns it.
   }
   // DL-46: serialize cold start under the per-project lock — the second concurrent `up` waits here, then
